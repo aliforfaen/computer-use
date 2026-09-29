@@ -4,8 +4,8 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**Decisions locked (ADR-001…007), no implementation yet.** ADR-008 (run the loop server-side) is
-proposed and needs one confirmation. The shape: a Jev policy layer over `kwin-mcp`, one instance
+**Decisions locked (ADR-001…008; ADR-008 confirmed in ADR-009), no implementation yet.**
+P0 measurement is underway. The shape: a Jev policy layer over `kwin-mcp`, one instance
 on `cachy`, virtual sessions by default, CLI + MCP surfaces, three autonomy modes, reachable by
 remote agents over the tailnet.
 

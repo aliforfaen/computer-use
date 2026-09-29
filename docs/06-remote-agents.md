@@ -23,8 +23,10 @@ tailnet.** Not every caller runs locally. This doc is the remote half of the des
                    tailnet ACLs  ← the only access gate (ADR-007)
 ```
 
-One instance, one policy engine, one allowlist, one audit log. Remote and local callers differ
-only in transport and in what the transport can tell us about who is calling.
+One policy engine instance, one allowlist, one audit log. The local stdio command
+needs to forward to that instance; otherwise each client would start a second
+policy engine. `jev-desktop` owns the HTTP endpoint and a persistent `kwin-mcp`
+stdio child (ADR-009).
 
 **Why one instance:** the thing being controlled is a single desktop. A second instance on the
 same desktop would race for focus; an instance per node is a different product (fleet control),
@@ -56,9 +58,12 @@ Consequences, stated plainly so they are not rediscovered later:
   `Tailscale-User-Name`, `Tailscale-User-Profile-Pic`, and it *strips* client-supplied copies to
   prevent spoofing — but they are **not populated for tagged devices**, which is the common shape
   for a cloud/VPS node. So we cannot rely on them for caller identity.
-- We therefore **identify callers by network source**, best-effort: map the peer address to a
-  tailnet node with `tailscale status --json`, and log that mapping. Expect this to be
-  imprecise behind proxies and to say nothing about *which process* on that node is calling.
+- **Caller-node identification is still a P0 measurement.** HTTPS Serve proxies
+  to localhost, so the backend socket peer may be Serve itself rather than the
+  original node. Probe headers and peer address from a user-owned and a tagged
+  remote node before assigning a caller-node value in the audit log. If identity
+  is unavailable, record `unknown` rather than infer it from the proxy address.
+  See [Tailscale Serve's proxy behavior](https://tailscale.com/docs/features/tailscale-serve).
 
 ### Required compensating controls (these ship, not the auth)
 
@@ -107,17 +112,20 @@ the live desktop and `yolo`. Design notes that follow from that:
 
 ## Latency, bandwidth, and why the loop stays server-side
 
-**ADR-008 (PROPOSED — confirm in P0): the full observe→decide→act→verify loop runs on `cachy`,
+**ADR-008 confirmed in ADR-009:** the full observe→decide→act→verify loop runs on `cachy`,
 and remote callers mostly call one high-level tool per task.** Rationale:
 
-- A per-step remote loop pays a tailnet round trip *plus* a Jev call per step. A per-task remote
-  loop pays one round trip. Jev's 70–500 ms is already the slowest part of a step.
+- A per-step remote loop pays a tailnet round trip *plus* a Jev call per step.
+  A per-task remote loop pays one round trip. Three synthetic calls through the
+  owner's hosted gateway took 890–1,732 ms from `cachy` on 2026-09-29;
+  representative desktop-state latency remains to be measured.
 - The `JEV_API_KEY` stays on `cachy`. Remote agents never hold it.
 - Guardrails cannot be bypassed by a remote caller, because the caller never drives the executor
   directly.
 
-Remote clients still get the **low-level primitives** (`observe`, `act`, `verify`) for
-composability and for agents that want to plan themselves — with the same gates applied.
+Low-level primitives (`observe`, `act`, `verify`) may remain available for
+composability, but they must share the server's session owner and cannot
+interleave actions with an active task.
 
 Bandwidth notes:
 

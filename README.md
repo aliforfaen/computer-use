@@ -3,7 +3,7 @@
 A decision-model-driven computer-use layer for agents on **CachyOS + KDE Plasma 6 Wayland**,
 reachable by **remote agents over the tailnet** as well as local ones.
 
-**Status: decisions locked (ADR-001…007), ADR-008 to confirm, no code yet.**
+**Status: decisions locked (ADR-001…008; ADR-008 confirmed in ADR-009), P0 in progress, no project code yet.**
 Next step: the P0 probe checklist in [docs/05-open-questions.md](docs/05-open-questions.md).
 Picking this up cold? Read [docs/HANDOFF.md](docs/HANDOFF.md).
 
@@ -28,8 +28,8 @@ non-generative calibrated decision model; execution stays in deterministic, guar
 
 - Jev does not generate text. It picks from bounded option sets and returns
   probabilities/confidence — a clean mapping onto "which action, which element".
-- Existing Linux computer-use drivers already solve the OS plumbing (AT-SPI2 trees, KWin/EIS
-  input injection, portal screenshots). We do not rewrite them.
+- Existing Linux computer-use drivers already solve much of the OS plumbing (AT-SPI2 trees,
+  KWin/EIS input injection, KWin ScreenShot2 with Spectacle fallback). We do not rewrite them.
 - Missing in the ecosystem and therefore ours: a **state compiler** (UI tree → bounded, budgeted
   candidate table), a **decision + guardrail policy**, and a **remote surface** that keeps
   guardrails non-bypassable.

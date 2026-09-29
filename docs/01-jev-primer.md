@@ -8,12 +8,16 @@ Claims that come from the vendor or from demo posts are marked as such.
 - **Jev** is TypeSafe AI's "System One" decision model. Early access opened
   **2026-09-15**. Hosted, proprietary; weights and architecture are not published.
 - It is **not an LLM**. It does not generate text. You send a `state` plus typed
-  `questions`; it returns typed `answers` with probabilities and a confidence.
+  `questions`; it returns typed `answers`. `choice` and `score` include confidence;
+  `noul` returns a yes-probability alone.
 - Because answers are typed and enumerable, the calling code branches on them directly —
   no parsing, no regex, no free-form output to sanitize.
-- Reported latency **70–500 ms** end to end and **~$0.42 / 1M input tokens** (output not
-  billed). Vendor-reported. One independent test was billed at $0.0578 / 1M input tokens
-  through a reseller.
+- Reported latency **70–500 ms** end to end (gateway-reported). Three synthetic
+  calls from `cachy` took **890–1,732 ms** on 2026-09-29; measure again with
+  desktop states before selecting time budgets.
+  The owner's key is for the independent `jevtypesafeai.com` hosted gateway,
+  which lists **$0.42 / 1M input tokens**. The official TypeSafe direct API
+  currently lists **$0.042 / 1M input tokens**. Treat both as time-sensitive.
 
 ## The three primitives
 
@@ -29,7 +33,7 @@ a single round trip per decision cycle possible.
 ## API shape
 
 ```jsonc
-POST https://jevtypesafeai.com/api/v1/decide   // self-serve docs mirror
+POST https://jevtypesafeai.com/api/v1/decide  // owner's hosted jv_live_ key
 Authorization: Bearer jv_live_…
 {
   "model": "jev-latest",          // or pinned, e.g. "jev-1.13.0"
@@ -42,14 +46,20 @@ Authorization: Bearer jv_live_…
 // → { "model": "jev-1.13.0",
 //     "answers": { "action": { "type":"choice", "choice":"click","confidence":0.93,
 //                              "probabilities": { … } } },
-//     "usage": { "input_tokens": 62, "cost_usd": 0.000026, "credits_remaining_usd": … } }
+//     "usage": { "input_tokens": 62, "output_tokens": 12 } }
 ```
 
+- The independent hosted gateway and TypeSafe's official
+  `https://api.typesafe.ai/v1/systemone` endpoint use the same request shape
+  but **different keys**. The current `.env` key is for the hosted gateway;
+  do not send it to the official endpoint. The official SDK reads
+  `TYPESAFE_API_KEY`; this project's hosted key uses `JEV_API_KEY`.
 - Also reachable through aggregators: Vercel AI Gateway `typesafe-ai/jev`, Cloudflare model
-  catalog, OpenRouter.
+  catalog, OpenRouter; each route has its own credentials and pricing.
 - Budgets: **64k tokens** for `state` + all questions combined, and **32k tokens** for
-  `state` + the single longest question. Over budget → `max_tokens_exceeded`; trim in code.
-- Errors are plain HTTP: 400 validation, 401 key, 402 credits, 403 inactive, 502 upstream (retry).
+  `state` + the single longest question. Trim over-budget requests in code.
+- The official direct API documents HTTP 401, 422, 429, and 529 errors. Check
+  the hosted gateway's actual error contract separately before implementing retries.
 - Vendor's own note: accuracy is weaker on questions that require multi-step reasoning.
   Keep each question a judgement call over presented candidates, not a planning problem.
 
@@ -70,12 +80,16 @@ coordinate, selector or command.
 
 ## Cost sanity check
 
-A desktop step with, say, 1.5k input tokens ≈ **$0.0006**. A 50-step task ≈ **$0.03**.
+A desktop step with, say, 1.5k input tokens ≈ **$0.00063** at the owner's hosted
+gateway price. A 50-step task ≈ **$0.0315** in input charges.
 Cost is a non-issue at this scale; latency and correctness are the real constraints.
 
 ## Sources
 
-- https://jevtypesafeai.com/docs (API reference, mirror of the core `/v1/decide` contract)
+- https://jevtypesafeai.com/jev/api (owner's hosted endpoint, key and pricing)
+- https://jevtypesafeai.com/terms (independent gateway/operator)
+- https://docs.typesafe.ai/api (official direct API contract)
+- https://docs.typesafe.ai/models (official direct model aliases and pricing)
 - https://docs.typesafe.ai/introduction (vendor)
 - https://github.com/browser-use/jev-ultrafast (reference loop implementation)
 - https://en.wikipedia.org/wiki/Jev_(AI_model) (independent summary, limited depth)

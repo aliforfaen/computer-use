@@ -37,18 +37,18 @@ Wayland input focus. Observed in the field on kwin-mcp issue
 
 Live desktop and virtual session are complementary modes, not alternatives.
 
-## 3. Chromium / Electron apps have no AT-SPI tree until they think a screen reader is present
+## 3. Browser accessibility trees need per-app probing
 
-Chrome, VS Code, Slack, Discord, Obsidian and all Electron/CEF apps build their accessibility
-tree lazily. The fix (per cua-driver) is to set the session-level accessibility flags on the
+Chromium/Electron apps may build their accessibility tree lazily. A useful
+probe (from cua-driver) is to set the session-level accessibility flags on the
 a11y bus — the same signal a screen reader sends:
 
-- `org.a11y.Status` with `IsEnabled` / `IsScreenReaderEnabled` = true
+- `org.a11y.Status` with `IsEnabled` / `ScreenReaderEnabled` = true
 
-Chromium then builds the tree **retroactively** for already-running apps; GTK/Qt warm up their
-a11y paths on the same signal. On GNOME a `gsettings` toggle may also be needed; on KDE the
-System Settings → Accessibility toggle should be on. This one trick is most of the difference
-between "brittle" and "workable" for a modern desktop.
+This enabled a useful Firefox and Kate tree on `cachy`, but isolated Brave Origin
+still exposed only an empty root, including with `--force-renderer-accessibility`.
+The effect is app/build-specific. See the [2026-09-29 P0 measurements](05-open-questions.md#p0-observations--2026-09-29)
+and [cua-driver's limits](https://cua.ai/docs/reference/cua-driver/limits).
 
 ## 4. Toolkit shapes differ; there is no single "click this element"
 
@@ -59,21 +59,27 @@ small router, not a recipe.
 
 ## 5. Capture paths
 
-- Screenshot: KDE portal `org.freedesktop.portal.ScreenShot`, or `spectacle -b -n -o out.png`.
-  The portal may show a consent prompt; a restore token makes it persist.
+- `kwin-mcp` currently tries KWin `org.kde.KWin.ScreenShot2`, then Spectacle. Live
+  ScreenShot2 access depends on the KWin D-Bus restricted-interface whitelist. Test
+  this path in both live and virtual sessions before selecting a fallback. See
+  [`kwin-mcp` limitations](https://github.com/isac322/kwin-mcp/blob/main/README.md#limitations).
+- KDE portal `org.freedesktop.portal.ScreenShot` is a separate possible fallback;
+  do not assume it is the driver's normal path or prompt-free on this host.
 - Video / continuous frames: portal `ScreenCast` + PipeWire.
 - For our loop, screenshots should be **verification only** (diff / crop), not decision input —
   text state is cheaper and Jev cannot look at pixels anyway.
 
 ## 6. Practical environment checklist for `cachy`
 
-- [ ] AT-SPI registry running; accessibility enabled in KDE System Settings
-- [ ] `org.a11y.Status` flags set (unblocks Chromium/Electron trees)
-- [ ] `/dev/uinput` accessible by user for ydotool fallback (`ydotoold` running)
-- [ ] KWin EIS reachable (kwin-mcp `session_connect` reports "Input backend: KWin EIS")
-- [ ] Portal screenshot works without a prompt loop (`restore_token` cached)
-- [ ] `spectacle` present as a screenshot fallback
-- [ ] KWin version noted — private EIS D-Bus can move between releases
+- [x] AT-SPI registry running; session flags can be enabled for a task
+- [x] `org.a11y.Status` flags tested and restored to their original false values;
+      Firefox/Kate trees appeared, isolated Brave's did not (2026-09-29)
+- [x] `/dev/uinput` accessible by `messhias`; `ydotoold` running (input behavior untested)
+- [x] KWin EIS reachable in live and virtual sessions with `kwin-mcp==0.10.0`
+- [x] `kwin-mcp screenshot` worked in live and virtual sessions through ScreenShot2
+      (capture latency not measured)
+- [x] `spectacle` present as a screenshot fallback (observed 2026-09-29)
+- [x] KWin version noted: 6.7.5 on `cachy` (2026-09-29); private EIS D-Bus can move
 
 ## 7. Remote callers amplify §1 (added for the tailnet endgoal)
 
@@ -87,8 +93,10 @@ The focus problem is *worse* when the caller is not physically at the machine:
   while the owner is active, unless explicitly overridden.
 - Remote verification must not mean "stream the screen". Send metadata and a hash; downscale a
   single JPEG on request. Screencast over the tailnet is not a supported path.
-- Latency compounds: one tailnet round trip per step turns Jev's 70–500 ms into a different
-  product. Prefer one call per task with the loop running on the desktop host (ADR-008).
+- Latency compounds: one tailnet round trip per step adds to the Jev call.
+  The hosted gateway reported 70–500 ms, while three synthetic calls from
+  `cachy` took 890–1,732 ms. Prefer one task call with the loop on the host
+  (ADR-008/009); measure representative desktop states before setting budgets.
 
 ## 8. Known hard cases (accept as out of scope initially)
 

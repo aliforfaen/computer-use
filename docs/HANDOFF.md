@@ -3,8 +3,8 @@
 **Repo:** `/home/messhias/lamasync/projects/computer-use` (standalone git, branch `main`,
 no remote). Read `AGENTS.md` next, then run P0.
 
-**One-line state:** design is decided (ADR-001…007 locked, ADR-008 proposed); **no code exists
-yet**; the next action is measurement, not implementation.
+**One-line state:** ADR-001…008 are locked (ADR-008 confirmed in ADR-009);
+**no project code exists yet**; P0 measurement is underway.
 
 **Owner:** messhias. Machine `cachy` — CachyOS (Arch-based), KDE Plasma 6, Wayland.
 Owner learns by doing and wants *short* prose: small runnable probes beat long documents.
@@ -31,7 +31,7 @@ can drive this desktop. Not all callers are local.
 | 005 | **Single instance on `cachy`**, MCP **stdio** for local + **Streamable HTTP** for remote via `tailscale serve` → `127.0.0.1:7810`. |
 | 006 | **Remote callers have the same reach as local** — live desktop and `yolo` included. (Owner decision.) |
 | 007 | **Tailnet ACLs are the only access gate.** No tokens, no OAuth. (Owner decision.) |
-| 008 | *PROPOSED, needs one confirmation:* run the whole observe→decide→act→verify loop server-side; remote callers get one high-level call per task. |
+| 008/009 | Confirmed: run observe→decide→act→verify on `cachy`; remote callers submit a task. Jev chooses one bounded step at a time. |
 
 Our ~30% of new code: **state compiler**, **Jev policy**, **guardrails**, **verifier**.
 The other ~70% is `kwin-mcp` plus small borrowings from `browser-use/jev-ultrafast` (loop shape)
@@ -44,31 +44,36 @@ and `trycua/cua` / `agent-sh/computer-use-linux` (a11y flag flip, readiness repo
    focus; pointer scroll follows the pointer. Live tasks must **save focus → act → restore**
    or the owner's next keystrokes land in whatever the agent touched.
    `wtype` is unusable on KWin (no `zwp_virtual_keyboard`; KDE bug 502882).
-2. **Chromium/Electron expose no AT-SPI tree** until the session accessibility flags
-   (`org.a11y.Status`: `IsEnabled`, `IsScreenReaderEnabled`) are set. Then they build the tree
-   retroactively. This single trick is most of the difference between brittle and workable.
-3. **Per-step remote loops are expensive.** A tailnet round trip *plus* a Jev call (70–500 ms)
-   per step. Hence ADR-008.
+2. **Accessibility varies by app.** Enabling `org.a11y.Status` `IsEnabled` and
+   `ScreenReaderEnabled` yielded useful Kate and Firefox trees on this host,
+   while isolated Brave Origin still exposed an empty root. See the P0 counts.
+3. **Per-step remote loops are expensive.** A tailnet round trip plus a Jev
+   call per step. Three calls through the owner's hosted gateway took
+   890–1,732 ms on 2026-09-29; measure again with desktop states. Hence ADR-008.
 
 ## 4. Next action: P0 probe (half a day, measurements only)
 
 Full checklist in **`docs/05-open-questions.md`**. The short version, in the order that
 unblocks the most:
 
-1. **ADR-008 confirmation** — one question for the owner.
-2. **KWin + EIS** — `kwin-mcp session_connect` reports "Input backend: KWin EIS"? Record the KWin
-   version. Does `focus_window` + `keyboard_key` actually land in the target?
-3. **AT-SPI tree dump** — Kate (Qt), Firefox, one Electron app; before and after the a11y flag
-   flip. Count how many useful named elements exist. *This determines whether the state compiler
-   has anything to work with, which is the whole project.*
-4. **Virtual session** — `session_start`, launch `kcalc`, complete one action end to end.
-5. **ydotool fallback** — `/dev/uinput` ACL, `ydotoold` user service, focus transfer behaviour.
-6. **Screenshot path** — portal vs `spectacle -b -n -o`; prompt-free after restore token? How slow?
-7. **Tailnet** — `tailscale serve` → `127.0.0.1:7810`; confirm not LAN-reachable; confirm
+1. **KWin + EIS / virtual and live KCalc** — passed with disposable
+   `kwin-mcp==0.10.0`; live focus was restored. See P0 measurements.
+2. **AT-SPI tree dump** — completed for Kate, Firefox and isolated Brave.
+   Kate/Firefox offer useful elements; Brave did not.
+3. **ydotool fallback** — `/dev/uinput` ACL and `ydotoold` service passed;
+   input behavior remains untested. KWin EIS currently works.
+4. **Screenshot path** — ScreenShot2 worked in virtual and live sessions;
+   capture latency and fallback behavior remain unmeasured.
+5. **Tailnet** — preserve existing Serve `/` route; add `/mcp` → `127.0.0.1:7810`
+   after the endpoint exists. Confirm not LAN-reachable; confirm
    **Funnel off**; `tailscale ping cachy` from a remote node (direct vs DERP, RTT); list which
    devices can reach the URL and which are tagged.
-8. **Hermes client** — add an `mcp_servers` entry with `url:`, list tools, call one.
-9. **Jev** — key, endpoint choice, measured latency from `cachy`; and pick the small text LLM.
+6. **Hermes client** — add an `mcp_servers` entry with `url:`, list tools, call one.
+7. **Jev** — hosted endpoint and key work; three synthetic calls were slow.
+   Re-measure with desktop states, and choose the small text LLM.
+
+Read `docs/05-open-questions.md` for measurements already made on 2026-09-29 and
+the remaining process/caller-identity seams.
 
 ### Probe hygiene
 
@@ -88,10 +93,11 @@ repo home (stays here / GitHub remote / Multica card).
 
 - **P1 · Single-app decision.** State compiler + one Jev call for one app, **no execution** —
   print the chosen action/target/confidence and judge whether Jev is picking sensibly.
-- **P2 · Closed loop.** Execute + verify one narrow task, with focus save/restore. Measure steps,
-  latency, cost, failure modes. (Cost is a non-issue: a 1.5k-token step ≈ $0.0006.)
-- **P3 · Guardrails.** Destructive-action gate, confirmation UX, allowlists, step/budget caps,
-  audit log, kill switch.
+- **P2 · Closed loop.** Execute + verify one narrow task, with focus save/restore,
+  narrow app scope, step cap, stop control and audit from the first executable probe.
+  Measure steps, latency, cost and failure modes.
+- **P3 · Guardrails.** Generalize the probe controls into the full policy:
+  destructive-action gate, confirmation UX, allowlist and budgets.
 - **P4 · Surface.** MCP stdio first, then Streamable HTTP behind `tailscale serve`. Ship a skill
   that teaches agents which tool to call when — copy kwin-mcp's plugin pattern.
 

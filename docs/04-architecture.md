@@ -184,3 +184,18 @@ remote agent has less control over fine-grained decisions.
 
 Not decided yet because it is measurement, not preference — see the P0 list in
 `docs/05-open-questions.md`.
+
+### ADR-009 — Confirm ADR-008; loop and session ownership stay on `cachy`
+**Locked 2026-09-29 (owner confirmation).** The task call enters the one `jev-desktop`
+process on `cachy`; that process owns observe → decide → act → verify and the task's
+step/time budget. Jev still chooses one bounded next action at a time. It does not
+plan the whole task. A remote caller can submit a task and receive progress/results.
+Low-level tools, if exposed, must go through the same session owner and cannot
+interleave actions with a running task.
+
+Implementation seam to resolve in P0/P1: `kwin-mcp` is a stdio MCP server, so the
+single `jev-desktop` process should own a persistent `kwin-mcp` child. A local
+stdio-facing `jev-desktop` command must be a thin client of that process (for
+example over a Unix socket), not a second policy-engine instance. The HTTP surface
+is owned by `jev-desktop`, not by `kwin-mcp`. See
+[`kwin-mcp`'s server](https://github.com/isac322/kwin-mcp/blob/main/src/kwin_mcp/server.py).
