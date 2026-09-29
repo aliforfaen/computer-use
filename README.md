@@ -3,8 +3,7 @@
 A decision-model-driven computer-use layer for agents on **CachyOS + KDE Plasma 6 Wayland**,
 reachable by **remote agents over the tailnet** as well as local ones.
 
-**Status: decisions locked (ADR-001…010), P0 in progress, no project code yet.**
-Next step: the P0 probe checklist in [docs/05-open-questions.md](docs/05-open-questions.md).
+**Status: decisions locked (ADR-001…010); P0 measurements and a narrow KCalc P2 proof are recorded.**
 Picking this up cold? Read [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ## Endgoal
@@ -66,3 +65,20 @@ non-generative calibrated decision model; execution stays in deterministic, guar
 - No tracked credentials. An ignored `.env` on `cachy` holds `JEV_API_KEY` for
   TypeSafe direct, selected for P1 after the [P0 comparison](docs/05-open-questions.md#p0-observations--2026-09-29).
 - Never expose this over `tailscale funnel` (public, no identity headers).
+
+## Narrow P2 proof
+
+`p2_kcalc.py` runs the fixed task “enter digit 1” in an isolated KCalc session, asks the
+TypeSafe direct selector to choose from observed visible buttons, validates its answer in code,
+clicks the freshly re-read `One` button through `kwin-mcp`, and verifies the editable display
+changed exactly from blank to `1`. It is a one-action proof, not the state compiler or server.
+The [executed result and limits](docs/08-p2-kcalc-proof.md) are recorded separately.
+
+Run it on the KDE host with `JEV_API_KEY` exported or present in the ignored local `.env`:
+
+```sh
+uv run --with 'kwin-mcp==0.10.0' python p2_kcalc.py
+```
+
+The append-only audit goes to `${XDG_STATE_HOME:-~/.local/state}/jev-desktop/audit.jsonl`.
+Focused parser and policy checks run with `python -m unittest test_p2_kcalc.py`.
