@@ -1,0 +1,32 @@
+# secrets / env
+.env
+.env.*
+!.env.example
+
+# runtime artifacts
+*.log
+run/
+traces/
+screenshots/
+*.png
+*.jpg
+*.webm
+*.mp4
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.uv/
+
+# node
+node_modules/
+dist/
+build/
+
+# editor / os
+.DS_Store
+.idea/
+.vscode/
+*.swp
