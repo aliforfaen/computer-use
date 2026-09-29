@@ -3,7 +3,7 @@
 **Repo:** `/home/messhias/lamasync/projects/computer-use` (standalone git, branch `main`,
 no remote). Read `AGENTS.md` next, then run P0.
 
-**One-line state:** ADR-001…008 are locked (ADR-008 confirmed in ADR-009);
+**One-line state:** ADR-001…010 are locked (ADR-008 confirmed in ADR-009);
 **no project code exists yet**; P0 measurement is underway.
 
 **Owner:** messhias. Machine `cachy` — CachyOS (Arch-based), KDE Plasma 6, Wayland.
@@ -70,9 +70,9 @@ unblocks the most:
    **Funnel off**; `tailscale ping cachy` from a remote node (direct vs DERP, RTT); list which
    devices can reach the URL and which are tagged.
 6. **Hermes client** — add an `mcp_servers` entry with `url:`, list tools, call one.
-7. **Jev** — both endpoints and separate keys work; the paired P0 test favors
-   TypeSafe direct for P1. Re-measure with desktop states and choose the
-   small text LLM.
+7. **Jev** — both endpoints worked in the paired P0 test. TypeSafe direct is
+   selected for P1; its key is `JEV_API_KEY` in ignored `.env`. Re-measure
+   with desktop states and choose the small text LLM.
 
 Read `docs/05-open-questions.md` for measurements already made on 2026-09-29 and
 the remaining process/caller-identity seams.

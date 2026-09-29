@@ -199,3 +199,14 @@ stdio-facing `jev-desktop` command must be a thin client of that process (for
 example over a Unix socket), not a second policy-engine instance. The HTTP surface
 is owned by `jev-desktop`, not by `kwin-mcp`. See
 [`kwin-mcp`'s server](https://github.com/isac322/kwin-mcp/blob/main/src/kwin_mcp/server.py).
+
+### ADR-010 — Use TypeSafe direct for P1
+**Locked 2026-09-29 (owner decision).** Use the first-party TypeSafe endpoint
+`https://api.typesafe.ai/v1/systemone` with `JEV_API_KEY` on `cachy`. The hosted
+gateway was useful for P0 but its key has been removed. In 12 alternating,
+matched synthetic calls with pinned `jev-1.13.0`, TypeSafe direct had a
+**254 ms median** versus **839 ms** through the gateway, returned the same
+action/target choices, and was faster in every pair. Its published input price
+is one tenth of the gateway's. Keep endpoint selection in config for future
+comparisons, but do not run a gateway fallback without a separately supplied key.
+Measurements: [`docs/05-open-questions.md`](05-open-questions.md#p0-observations--2026-09-29).

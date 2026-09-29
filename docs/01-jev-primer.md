@@ -12,8 +12,9 @@ Claims that come from the vendor or from demo posts are marked as such.
   `noul` returns a yes-probability alone.
 - Because answers are typed and enumerable, the calling code branches on them directly —
   no parsing, no regex, no free-form output to sanitize.
-- The owner now has keys for both TypeSafe direct and the independent hosted
-  gateway. In a 12-pair synthetic test from `cachy` on 2026-09-29, direct had
+- The owner tested keys for both TypeSafe direct and the independent hosted
+  gateway, then retired the hosted key (ADR-010). In a 12-pair synthetic test
+  from `cachy` on 2026-09-29, direct had
   **254 ms median** latency and the gateway **839 ms** for the same pinned model
   and ~1.45k-token payload; direct was faster in every pair. Both returned
   the same action and target choices on these simple cases. The gateway lists
@@ -52,9 +53,9 @@ Authorization: Bearer <direct key>
 
 - The independent hosted gateway at
   `https://jevtypesafeai.com/api/v1/decide` uses the same core request shape
-  but a **different key**. The ignored `.env` currently names the direct key
-  `REAL_JEV_API_KEY` and the gateway key `JEV_API_KEY`; map the direct key to
-  `TYPESAFE_API_KEY` when using the official SDK. Never swap the two keys.
+  but a **different key**. Its key was removed after the comparison. The
+  ignored `.env` now holds only `JEV_API_KEY` for TypeSafe direct; map it to
+  `TYPESAFE_API_KEY` when using the official SDK.
 - Also reachable through aggregators: Vercel AI Gateway `typesafe-ai/jev`, Cloudflare model
   catalog, OpenRouter; each route has its own credentials and pricing.
 - Budgets: **64k tokens** for `state` + all questions combined, and **32k tokens** for

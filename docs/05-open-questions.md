@@ -1,6 +1,6 @@
 # 05 — Open questions
 
-Status: ADR-001…008 are locked (ADR-008 confirmed in ADR-009). P0 measurement is
+Status: ADR-001…010 are locked (ADR-008 confirmed in ADR-009). P0 measurement is
 underway; the owner preferences below remain open.
 
 ## Answered
@@ -59,8 +59,9 @@ Unblocks P1. Probes only, nothing committed to `main`.
 
 **Models / keys**
 - [x] **Jev access**: the owner supplied separate hosted and TypeSafe direct
-      keys in ignored `.env`. Both endpoints succeeded with pinned `jev-1.13.0`;
-      see paired measurements below. Keep each key at its issuing provider.
+      keys for the paired test. Both endpoints succeeded with pinned
+      `jev-1.13.0`; the hosted key was then removed. The ignored `.env` now
+      holds only the TypeSafe direct key as `JEV_API_KEY` (ADR-010).
 - [ ] **Small text LLM**: which fast model writes `TYPE_TEXT` payloads (Mercury-class) and is it
       already reachable with an existing key?
 
@@ -142,6 +143,10 @@ Unblocks P1. Probes only, nothing committed to `main`.
   At the [published direct price](https://docs.typesafe.ai/models), its input
   estimate is about **$0.00073** for the batch. This supports direct as the
   P1 default on latency and price; it does not prove higher model accuracy.
+- The owner selected TypeSafe direct for P1. The hosted key was removed from
+  ignored `.env`, and the direct key renamed `JEV_API_KEY`. A synthetic request
+  using that name returned HTTP 200 from `api.typesafe.ai` with model
+  `jev-1.13.0` in **350 ms**. The file is ignored by Git and mode `0600`.
 
 ## Implementation seams to resolve after P0
 
@@ -154,10 +159,9 @@ Unblocks P1. Probes only, nothing committed to `main`.
    whether speculative targets produce valid pairs; revalidate the selected
    pair and fall back to a second target decision when necessary. Ignore the
    target answer for `done`, `wait`, and other targetless actions.
-4. Keep provider URL and key configurable. Both credentials work, and the
-   paired P0 test favors TypeSafe direct as the P1 default. Retain the gateway
-   as a separately configured fallback until representative desktop-state
-   quality and latency are measured. Published input price is $0.42/M
+4. Keep the provider URL configurable, with TypeSafe direct as the selected
+   P1 endpoint (ADR-010). The gateway remains documented as a measured
+   comparison, without a stored key or configured fallback. Published input price is $0.42/M
    at the [hosted gateway](https://jevtypesafeai.com/jev/api) and $0.042/M
    at [TypeSafe direct](https://docs.typesafe.ai/models), as of 2026-09-29.
 

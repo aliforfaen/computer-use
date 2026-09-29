@@ -3,7 +3,7 @@
 A decision-model-driven computer-use layer for agents on **CachyOS + KDE Plasma 6 Wayland**,
 reachable by **remote agents over the tailnet** as well as local ones.
 
-**Status: decisions locked (ADR-001…008; ADR-008 confirmed in ADR-009), P0 in progress, no project code yet.**
+**Status: decisions locked (ADR-001…010), P0 in progress, no project code yet.**
 Next step: the P0 probe checklist in [docs/05-open-questions.md](docs/05-open-questions.md).
 Picking this up cold? Read [docs/HANDOFF.md](docs/HANDOFF.md).
 
@@ -44,7 +44,7 @@ non-generative calibrated decision model; execution stays in deterministic, guar
 6. [docs/05-open-questions.md](docs/05-open-questions.md) — P0 probe checklist + open preferences
 7. [docs/06-remote-agents.md](docs/06-remote-agents.md) — tailnet topology, access model, Hermes config
 
-## Locked shape (ADR-001…007)
+## Locked shape (ADR-001…010)
 
 - A thin **Jev policy layer over `kwin-mcp`** — we do not write a driver.
 - **One instance on `cachy`**; MCP **stdio** locally, **Streamable HTTP** remotely via `tailscale serve`.
@@ -54,13 +54,14 @@ non-generative calibrated decision model; execution stays in deterministic, guar
   access gate** (owner decision) — which is why the compensating controls in
   `docs/06-remote-agents.md` are mandatory, not optional.
 - One core, two surfaces: **CLI + MCP server**.
+- The loop runs on `cachy`, with Jev choosing one step at a time (ADR-008/009).
+- TypeSafe direct is the selected Jev provider for P1 (ADR-010).
 
 ## Constraints
 
 - Target: CachyOS (Arch-based), KDE Plasma 6, Wayland, single user (messhias).
 - Prefer reuse over invention; fork or wrap rather than rewrite.
 - Model output must never become coordinates, selectors, shell commands or executable code.
-- No tracked credentials. An ignored `.env` on `cachy` holds separate TypeSafe
-  direct and hosted gateway keys; the [P0 comparison](docs/05-open-questions.md#p0-observations--2026-09-29)
-  favors TypeSafe direct for P1.
+- No tracked credentials. An ignored `.env` on `cachy` holds `JEV_API_KEY` for
+  TypeSafe direct, selected for P1 after the [P0 comparison](docs/05-open-questions.md#p0-observations--2026-09-29).
 - Never expose this over `tailscale funnel` (public, no identity headers).

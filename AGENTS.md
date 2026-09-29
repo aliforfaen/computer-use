@@ -4,7 +4,7 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**Decisions locked (ADR-001…008; ADR-008 confirmed in ADR-009), no implementation yet.**
+**Decisions locked (ADR-001…010; ADR-008 confirmed in ADR-009), no implementation yet.**
 P0 measurement is underway. The shape: a Jev policy layer over `kwin-mcp`, one instance
 on `cachy`, virtual sessions by default, CLI + MCP surfaces, three autonomy modes, reachable by
 remote agents over the tailnet.
@@ -62,8 +62,8 @@ The owner chose **tailnet ACLs as the only access gate** and **remote reach equa
 - Do not stream screenshots or video to remote callers by default; metadata and a hash, and a
   downscaled JPEG only on explicit request.
 - **Never write secrets to tracked files or logs.** The ignored `.env` holds
-  separate `REAL_JEV_API_KEY` (TypeSafe direct) and `JEV_API_KEY` (hosted gateway).
-  Load only the chosen key into the process environment; portal tokens stay private.
+  `JEV_API_KEY` for TypeSafe direct. Load it into the process environment for
+  `https://api.typesafe.ai/v1/systemone`; portal tokens stay private.
 - **Document platform constraints, don't paper over them.** Wayland input is focus-routed.
   If something cannot work, say so in `docs/03-wayland-constraints.md` instead of degrading silently.
 - **Ask before destructive things.** Anything that types into a terminal, clicks a
