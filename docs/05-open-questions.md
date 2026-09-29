@@ -1,47 +1,49 @@
 # 05 — Open questions
 
-Blocking questions are marked **B**. Answers get recorded in the ADR log at the end of
-`docs/04-architecture.md`.
+Status: the four blocking questions are **answered** (see ADR-001…004 in
+`docs/04-architecture.md`). What remains is measurement (P0) and a few owner preferences.
 
-## Scope
+## Answered
 
-1. **B — Which option?**
-   A thin Jev policy layer over kwin-mcp (recommended) · fork kwin-mcp · own driver.
-2. **B — Is the deliverable a layer for agents (MCP server), or a personal tool for you to
-   drive, or both?** MCP server is reusable by Pi/Claude Code/Hermes; a CLI is faster to iterate.
-3. What is the learning goal here — do you want to understand the platform internals, or get a
-   working thing with minimal time? (Affects how much we reuse.)
+| # | Question | Answer |
+| --- | --- | --- |
+| 1 | Build shape | Policy layer over `kwin-mcp` — ADR-001 |
+| 2 | Deliverable | One core, two surfaces: CLI + MCP — ADR-004 |
+| 3 | Session mode | Both; virtual default, live opt-in — ADR-002 |
+| 4 | Autonomy | Three modes, `guarded` default, plus `yolo` for trustworthy agents — ADR-003 |
 
-## Mode
+## P0 — measure, don't debate
 
-4. **B — Primary mode: live desktop or isolated virtual KWin session?** Live is useful and
-   real, but every text action steals focus and needs restore logic. Virtual is safe and
-   repeatable but sees none of your real apps/data.
-5. May the agent take focus during a task (serial), or must it never disturb what you're doing
-   (which limits us to mouse-only + AT-SPI actions)?
+These unblock P1. All are probes, no code committed to `main`.
 
-## Safety
+- [ ] **KWin + EIS**: does `kwin-mcp session_connect` report "Input backend: KWin EIS" on
+      `cachy`, and does `focus_window` + `keyboard_key` actually land in the target? (kwin-mcp
+      0.8.0+ required — 0.7.0 misroutes input.) Record KWin version.
+- [ ] **AT-SPI reality check**: dump the tree for Kate (Qt), Firefox (Gecko) and one
+      Electron/Chromium app *before* and *after* flipping `org.a11y.Status`
+      (`IsEnabled` / `IsScreenReaderEnabled`). How many useful named elements appear?
+- [ ] **ydotool fallback**: is `/dev/uinput` already ACL'd for `messhias`; does
+      `ydotoold` run as a user service; does physical-rule focus transfer behave as reported?
+- [ ] **Screenshot path**: portal `ScreenShot` vs `spectacle -b -n -o`. Which one is
+      prompt-free after a restore token, and how slow is a capture? (Verification budget.)
+- [ ] **Jev access**: key availability, chosen endpoint (direct `jevtypesafeai.com/api/v1/decide`
+      vs Vercel AI Gateway `typesafe-ai/jev` vs OpenRouter), and measured latency from here.
+- [ ] **Small text LLM**: which fast model writes `TYPE_TEXT` payloads (Mercury-class) and is it
+      already reachable with an existing key?
+- [ ] **Virtual session sanity**: launch `kcalc` inside a `session_start` sandbox and complete
+      one action end to end.
 
-6. **B — Autonomy level.** (a) observe-only until you approve each action, (b) auto-execute
-   read-only/reversible actions, confirm anything destructive, (c) free run within an
-   allowlist of apps. Jev's `noul` risk gate is advisory in all cases.
-7. Which apps are in scope first? Candidates: a browser, Kate/KWrite, Dolphin, System Settings,
-   Konsole (explicitly out?), your own tools.
-8. Hard no-go zones to encode from day one (e.g. password managers, banking, `~/.ssh`,
-   anything that types into a terminal)?
+## Still open — owner preferences
 
-## Interface
-
-9. Do we want a visible agent cursor / overlay so you can see what it is doing (cua-driver
-   paints one)? Costs an overlay library; big comprehension win while learning.
-10. Where should the key live — env var for the MCP server, or a local proxy/gateway
-    (Vercel AI Gateway / OpenRouter) so one key serves other tools too?
-11. Which aggregator, if any — direct `jevtypesafeai.com` `/v1/decide`, Vercel AI Gateway
-    `typesafe-ai/jev`, or OpenRouter?
-
-## To verify in P0 (not questions for you, just unknowns)
-
-- Does kwin-mcp's EIS input actually land correctly on your KWin version?
-- Does Chromium/Electron AT-SPI tree appear after the `org.a11y.Status` flip?
-- Is `/dev/uinput` already ACL'd for your user (ydotool fallback)?
-- Jev key: do you already have one, and which endpoint/billing path?
+1. **App scope for v1.** Candidates: Firefox, Kate, Dolphin, System Settings, KCalc. Konsole
+   explicitly excluded, or allowed with a typed-command confirmation gate?
+2. **Hard no-go zones** to encode from day one — password managers, banking, `~/.ssh` and other
+   secret stores, anything that types into a shell. Default proposal: deny-list plus a
+   "never read clipboard when a password manager is focused" rule.
+3. **Visible agent cursor / overlay.** cua-driver paints one. Costs an overlay library; large
+   comprehension win while learning, and useful for `yolo` transparency.
+4. **Key location.** Env var per-process, or one local gateway/proxy so other tools share it?
+5. **Learning goal.** Understand platform internals vs ship fast. Affects how much of P0 we do
+   by hand instead of through kwin-mcp's own tooling.
+6. **Repo home.** This folder is a standalone git repo with no remote. Does it live here, get a
+   GitHub remote, or become a Multica project card?

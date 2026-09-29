@@ -2,7 +2,7 @@
 
 A decision-model-driven computer-use layer for agents on **CachyOS + KDE Plasma 6 Wayland**.
 
-**Status: discussion / research phase. No code yet.**
+**Status: decisions locked (ADR-001…004), no code yet.** Next: the P0 environment probe.
 
 Goal: let agents (Pi, Claude Code, Hermes, Codex, …) observe and operate the local KDE
 desktop, where the *decision* is made by [Jev](docs/01-jev-primer.md) — a non-generative,
@@ -23,7 +23,14 @@ calibrated decision model — and all execution stays in deterministic, guardrai
 2. [docs/02-prior-art.md](docs/02-prior-art.md) — projects that already do parts of this
 3. [docs/03-wayland-constraints.md](docs/03-wayland-constraints.md) — what is actually possible on KDE Wayland
 4. [docs/04-architecture.md](docs/04-architecture.md) — proposed layer, build-vs-reuse
-5. [docs/05-open-questions.md](docs/05-open-questions.md) — decisions still needed
+5. [docs/05-open-questions.md](docs/05-open-questions.md) — P0 probe checklist + open preferences
+
+## Locked shape (ADR-001…004)
+
+- A thin **Jev policy layer over `kwin-mcp`** — we do not write a driver.
+- **Virtual KWin session by default**, live desktop opt-in.
+- Three autonomy modes: `supervised`, `guarded` (default), `yolo`.
+- One core, two surfaces: **CLI + MCP server**.
 
 ## Constraints
 
