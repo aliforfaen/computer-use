@@ -12,12 +12,13 @@ Claims that come from the vendor or from demo posts are marked as such.
   `noul` returns a yes-probability alone.
 - Because answers are typed and enumerable, the calling code branches on them directly —
   no parsing, no regex, no free-form output to sanitize.
-- Reported latency **70–500 ms** end to end (gateway-reported). Three synthetic
-  calls from `cachy` took **890–1,732 ms** on 2026-09-29; measure again with
-  desktop states before selecting time budgets.
-  The owner's key is for the independent `jevtypesafeai.com` hosted gateway,
-  which lists **$0.42 / 1M input tokens**. The official TypeSafe direct API
-  currently lists **$0.042 / 1M input tokens**. Treat both as time-sensitive.
+- The owner now has keys for both TypeSafe direct and the independent hosted
+  gateway. In a 12-pair synthetic test from `cachy` on 2026-09-29, direct had
+  **254 ms median** latency and the gateway **839 ms** for the same pinned model
+  and ~1.45k-token payload; direct was faster in every pair. Both returned
+  the same action and target choices on these simple cases. The gateway lists
+  **$0.42 / 1M input tokens** and TypeSafe direct **$0.042 / 1M**. Treat prices
+  as time-sensitive and test decision quality on real bounded desktop states.
 
 ## The three primitives
 
@@ -33,8 +34,8 @@ a single round trip per decision cycle possible.
 ## API shape
 
 ```jsonc
-POST https://jevtypesafeai.com/api/v1/decide  // owner's hosted jv_live_ key
-Authorization: Bearer jv_live_…
+POST https://api.typesafe.ai/v1/systemone  // first-party direct key
+Authorization: Bearer <direct key>
 {
   "model": "jev-latest",          // or pinned, e.g. "jev-1.13.0"
   "state": "…",                    // string | object | array
@@ -49,11 +50,11 @@ Authorization: Bearer jv_live_…
 //     "usage": { "input_tokens": 62, "output_tokens": 12 } }
 ```
 
-- The independent hosted gateway and TypeSafe's official
-  `https://api.typesafe.ai/v1/systemone` endpoint use the same request shape
-  but **different keys**. The current `.env` key is for the hosted gateway;
-  do not send it to the official endpoint. The official SDK reads
-  `TYPESAFE_API_KEY`; this project's hosted key uses `JEV_API_KEY`.
+- The independent hosted gateway at
+  `https://jevtypesafeai.com/api/v1/decide` uses the same core request shape
+  but a **different key**. The ignored `.env` currently names the direct key
+  `REAL_JEV_API_KEY` and the gateway key `JEV_API_KEY`; map the direct key to
+  `TYPESAFE_API_KEY` when using the official SDK. Never swap the two keys.
 - Also reachable through aggregators: Vercel AI Gateway `typesafe-ai/jev`, Cloudflare model
   catalog, OpenRouter; each route has its own credentials and pricing.
 - Budgets: **64k tokens** for `state` + all questions combined, and **32k tokens** for
@@ -80,8 +81,9 @@ coordinate, selector or command.
 
 ## Cost sanity check
 
-A desktop step with, say, 1.5k input tokens ≈ **$0.00063** at the owner's hosted
-gateway price. A 50-step task ≈ **$0.0315** in input charges.
+A desktop step with, say, 1.5k input tokens ≈ **$0.000063** at TypeSafe direct's
+published price. A 50-step task ≈ **$0.00315** in input charges. The hosted
+gateway is about 10× that rate.
 Cost is a non-issue at this scale; latency and correctness are the real constraints.
 
 ## Sources

@@ -60,5 +60,7 @@ non-generative calibrated decision model; execution stays in deterministic, guar
 - Target: CachyOS (Arch-based), KDE Plasma 6, Wayland, single user (messhias).
 - Prefer reuse over invention; fork or wrap rather than rewrite.
 - Model output must never become coordinates, selectors, shell commands or executable code.
-- No credentials in the repo. `JEV_API_KEY` (`jv_live_…`) stays on `cachy`, in env.
+- No tracked credentials. An ignored `.env` on `cachy` holds separate TypeSafe
+  direct and hosted gateway keys; the [P0 comparison](docs/05-open-questions.md#p0-observations--2026-09-29)
+  favors TypeSafe direct for P1.
 - Never expose this over `tailscale funnel` (public, no identity headers).

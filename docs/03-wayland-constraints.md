@@ -94,8 +94,8 @@ The focus problem is *worse* when the caller is not physically at the machine:
 - Remote verification must not mean "stream the screen". Send metadata and a hash; downscale a
   single JPEG on request. Screencast over the tailnet is not a supported path.
 - Latency compounds: one tailnet round trip per step adds to the Jev call.
-  The hosted gateway reported 70–500 ms, while three synthetic calls from
-  `cachy` took 890–1,732 ms. Prefer one task call with the loop on the host
+  The 12-pair synthetic test from `cachy` measured 254 ms median for TypeSafe
+  direct and 839 ms for the hosted gateway. Prefer one task call with the loop on the host
   (ADR-008/009); measure representative desktop states before setting budgets.
 
 ## 8. Known hard cases (accept as out of scope initially)

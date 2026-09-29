@@ -48,8 +48,9 @@ and `trycua/cua` / `agent-sh/computer-use-linux` (a11y flag flip, readiness repo
    `ScreenReaderEnabled` yielded useful Kate and Firefox trees on this host,
    while isolated Brave Origin still exposed an empty root. See the P0 counts.
 3. **Per-step remote loops are expensive.** A tailnet round trip plus a Jev
-   call per step. Three calls through the owner's hosted gateway took
-   890–1,732 ms on 2026-09-29; measure again with desktop states. Hence ADR-008.
+   call per step. In 12 matched synthetic requests, TypeSafe direct had a
+   254 ms median and the hosted gateway 839 ms; measure desktop states next.
+   Hence ADR-008.
 
 ## 4. Next action: P0 probe (half a day, measurements only)
 
@@ -69,8 +70,9 @@ unblocks the most:
    **Funnel off**; `tailscale ping cachy` from a remote node (direct vs DERP, RTT); list which
    devices can reach the URL and which are tagged.
 6. **Hermes client** — add an `mcp_servers` entry with `url:`, list tools, call one.
-7. **Jev** — hosted endpoint and key work; three synthetic calls were slow.
-   Re-measure with desktop states, and choose the small text LLM.
+7. **Jev** — both endpoints and separate keys work; the paired P0 test favors
+   TypeSafe direct for P1. Re-measure with desktop states and choose the
+   small text LLM.
 
 Read `docs/05-open-questions.md` for measurements already made on 2026-09-29 and
 the remaining process/caller-identity seams.

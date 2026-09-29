@@ -58,10 +58,9 @@ Unblocks P1. Probes only, nothing committed to `main`.
 - [ ] **Hermes client**: point a Hermes `mcp_servers` entry at the URL, list tools, call one.
 
 **Models / keys**
-- [x] **Jev access**: the owner supplied a hosted `jevtypesafeai.com` key in
-      ignored `.env`. Three synthetic calls to its `/api/v1/decide` endpoint
-      succeeded; see measurements below. The official TypeSafe endpoint uses
-      a different key; do not send this key there again.
+- [x] **Jev access**: the owner supplied separate hosted and TypeSafe direct
+      keys in ignored `.env`. Both endpoints succeeded with pinned `jev-1.13.0`;
+      see paired measurements below. Keep each key at its issuing provider.
 - [ ] **Small text LLM**: which fast model writes `TYPE_TEXT` payloads (Mercury-class) and is it
       already reachable with an existing key?
 
@@ -130,6 +129,19 @@ Unblocks P1. Probes only, nothing committed to `main`.
   Ollama responds locally and has Qwen/Gemma models installed, but no model
   was loaded during the check. Use these only for separate baselines or text
   helpers; they do not establish Jev selector quality.
+- After the owner added a separate first-party key, a **12-pair** test alternated
+  TypeSafe direct and the gateway from `cachy`, using the same pinned
+  `jev-1.13.0` model and synthetic KCalc states of **1,445–1,453 input tokens**.
+  Both had **12/12 HTTP 200** responses, resolved to `jev-1.13.0`, chose
+  `press`/One in six pre-action cases and `done` in six completed cases, and
+  returned near-identical `noul` probabilities. Direct latency was **230–384 ms**
+  (median **254 ms**, p90 **296 ms**); gateway latency was **785–996 ms**
+  (median **839 ms**, p90 **919 ms**). Direct was faster in all 12 matched pairs,
+  with a median per-pair advantage of **579 ms**. The gateway reported
+  **$0.007308** total cost; direct returned token counts but no cost field.
+  At the [published direct price](https://docs.typesafe.ai/models), its input
+  estimate is about **$0.00073** for the batch. This supports direct as the
+  P1 default on latency and price; it does not prove higher model accuracy.
 
 ## Implementation seams to resolve after P0
 
@@ -142,10 +154,10 @@ Unblocks P1. Probes only, nothing committed to `main`.
    whether speculative targets produce valid pairs; revalidate the selected
    pair and fall back to a second target decision when necessary. Ignore the
    target answer for `done`, `wait`, and other targetless actions.
-4. Keep provider URL and key configurable. The owner's gateway key works at
-   `jevtypesafeai.com`, while TypeSafe direct needs its own key. If direct
-   access becomes available, compare both using the same pinned model and
-   payload before changing the default. Published input price is $0.42/M
+4. Keep provider URL and key configurable. Both credentials work, and the
+   paired P0 test favors TypeSafe direct as the P1 default. Retain the gateway
+   as a separately configured fallback until representative desktop-state
+   quality and latency are measured. Published input price is $0.42/M
    at the [hosted gateway](https://jevtypesafeai.com/jev/api) and $0.042/M
    at [TypeSafe direct](https://docs.typesafe.ai/models), as of 2026-09-29.
 

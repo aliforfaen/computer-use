@@ -116,10 +116,10 @@ the live desktop and `yolo`. Design notes that follow from that:
 and remote callers mostly call one high-level tool per task.** Rationale:
 
 - A per-step remote loop pays a tailnet round trip *plus* a Jev call per step.
-  A per-task remote loop pays one round trip. Three synthetic calls through the
-  owner's hosted gateway took 890–1,732 ms from `cachy` on 2026-09-29;
+  A per-task remote loop pays one round trip. A 12-pair synthetic test on
+  2026-09-29 measured 254 ms median direct and 839 ms through the gateway;
   representative desktop-state latency remains to be measured.
-- The `JEV_API_KEY` stays on `cachy`. Remote agents never hold it.
+- Both provider keys stay on `cachy`. Remote agents never hold them.
 - Guardrails cannot be bypassed by a remote caller, because the caller never drives the executor
   directly.
 
