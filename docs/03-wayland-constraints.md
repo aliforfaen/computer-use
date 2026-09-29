@@ -75,7 +75,22 @@ small router, not a recipe.
 - [ ] `spectacle` present as a screenshot fallback
 - [ ] KWin version noted — private EIS D-Bus can move between releases
 
-## 7. Known hard cases (accept as out of scope initially)
+## 7. Remote callers amplify §1 (added for the tailnet endgoal)
+
+The focus problem is *worse* when the caller is not physically at the machine:
+
+- A remote agent driving the live desktop **takes over the keyboard** with nobody in the room to
+  notice. The save → act → restore pattern is not a nicety here, it is the difference between a
+  usable machine and a hijacked one.
+- Nothing in Wayland tells us whether the human is typing right now. We have to infer it (input
+  idle time via AT-SPI/`org.kde` activity or an idle-inhibit watchdog) and refuse live tasks
+  while the owner is active, unless explicitly overridden.
+- Remote verification must not mean "stream the screen". Send metadata and a hash; downscale a
+  single JPEG on request. Screencast over the tailnet is not a supported path.
+- Latency compounds: one tailnet round trip per step turns Jev's 70–500 ms into a different
+  product. Prefer one call per task with the loop running on the desktop host (ADR-008).
+
+## 8. Known hard cases (accept as out of scope initially)
 
 Canvas/games/GPU surfaces, DRM-protected content, nested/remote sessions, drag-and-drop across
 apps, file pickers that use portal dialogs, apps with no accessibility implementation at all

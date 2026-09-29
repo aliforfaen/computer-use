@@ -4,11 +4,14 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**Decisions locked, no implementation yet.** ADR-001…004 in `docs/04-architecture.md` fix the
-shape: a Jev policy layer over `kwin-mcp`, virtual sessions by default, CLI + MCP surfaces,
-three autonomy modes. Next step is the **P0 probe checklist** in `docs/05-open-questions.md`.
-Do not start the state compiler or MCP server until P0 measurements are in — and ask before
-adding code to `main` beyond throwaway probe scripts.
+**Decisions locked (ADR-001…007), no implementation yet.** ADR-008 (run the loop server-side) is
+proposed and needs one confirmation. The shape: a Jev policy layer over `kwin-mcp`, one instance
+on `cachy`, virtual sessions by default, CLI + MCP surfaces, three autonomy modes, reachable by
+remote agents over the tailnet.
+
+Next step is the **P0 probe checklist** in `docs/05-open-questions.md`. Do not start the state
+compiler or MCP server until P0 measurements are in — and ask before adding code to `main`
+beyond throwaway probe scripts.
 
 ## Owner context
 
@@ -34,6 +37,30 @@ adding code to `main` beyond throwaway probe scripts.
   Never leave the user's keystrokes landing in a window the agent touched.
 - **Pin and record versions.** kwin-mcp `>=0.8.0` is required (0.7.0 misroutes input) and its
   KWin EIS D-Bus interface is private. Record the KWin version alongside any behaviour claim.
+
+## Remote-caller rules (tailnet)
+
+The owner chose **tailnet ACLs as the only access gate** and **remote reach equal to local**
+(ADR-006/007). That makes the following mandatory rather than optional — never quietly relax them:
+
+- **Bind `127.0.0.1` only.** `tailscale serve` proxies to it. Never bind a tailnet-visible or
+  LAN-visible interface, and never expose this over `tailscale funnel` (public, and it strips
+  identity headers).
+- **Deny-by-default app allowlist applies in every mode, including `yolo`.** This is now the main
+  blast-radius limiter for remote callers; it is explicit config, not default-open.
+- **Audit every call** to an append-only JSONL log: caller node, transport, tool, autonomy mode,
+  Jev answers with confidences, action, verification outcome, timestamp. No sampling.
+- **A local kill switch must exist and stay simple** (`jev-desktop stop --all`, plus
+  `tailscale serve off` as the hard stop).
+- **Never put secrets in state.** No clipboard contents, no secret-store window titles, no typed
+  text in the state sent to Jev or written to logs.
+- **Remote live-desktop tasks**: explicit per-task request, recorded in the audit log, one at a
+  time behind a lock, mandatory focus save→act→restore, and refuse to start while the owner's
+  physical input has been active recently unless overridden.
+- Keep the `authorizer` seam in place even though it currently allows everything — a bearer token
+  or Tailscale app capabilities must be addable later as config, not a rewrite.
+- Do not stream screenshots or video to remote callers by default; metadata and a hash, and a
+  downscaled JPEG only on explicit request.
 - **Never write secrets.** `JEV_API_KEY` / `jv_live_…` and any portal tokens stay in env vars.
 - **Document platform constraints, don't paper over them.** Wayland input is focus-routed.
   If something cannot work, say so in `docs/03-wayland-constraints.md` instead of degrading silently.
@@ -43,13 +70,15 @@ adding code to `main` beyond throwaway probe scripts.
 ## Layout
 
 ```
-README.md            project overview, reading order
+README.md            project overview, endgoal, reading order
 AGENTS.md            this file
+HANDOFF.md           (in docs/) start here for a fresh session
 docs/01-jev-primer.md
 docs/02-prior-art.md
 docs/03-wayland-constraints.md
-docs/04-architecture.md
-docs/05-open-questions.md
+docs/04-architecture.md       ADR-001..008 log
+docs/05-open-questions.md     P0 checklist
+docs/06-remote-agents.md      tailnet topology + access model
 ```
 
 ## Conventions

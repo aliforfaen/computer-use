@@ -5,9 +5,12 @@ Not a spec. A shape to react to.
 ## The layer, in one picture
 
 ```
-                     agent (Pi / Claude Code / Hermes / Codex)
-                                     │ MCP
-        ┌────────────────────────────▼─────────────────────────────┐
+   local agents (stdio)          remote agents over tailnet (Streamable HTTP)
+   Pi / Claude Code / Codex      Hermes @ VPS · Hermes @ GPU box · any tailnet node
+        │                                   │
+        └───────────────┬───────────────────┘
+                        │  tailscale serve -> 127.0.0.1:7810  (see docs/06-remote-agents.md)
+        ┌───────────────▼──────────────────────────────────────────┐
         │  jev-desktop  (the thing we would own)                   │
         │                                                          │
         │  1. OBSERVER      AT-SPI tree + window list + a11y flags  │  ← reuse driver
@@ -26,7 +29,8 @@ Not a spec. A shape to react to.
         │     progress : score  (did the last action help?)         │
         │                                                          │
         │  4. GUARDRAILS    code only: allowlists, caps, confirm    │  ← ours
-        │     gates, dry-run, save/restore focus, kill switch       │
+        │     gates, dry-run, save/restore focus, kill switch,      │
+        │     append-only audit log (every call, both transports)   │
         │                                                          │
         │  5. EXECUTOR      AT-SPI action → EIS/libei → ydotool     │  ← reuse driver
         │     (behind our input-adapter interface, so the backend    │
@@ -35,6 +39,8 @@ Not a spec. A shape to react to.
         │                                                          │
         │  6. VERIFIER      re-read AT-SPI / focused window /       │  ← ours (thin)
         │     cropped screenshot diff; DONE is a proposal           │
+        │  7. SURFACE       MCP stdio (local) + MCP Streamable HTTP │  ← ours
+        │                   (remote, behind tailscale serve)        │
         └────────────────────────────┬─────────────────────────────┘
                                      │
         kwin-mcp (KWin EIS, AT-SPI, virtual sessions)  ← layer 0, reuse as-is
@@ -54,7 +60,7 @@ picks from indices we created. Typed answers branch in plain code.
 | 4 · Guardrails | MCP tool annotations (`readOnlyHint`/`destructiveHint`) from computer-use-linux | ✔ policy engine + focus arbiter |
 | 5 · Executor | driver tools; Mercury-class small LLM for text | thin dispatch + validation |
 | 6 · Verifier | driver screenshot/AT-SPI reads | ✔ post-condition checks |
-| 7 · Surface | standard MCP stdio server | ✔ tool definitions + skills doc |
+| 7 · Surface | standard MCP stdio server | ✔ tool definitions + skill + **Streamable HTTP transport** for tailnet callers |
 
 Rough split: **~70% reuse, ~30% new code**, and the new code is the interesting part.
 
@@ -83,8 +89,10 @@ contradicts "don't reinvent the wheel".
 - **P2 · Closed loop.** Execute + verify on one narrow task (e.g. "open Preferences and toggle
   X"), with focus save/restore. Measure steps, latency, cost, failure modes.
 - **P3 · Guardrails.** Destructive-action gate, confirmation UX, allowlists, step/budget caps.
-- **P4 · MCP surface + skill.** Expose to Pi/Claude Code, ship a small skill that teaches the
-  agent *which tool to call when* (kwin-mcp does this well — copy the pattern).
+- **P4 · MCP surface + skill.** Expose to Pi/Claude Code **and remote Hermes nodes**. Stdio first
+  (local, no auth surface), then Streamable HTTP behind `tailscale serve`. Ship a small skill that
+  teaches the agent *which tool to call when* (kwin-mcp does this well — copy the pattern).
+  Details: `docs/06-remote-agents.md`.
 
 ## Open technical questions
 
@@ -138,6 +146,39 @@ step budget reduction, never an action.
 wraps it for fast iteration and manual driving; an MCP stdio server exposes the same core to
 Pi/Claude Code/Hermes/Codex. MCP tools carry `readOnlyHint`/`destructiveHint` annotations
 (pattern from `computer-use-linux`) so hosts can surface risk before invocation.
+
+### ADR-005 — Single instance on `cachy`, reached over the tailnet
+**Locked 2026-09-29.** One `jev-desktop` process on `cachy`, exposed two ways: MCP **stdio** for
+local agents and MCP **Streamable HTTP** via `tailscale serve` for remote ones. Rejected: one
+instance per desktop node (a different product — fleet control), control plane + workers
+(premature, heavy). Rationale: one desktop, one policy engine, one allowlist, one audit log.
+Serve binds to `127.0.0.1` only, so no LAN exposure and no header forgery.
+
+### ADR-006 — Remote callers have the same reach as local
+**Locked 2026-09-29 (owner decision).** Remote callers may drive the live desktop and may use
+`yolo`; they are not restricted to virtual sessions. Virtual stays the default for anyone who
+does not ask otherwise. Live + remote + `yolo` is the highest-risk configuration in the system,
+so: live must be requested explicitly per task, the audit log records it, **focus save → act →
+restore is mandatory**, one live task at a time behind a lock, and the session refuses to start
+if the owner's physical input was active in the last N seconds unless overridden.
+
+### ADR-007 — Tailnet ACLs are the only access gate
+**Locked 2026-09-29 (owner decision).** No per-client tokens, no OAuth, no identity checks.
+Accepted consequence: any device able to reach the Serve URL controls the desktop, and Tailscale
+identity headers are unavailable anyway for tagged (VPS-shaped) nodes. Required compensations
+ship alongside it — localhost-only bind, deny-by-default app allowlist in **every** mode,
+append-only audit log, a local kill switch, per-task step/time budgets, and no screenshot
+streaming to remote callers. An `authorizer` interface stays in place so a bearer token or
+Tailscale app capabilities (`--accept-app-caps`) can be added later as a config change.
+Full reasoning and threat notes: `docs/06-remote-agents.md`.
+
+### ADR-008 — Run the loop server-side; remote callers get one call per task *(PROPOSED)*
+**Proposed 2026-09-29 — confirm during P0.** The observe→decide→act→verify loop executes on
+`cachy`; remote callers call one high-level tool per task, with low-level primitives
+(`observe`/`act`/`verify`) still exposed for agents that want to plan themselves. Rationale: a
+per-step remote loop pays a tailnet round trip *plus* a Jev call per step; the Jev key stays on
+`cachy`; remote callers cannot bypass guardrails by driving the executor directly. Trade-off: a
+remote agent has less control over fine-grained decisions.
 
 ### Next: P0 probe
 
