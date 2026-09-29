@@ -43,6 +43,7 @@ non-generative calibrated decision model; execution stays in deterministic, guar
 5. [docs/04-architecture.md](docs/04-architecture.md) — the layer, build-vs-reuse, ADR log
 6. [docs/05-open-questions.md](docs/05-open-questions.md) — P0 probe checklist + open preferences
 7. [docs/06-remote-agents.md](docs/06-remote-agents.md) — tailnet topology, access model, Hermes config
+8. [docs/07-p1-selector-probe.md](docs/07-p1-selector-probe.md) — virtual KCalc observations and bounded Jev choices
 
 ## Locked shape (ADR-001…010)
 

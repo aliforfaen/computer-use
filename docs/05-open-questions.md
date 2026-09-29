@@ -34,9 +34,10 @@ Unblocks P1. Probes only, nothing committed to `main`.
       `ScreenReaderEnabled`). See counts and limits below.
 - [ ] **ydotool fallback**: is `/dev/uinput` ACL'd for `messhias`; does `ydotoold` run as a user
       service; does physical-rule focus transfer behave as reported?
-- [ ] **Screenshot path**: exercise `kwin-mcp screenshot` in live and virtual
-      sessions (KWin ScreenShot2 → Spectacle fallback); measure latency and
-      whether either path prompts. Investigate the portal only as an optional fallback.
+- [x] **Screenshot path**: KWin ScreenShot2 worked in live and virtual
+      sessions. Ten virtual captures had 150 ms median latency without a prompt;
+      Spectacle and portal fallbacks remain untested. See
+      [the selector probe](07-p1-selector-probe.md).
 - [x] **Virtual session sanity**: disposable `kwin-mcp==0.10.0` started
       `kcalc` with `isolate_home=true`, reported KWin EIS, clicked the One
       button and captured a changed screenshot; see observation below.
@@ -68,8 +69,8 @@ Unblocks P1. Probes only, nothing committed to `main`.
 ## P0 observations — 2026-09-29
 
 - `cachy` is in a KDE Wayland session; KWin/Plasma **6.7.5**, libei **1.6.0**.
-  The live KWin exposes `org.kde.KWin.EIS.RemoteDesktop.connectToEIS`, but
-  the live interface has not been exercised.
+  The live KWin exposes `org.kde.KWin.EIS.RemoteDesktop.connectToEIS`; the
+  later live KCalc probe exercised the EIS route.
   `kwin-mcp` was not installed at the start of the probe.
 - A disposable `/tmp` environment ran `kwin-mcp==0.10.0` in a virtual session
   with `session_start(app_command='kcalc', isolate_home=true)`. It reported
@@ -147,6 +148,11 @@ Unblocks P1. Probes only, nothing committed to `main`.
   ignored `.env`, and the direct key renamed `JEV_API_KEY`. A synthetic request
   using that name returned HTTP 200 from `api.typesafe.ai` with model
   `jev-1.13.0` in **350 ms**. The file is ignored by Git and mode `0600`.
+- A [decision-only KCalc probe](07-p1-selector-probe.md) measured virtual
+  ScreenShot2 and AT-SPI reads, found an exact empty → `text='1'` AT-SPI
+  postcondition after pressing One, and sent one real-tree bounded state to
+  TypeSafe direct. Jev chose the observed `button.One`; no model-selected
+  action was executed.
 
 ## Implementation seams to resolve after P0
 

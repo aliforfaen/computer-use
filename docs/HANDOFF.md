@@ -64,7 +64,7 @@ unblocks the most:
 3. **ydotool fallback** — `/dev/uinput` ACL and `ydotoold` service passed;
    input behavior remains untested. KWin EIS currently works.
 4. **Screenshot path** — ScreenShot2 worked in virtual and live sessions;
-   capture latency and fallback behavior remain unmeasured.
+   ten virtual captures had 150 ms median latency. Fallbacks remain unmeasured.
 5. **Tailnet** — preserve existing Serve `/` route; add `/mcp` → `127.0.0.1:7810`
    after the endpoint exists. Confirm not LAN-reachable; confirm
    **Funnel off**; `tailscale ping cachy` from a remote node (direct vs DERP, RTT); list which
@@ -115,6 +115,7 @@ docs/03-wayland-constraints.md   the honest platform limits, incl. remote amplif
 docs/04-architecture.md          diagram, build-vs-reuse table, options, phasing, ADR log
 docs/05-open-questions.md        answered questions, ADR-008, P0 checklist, open preferences
 docs/06-remote-agents.md         tailnet topology, access model + mandatory compensations, Hermes config
+docs/07-p1-selector-probe.md     virtual KCalc observation and TypeSafe choice probe
 .memsearch/memory/               kickoff note (indexed in the workspace memory store)
 ```
 

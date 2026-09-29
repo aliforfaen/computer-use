@@ -81,6 +81,7 @@ docs/03-wayland-constraints.md
 docs/04-architecture.md       ADR-001..008 log
 docs/05-open-questions.md     P0 checklist
 docs/06-remote-agents.md      tailnet topology + access model
+docs/07-p1-selector-probe.md  KCalc observation + decision-only Jev probe
 ```
 
 ## Conventions

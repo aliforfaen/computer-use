@@ -76,8 +76,8 @@ small router, not a recipe.
       Firefox/Kate trees appeared, isolated Brave's did not (2026-09-29)
 - [x] `/dev/uinput` accessible by `messhias`; `ydotoold` running (input behavior untested)
 - [x] KWin EIS reachable in live and virtual sessions with `kwin-mcp==0.10.0`
-- [x] `kwin-mcp screenshot` worked in live and virtual sessions through ScreenShot2
-      (capture latency not measured)
+- [x] `kwin-mcp screenshot` worked in live and virtual sessions through ScreenShot2;
+      ten virtual captures had 150 ms median latency (2026-09-29)
 - [x] `spectacle` present as a screenshot fallback (observed 2026-09-29)
 - [x] KWin version noted: 6.7.5 on `cachy` (2026-09-29); private EIS D-Bus can move
 
