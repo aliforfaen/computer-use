@@ -120,6 +120,13 @@ Unblocks P1. Probes only, nothing committed to `main`.
   End-to-end times were **1,273 ms, 890 ms, 1,732 ms** (median **1,273 ms**).
   This tiny sample is slower than the gateway's vendor-reported 70–500 ms;
   measure again with actual bounded desktop states before setting time budgets.
+  A second **10-call** serial sample with a synthetic KCalc-like state and
+  pinned `jev-1.13.0` returned HTTP 200 every time. Call times were **768–1,060 ms**
+  (median **810 ms**); total reported cost was **$0.00189**. All five
+  pre-action cases chose `press`/`one`, and all five completed cases chose
+  `done`. The independent `target` head still answered `one` when action was
+  `done`; the executor must ignore targets for targetless actions. This is a
+  simple fixture, not a measure of desktop-task accuracy or direct-API speed.
   Ollama responds locally and has Qwen/Gemma models installed, but no model
   was loaded during the check. Use these only for separate baselines or text
   helpers; they do not establish Jev selector quality.
@@ -133,7 +140,14 @@ Unblocks P1. Probes only, nothing committed to `main`.
    Jev selects each action, while the caller/task definition supplies the goal.
 3. The action and target questions are evaluated independently. P1 must test
    whether speculative targets produce valid pairs; revalidate the selected
-   pair and fall back to a second target decision when necessary.
+   pair and fall back to a second target decision when necessary. Ignore the
+   target answer for `done`, `wait`, and other targetless actions.
+4. Keep provider URL and key configurable. The owner's gateway key works at
+   `jevtypesafeai.com`, while TypeSafe direct needs its own key. If direct
+   access becomes available, compare both using the same pinned model and
+   payload before changing the default. Published input price is $0.42/M
+   at the [hosted gateway](https://jevtypesafeai.com/jev/api) and $0.042/M
+   at [TypeSafe direct](https://docs.typesafe.ai/models), as of 2026-09-29.
 
 ## Still open — owner preferences
 
