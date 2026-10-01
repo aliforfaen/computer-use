@@ -4,7 +4,11 @@
 no remote). Read `AGENTS.md` next, then run P0.
 
 **One-line state:** ADR-001…010 are locked (ADR-008 confirmed in ADR-009);
-**no project code exists yet**; P0 measurement is underway.
+P0 measurements, a decision-only P1 probe and a narrow executed KCalc P2 proof
+are recorded. `p2_kcalc.py` and its focused tests exist; no general service exists.
+The current owner-supported direction is a screenshot agent plus optional
+vision or OCR + Jev heartbeat; see [doc 10](10-heartbeat-direction.md).
+ADR-011 is proposed, with planner placement and grounding still open.
 
 **Owner:** messhias. Machine `cachy` — CachyOS (Arch-based), KDE Plasma 6, Wayland.
 Owner learns by doing and wants *short* prose: small runnable probes beat long documents.
@@ -13,9 +17,11 @@ Owner learns by doing and wants *short* prose: small runnable probes beat long d
 
 ## 1. What we are building
 
-A computer-use layer for agents on this desktop, where the decision is made by **Jev**
+A computer-use layer for agents on this desktop. The original design made decisions with **Jev**
 (TypeSafe AI "System One": `state` + typed `questions` → typed `answers`; primitives `choice`,
-`score`, `noul`; it generates no text). Execution stays in deterministic, guardrailed code.
+`score`, `noul`; it generates no text). The current direction gives a primary
+vision agent task interpretation and recovery, with Jev as an optional
+accelerator. Execution stays in deterministic, guardrailed code.
 
 **Endgoal:** local agents (Pi, Claude Code) *and* **remote Hermes assistants over the tailnet**
 can drive this desktop. Not all callers are local.
@@ -53,6 +59,11 @@ and `trycua/cua` / `agent-sh/computer-use-linux` (a11y flag flip, readiness repo
    Hence ADR-008.
 
 ## 4. Next action: P0 probe (half a day, measurements only)
+
+**Current next step:** a disposable virtual-session heartbeat fixture comparing
+agent polling, fast vision judgments, and OCR + Jev. Confirm the owner's exact
+vision endpoint before paid comparisons. Follow doc 10's metrics and remaining
+design decisions. The checklist below records remaining platform measurements.
 
 Full checklist in **`docs/05-open-questions.md`**. The short version, in the order that
 unblocks the most:
@@ -116,6 +127,10 @@ docs/04-architecture.md          diagram, build-vs-reuse table, options, phasing
 docs/05-open-questions.md        answered questions, ADR-008, P0 checklist, open preferences
 docs/06-remote-agents.md         tailnet topology, access model + mandatory compensations, Hermes config
 docs/07-p1-selector-probe.md     virtual KCalc observation and TypeSafe choice probe
+docs/08-p2-kcalc-proof.md        executed one-action proof and limits
+docs/09-observation-options.md  structured observer research
+docs/10-heartbeat-direction.md  current direction and three-arm benchmark
+p2_kcalc.py / test_p2_kcalc.py  narrow disposable-session proof
 .memsearch/memory/               kickoff note (indexed in the workspace memory store)
 ```
 

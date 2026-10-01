@@ -2,6 +2,10 @@
 
 Not a spec. A shape to react to.
 
+**2026-10-01 update:** the diagram below records the original Jev-led shape.
+The owner-supported screenshot-agent direction and heartbeat benchmark are
+in [doc 10](10-heartbeat-direction.md); planner placement and grounding remain open.
+
 ## The layer, in one picture
 
 ```
@@ -210,3 +214,13 @@ action/target choices, and was faster in every pair. Its published input price
 is one tenth of the gateway's. Keep endpoint selection in config for future
 comparisons, but do not run a gateway fallback without a separately supplied key.
 Measurements: [`docs/05-open-questions.md`](05-open-questions.md#p0-observations--2026-09-29).
+
+### ADR-011 — Screenshot agent with optional heartbeat acceleration *(PROPOSED)*
+**2026-10-01; owner supports the direction, final contract pending.** Use a primary
+vision agent for task interpretation and recovery, with `kwin-mcp` handling
+desktop sessions and input. Compare normal agent polling, a vision heartbeat,
+and OCR + Jev before selecting an accelerator. Jev remains a bounded selector.
+This would supersede ADR-001's Jev-led policy and the Jev-specific loop in
+ADR-009; session ownership and controls stay on `cachy`. Planner placement and
+action grounding must be resolved before locking this ADR. See
+[doc 10](10-heartbeat-direction.md) for scope, metrics and remaining decisions.

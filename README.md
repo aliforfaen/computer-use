@@ -1,16 +1,21 @@
 # Jev Computer-Use Layer (working title)
 
-A decision-model-driven computer-use layer for agents on **CachyOS + KDE Plasma 6 Wayland**,
+A screenshot-driven computer-use layer for agents on **CachyOS + KDE Plasma 6 Wayland**,
 reachable by **remote agents over the tailnet** as well as local ones.
 
 **Status: decisions locked (ADR-001…010); P0 measurements and a narrow KCalc P2 proof are recorded.**
+The owner-supported next direction is a primary vision agent with optional
+heartbeat acceleration. Read [the recommendation and benchmark](docs/10-heartbeat-direction.md).
+ADR-011 proposes the architecture update; planner placement and action grounding remain open.
 Picking this up cold? Read [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ## Endgoal
 
 Your Hermes assistants — and other agents that do **not** run on this machine — connect over the
-tailnet and operate the desktop. The decision is made by [Jev](docs/01-jev-primer.md), a
-non-generative calibrated decision model; execution stays in deterministic, guardrailed code.
+tailnet and operate the desktop. A primary vision agent interprets the task;
+[Jev](docs/01-jev-primer.md) is a candidate accelerator for waits and familiar
+workflows. Execution stays in deterministic, guardrailed code. The original
+Jev-led architecture below is retained pending ADR-011's final contract.
 
 ```
    local agents (stdio)          remote agents over tailnet (Streamable HTTP)
@@ -43,6 +48,9 @@ non-generative calibrated decision model; execution stays in deterministic, guar
 6. [docs/05-open-questions.md](docs/05-open-questions.md) — P0 probe checklist + open preferences
 7. [docs/06-remote-agents.md](docs/06-remote-agents.md) — tailnet topology, access model, Hermes config
 8. [docs/07-p1-selector-probe.md](docs/07-p1-selector-probe.md) — virtual KCalc observations and bounded Jev choices
+9. [docs/08-p2-kcalc-proof.md](docs/08-p2-kcalc-proof.md) — one executed and verified action
+10. [docs/09-observation-options.md](docs/09-observation-options.md) — structured observation alternatives
+11. [docs/10-heartbeat-direction.md](docs/10-heartbeat-direction.md) — current direction and benchmark
 
 ## Locked shape (ADR-001…010)
 
