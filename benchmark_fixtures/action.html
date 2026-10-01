@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Jev virtual action fixture</title>
+  <style>
+    body { font: 16px sans-serif; margin: 36px; color: #17212b; }
+    button { padding: 10px 16px; font: inherit; }
+    #state { margin-top: 20px; padding: 12px; background: #eef4f7; }
+  </style>
+</head>
+<body>
+  <h1>Local action check</h1>
+  <p>This page runs entirely from a local fixture file.</p>
+  <button id="advance" type="button" aria-label="Advance state">Advance state</button>
+  <button id="locked" type="button" disabled>Disabled control</button>
+  <p id="state" role="status" aria-live="polite">State: idle</p>
+  <script>
+    document.getElementById("advance").addEventListener("click", () => {
+      document.getElementById("state").textContent = "State: complete";
+      document.getElementById("advance").disabled = true;
+    });
+  </script>
+</body>
+</html>

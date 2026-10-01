@@ -1,14 +1,20 @@
 # HANDOFF — start here for a fresh session
 
 **Updated 2026-10-01.** Repo: `/home/messhias/lamasync/projects/computer-use`.
-Standalone Git, `main`, no remote. Latest implementation commit: `93d0351`.
-Read `AGENTS.md`, this file, then [the runnable benchmark](13-runnable-vision-benchmark.md).
+Standalone Git, `main`, no remote.
+Read `AGENTS.md`, this file, then [the virtual slice](15-virtual-session-slice.md).
 
 ## Current state
 
-We have working platform probes, one verified KCalc action, and a runnable
-vision-reader benchmark. No general desktop service, MCP server, autonomous
-planner, or heartbeat watcher exists yet.
+We have reusable app observation, semantic action transactions and a
+disposable virtual Kate/Firefox/KCalc task harness, alongside the platform
+probes and vision benchmark. No general desktop service, MCP server,
+autonomous planner or heartbeat watcher exists yet.
+
+**Latest M1–M2 validation:** 39 tests pass. The reviewed host harness passed
+two exact Kate edits, Firefox button transition and disabled refusal, plus
+KCalc app observation; all three sessions and temporary files cleaned up.
+No paid calls. See [doc 15](15-virtual-session-slice.md) for results and limits.
 
 The owner-supported direction is a screenshot-driven computer-use terminal
 for local and tailnet agents, using `kwin-mcp` for sessions, capture and input.
@@ -25,6 +31,9 @@ reader, with provider/model switching supported by the benchmark.
 ## What exists and how to run it
 
 | File | Purpose |
+| `observation.py` + `vision_reader.py` | Allowlisted mapped captures, bounded TTL store, same-capture metadata/image/data and shared reader transport. |
+| `transactions.py` | Fresh AT-SPI target refs, virtual-only input, policy/caps/audit, read-after-action verification and failure latch. |
+| `virtual_tasks.py` + `benchmark_fixtures/action.html` | Disposable Kate edits, Firefox action/disabled refusal and KCalc capture; no paid calls. |
 | --- | --- |
 | `benchmark_capture.py` + `benchmark_fixtures/` | Five synthetic Kate/Firefox cases, isolated sessions, AT-SPI setup verification, mapped full/app/region PNGs. |
 | `vision_benchmark.py` | Saved-image evaluation, DeepSeek/MiMo/generic endpoint configuration, seeded order, bounded calls, strict scoring and JSONL results. |
@@ -34,6 +43,9 @@ reader, with provider/model switching supported by the benchmark.
 From the repo root:
 
 ```bash
+# No paid calls: verified virtual task slice.
+uv run --with kwin-mcp==0.10.0 --with Pillow --with httpx python virtual_tasks.py
+
 # No paid calls: capture the fixture suite.
 uv run --with kwin-mcp==0.10.0 --with Pillow --with httpx python vision_benchmark.py --capture-only --output run/fixtures
 
@@ -44,7 +56,7 @@ uv run --with httpx python vision_benchmark.py --manifest run/fixtures/manifest.
 uv run --with httpx python vision_benchmark.py --manifest run/fixtures/manifest.json --output run/mimo --provider mimo --base-url https://api.xiaomimimo.com/v1 --model mimo-v2.6-flash --key-env MIMO_API_KEY --max-calls 10
 
 # Validation only.
-uv run --with httpx python -m unittest -v test_vision_benchmark.py test_p2_kcalc.py
+uv run --with Pillow --with httpx python -m unittest discover -v
 ```
 
 Keys stay in ignored `.env`: `JEV_API_KEY`, `DEEPSEEK_API_KEY`, `MIMO_API_KEY`.
@@ -133,31 +145,31 @@ were consolidated into [doc 14](14-app-build-plan.md): reusable observation,
 verified virtual actions/CLI, single-owner service/local MCP, measured waits,
 then live and tailnet support. It includes concrete worker assignments,
 acceptance gates and owner-dependent deferrals. No general service code was
-added. The next bounded assignment after implementation scope approval is M1.
+added at planning time. The owner then approved M1–M2 launch; both are now
+implemented and validated. The next service handoff is Worker C/M3, after
+explicit service scope approval. Grounding currently covers unique mapped
+AT-SPI buttons/editors; general visual grounding and ADR-011 remain open.
 
 ## Recommended next work
 
-1. **Small reusable observation adapter:** extract app-scoped capture and the
-   vision request path from the benchmark. Return metadata, explicit image,
-   data, or both for one capture. Preserve provider errors, uncertainty,
-   freshness and mappings. Test an unfamiliar app before generalizing.
-2. **Grounding and one real task:** define how caller actions resolve fresh
-   targets, using AT-SPI where useful. Write/edit a Kate document or interact
-   with a webpage through the chosen contract, verifying each action. Resolve
-   planner placement and finalize ADR-011 before a broad execution loop.
-3. **Dynamic wait fixture:** loading → ready, loading → error, no change,
-   and an unexpected dialog outside a watched region, with timestamps for
-   actual transitions. Existing pages are static states; they do not measure
-   wakeup behavior.
-4. **Heartbeat comparison:** normal agent polling vs local change watcher +
-   fast vision vs local OCR + Jev. Measure success, elapsed time, primary turns
-   and tokens, every backend call/cost, false wakes, missed events and detection
-   delay. Install/verify OCR language data only when testing that arm.
-5. **Then CLI/MCP and tailnet integration:** cancellation/stop, session controls,
-   stdio, Streamable HTTP, preserved Serve routes, and a real remote caller.
-   Browser-specific capture/replay accelerators follow after this foundation.
+1. **Single-owner service and local surfaces (M3):** persistent kwin-mcp child,
+   local IPC, thin CLI/MCP clients, capabilities/session status, cancellation,
+   stop-all and driver failure handling. Reuse the validated core; see Worker C
+   in doc 14. No public/server planner contract has been finalized.
+2. **Dynamic wait fixture (M4):** loading→ready/error, no change, animation noise
+   and an unexpected dialog outside the watched region. Record actual
+   transition timestamps before comparing polling and accelerated waits.
+3. **Planner contract:** resolve ADR-011 and visual grounding before broad task
+   execution. Current transactions support unique mapped semantic targets,
+   not arbitrary screenshot coordinates from a model. Task-specific verifiers
+   and guarded effect policies need expansion beyond the synthetic fixtures.
+4. **Live and tailnet (M5/M6):** idle/focus measurements, explicit live tasks,
+   cancellation/error restoration, preserved Serve routes and actual remote
+   caller tests. These do not block a useful virtual local service.
+5. **Workflow acceleration later:** semantic replay prerequisites, expected
+   effects and recovery exits, with Jev as an optional bounded selector.
 
-These are recommendations, not authorization for the general server/state
-compiler. The owner authorized the bounded benchmark implementation and paid
-DeepSeek/MiMo runs. Ask before expanding beyond that scope under `AGENTS.md`;
-do not repeat permission questions for work already authorized.
+M1–M2 implementation was authorized and completed. Do not ask for that
+approval again. General service/planner work, live tasks and remote deployment
+remain later gates in doc 14; no Serve configuration was changed. Paid tests
+in this slice were unnecessary. Worker handoffs are complete in doc 14.

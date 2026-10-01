@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import math
@@ -15,6 +14,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+from vision_reader import StreamParseError, build_request_body, parse_stream
 
 try:
     import httpx
@@ -173,84 +174,18 @@ def _prompt(questions: list[dict[str, Any]]) -> str:
 
 
 def _sse_content(response: httpx.Response, on_first_content) -> tuple[str, dict[str, Any], str, str | None]:
-    fragments: list[str] = []
-    usage: dict[str, Any] = {}
-    finish_reason: str | None = None
-    served_model: str | None = None
-    saw_done = False
-    for line in response.iter_lines():
-        if not line or line.startswith(":"):
-            continue
-        if not line.startswith("data:"):
-            continue
-        payload = line[5:].strip()
-        if payload == "[DONE]":
-            saw_done = True
-            break
-        try:
-            event = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise BenchmarkError("malformed_stream_event") from exc
-        if not isinstance(event, dict):
-            raise BenchmarkError("malformed_stream_event")
-        if isinstance(event.get("usage"), dict):
-            def safe_usage(value: Any, depth: int = 0) -> Any:
-                if value is None or isinstance(value, (str, int, float, bool)):
-                    return value
-                if depth < 2 and isinstance(value, dict):
-                    return {str(k): safe_usage(v, depth + 1) for k, v in value.items() if isinstance(v, (dict, str, int, float, bool)) or v is None}
-                return None
-            usage.update({str(k): safe_usage(v) for k, v in event["usage"].items()})
-        if isinstance(event.get("model"), str):
-            served_model = event["model"]
-        choices = event.get("choices", [])
-        if not isinstance(choices, list):
-            raise BenchmarkError("malformed_stream_event")
-        for choice in choices:
-            if not isinstance(choice, dict):
-                continue
-            if choice.get("finish_reason") is not None:
-                finish_reason = choice["finish_reason"]
-            delta = choice.get("delta") or {}
-            if not isinstance(delta, dict):
-                raise BenchmarkError("malformed_stream_event")
-            content = delta.get("content")
-            if isinstance(content, str) and content:
-                if not fragments:
-                    on_first_content()
-                fragments.append(content)
-    if not saw_done:
-        raise BenchmarkError("stream_missing_done")
-    if finish_reason is None:
-        raise BenchmarkError("stream_missing_finish_reason")
-    if finish_reason != "stop":
-        raise BenchmarkError("stream_not_completed")
-    if not fragments:
-        raise BenchmarkError("stream_empty_content")
-    return "".join(fragments), usage, finish_reason, served_model
+    try:
+        return parse_stream(response, on_first_content)
+    except StreamParseError as exc:
+        raise BenchmarkError(exc.code) from exc
 
 
 def _request_one(client: httpx.Client, request: dict[str, Any], *, base_url: str, model: str, provider: str,
                  api_key: str, max_tokens: int) -> dict[str, Any]:
     prepare_started = time.perf_counter()
     image_bytes = request["image_data"]
-    encoded = base64.b64encode(image_bytes).decode("ascii")
-    content_type = "image/jpeg" if image_bytes[:3] == b"\xff\xd8\xff" else "image/png"
-    body: dict[str, Any] = {
-        "model": model,
-        "messages": [{"role": "user", "content": [
-            {"type": "text", "text": _prompt(request["questions"])},
-            {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{encoded}"}},
-        ]}],
-        "max_tokens": max_tokens,
-        "stream": True,
-        "stream_options": {"include_usage": True},
-        "response_format": {"type": "json_object"},
-    }
-    if provider in {"deepseek", "mimo"}:
-        body["thinking"] = {"type": "disabled"}
-    if provider == "mimo":
-        body["max_completion_tokens"] = body.pop("max_tokens")
+    body = build_request_body(image_bytes, _prompt(request["questions"]), provider=provider,
+                              model=model, max_tokens=max_tokens)
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     url = base_url.rstrip("/") + "/chat/completions"
     body_preparation_ms = round((time.perf_counter() - prepare_started) * 1000, 2)

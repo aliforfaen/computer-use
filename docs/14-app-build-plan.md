@@ -2,8 +2,9 @@
 
 **2026-10-01 · proposed implementation sequence.** Prepared with Luna High
 reviews of the core, acceleration and CLI/remote surface. This document is a
-plan, not a report of implemented features. The owner requested planning;
-general service implementation remains behind the scope gate in AGENTS.md.
+plan, not a report of implemented features. The owner subsequently approved
+launch of the bounded M1–M2 slice. General service deployment, broad planning
+and live-desktop tasks remain later gates.
 
 ## Recommendation
 
@@ -63,8 +64,8 @@ virtual sessions and paid requests bounded and explicitly scoped.
 
 | Stage | Deliverable | Dependencies | Acceptance |
 | --- | --- | --- | --- |
-| M1 | Reusable observation adapter | Approved bounded implementation scope | Same-capture image/data; app scope default; explicit full/crop; errors, hashes and mappings preserved |
-| M2 | Grounded action transaction + disposable harness | M1; semantic grounding contract | A real Kate edit and local webpage action verified after every action; stale/disabled targets refused |
+| M1 (implemented) | Reusable observation adapter | Authorized and validated; doc 15 | Same-capture image/data; app scope default; explicit full/crop; errors, hashes and mappings preserved |
+| M2 (implemented, virtual fixtures) | Grounded action transaction + disposable harness | Authorized and validated; doc 15 | A real Kate edit and local webpage action verified after every action; stale/disabled targets refused |
 | M3 | Single-owner service + local MCP | M2 | CLI and stdio share the owner; cancellation, child failure, stop-all and competing clients handled |
 | M4 | Dynamic wait + acceleration comparison | M1–M2; common baseline task | Truthful detection metrics and end-to-end task results across polling and accelerated arms |
 | M5 | Live desktop support | M3; idle/focus probes; explicit owner live task | Explicit audited per-task live request; focus restored on success/error/cancel; recent physical input blocks entry; one live task |
@@ -162,8 +163,8 @@ an accelerator selected from the static perception results.
 No answers are needed to review this plan. Bring these back when their
 preceding work produces concrete options:
 
-1. **Implementation scope:** AGENTS.md requires authorization beyond probes
-   and benchmark. Approve a bounded M1–M2 slice before coding the general core;
+1. **Implementation scope:** M1–M2 approved by the owner on 2026-10-01
+   ("You are go for launch"). No further scope question is needed for that slice.
    M3 service expansion should be separately explicit.
 2. **Planner and grounding:** before a broad task runner, settle ADR-011 with
    a tested primitive contract and example failed grounding cases. Recommend
@@ -196,6 +197,7 @@ preceding work produces concrete options:
 ## Fresh-session routing
 
 Read HANDOFF.md for executed facts, doc 13 for perception measurements and this
-plan for proposed work. Next assignment after scope approval is **Worker A / M1**,
-with a separate review of mappings, API errors and benchmark regression. Avoid
+plan for proposed work. M1–M2 are implemented and reviewed; [doc 15](15-virtual-session-slice.md)
+records actual validation. Next assignment is Worker C/M3 after service scope
+approval, using the proven contracts. Avoid
 starting a general planner, browser-specific adapter or replay engine first.

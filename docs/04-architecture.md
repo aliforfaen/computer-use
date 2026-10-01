@@ -244,3 +244,17 @@ default remote response under ADR-012. Direct DeepSeek Flash is the baseline
 for a runnable, provider-configurable fixture benchmark; provider selection
 remains provisional. The benchmark is authorized implementation, without
 authorizing the general MCP server or state compiler.
+
+
+### ADR-014 — Bounded virtual semantic transaction slice
+**2026-10-01; implementation scope approved by owner.** M1–M2 reuse
+kwin-mcp 0.10.0 to provide mapped app observations and fresh AT-SPI candidate
+transactions for disposable virtual fixtures. Input coordinates derive from
+freshly resolved driver bounds, never model output. Typing requires the exact
+focused editable target; every input is followed by a code-owned postcondition.
+A failed or cancelled post-input transaction blocks further input until reset.
+
+This slice does not decide primary planner placement, general visual grounding
+or supersede ADR-009's server ownership. No daemon, MCP surface, live tasks or
+remote deployment is included. Recorded implementation and actual host checks:
+[doc 15](15-virtual-session-slice.md). ADR-011 remains proposed.

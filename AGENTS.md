@@ -4,9 +4,10 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**2026-10-01: platform probes, a narrow KCalc proof and a runnable vision
-benchmark exist; no general desktop service exists.** Start with
-`docs/HANDOFF.md` and `docs/13-runnable-vision-benchmark.md`.
+**2026-10-01: reusable observation, verified virtual transactions and a
+Kate/Firefox/KCalc harness now exist alongside the vision benchmark. No general
+desktop service exists.** Start with `docs/HANDOFF.md` and
+`docs/15-virtual-session-slice.md`.
 
 The current owner-supported direction is screenshot-driven computer use over
 `kwin-mcp`, with Jev as an optional accelerator. ADR-011 remains proposed;
@@ -14,8 +15,10 @@ ADR-012 requires images or interpreted data, and ADR-013 makes app capture
 the default. DeepSeek Flash is the provisional reader; MiMo is configurable.
 
 The owner explicitly authorized benchmark implementation and DeepSeek/MiMo
-tests. The general state compiler and MCP server remain pending; ask before
-expanding implementation beyond the benchmark/probe scope. Remaining P0
+tests, then approved launch of the M1–M2 observation and verified virtual-task
+slice on 2026-10-01 (doc 14). That slice may proceed without further approval.
+The general planner, service/MCP deployment and live tasks remain later gates;
+do not repeat authorization questions for M1–M2. Remaining P0
 measurements are in `docs/05-open-questions.md`, not the entire next-work plan.
 
 ## Owner context
@@ -101,7 +104,7 @@ vision_benchmark.py         configurable image-reader benchmark
 
 ## Conventions
 
-- Docs and the authorized bounded benchmark are the current deliverables.
+- Docs, the benchmark and the authorized M1–M2 virtual core are deliverables.
   One idea per doc, short sections, link out to sources.
 - Cite external claims with a URL. Mark vendor-reported numbers as vendor-reported.
 - Record decisions as short ADR-style entries in the ADR log at the end of

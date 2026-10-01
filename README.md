@@ -3,18 +3,20 @@
 A screenshot-driven computer-use layer for agents on **CachyOS + KDE Plasma 6 Wayland**,
 reachable by **remote agents over the tailnet** as well as local ones.
 
-**Status, 2026-10-01: runnable virtual Kate/Firefox vision benchmark, plus a
-verified one-action KCalc proof.** App-window capture is the default; DeepSeek
-Flash is the provisional reader, with MiMo and optional crops configurable.
-The app baseline measured 28/30 exact facts at 1.24 s median for DeepSeek,
-27/30 at 5.45 s for MiMo. Both missed disabled-button state.
+**Status, 2026-10-01: reusable app observation and verified virtual actions.**
+The disposable harness passed two Kate edits, a local Firefox button transition
+and disabled-control refusal, plus KCalc observation; all sessions cleaned up.
+The configurable vision benchmark remains available, with DeepSeek as the
+provisional reader. No general daemon, MCP surface or heartbeat exists yet.
 
-The owner-supported direction is a primary screenshot agent with optional
-heartbeat acceleration. Explicit images and interpreted data for text-only
-callers are required. No general service or heartbeat exists yet; planner
-placement and action grounding remain open under proposed ADR-011.
 Picking this up cold? Start with [docs/HANDOFF.md](docs/HANDOFF.md), then
-[the runnable benchmark and measurements](docs/13-runnable-vision-benchmark.md).
+[the virtual slice](docs/15-virtual-session-slice.md) and
+[the app build plan](docs/14-app-build-plan.md).
+
+```bash
+# No paid calls: disposable virtual tasks and app-scoped observations.
+uv run --with kwin-mcp==0.10.0 --with Pillow --with httpx python virtual_tasks.py
+```
 
 ## Endgoal
 
@@ -67,6 +69,7 @@ the design and measurement history.
 13. [docs/12-deepseek-speed-probe.md](docs/12-deepseek-speed-probe.md) — measured image latency and crop comparison
 14. [docs/13-runnable-vision-benchmark.md](docs/13-runnable-vision-benchmark.md) — runnable Kate/webpage suite and DeepSeek/MiMo comparison
 15. [docs/14-app-build-plan.md](docs/14-app-build-plan.md) — staged app plan, worker handoffs, acceptance gates and deferred owner decisions
+16. [docs/15-virtual-session-slice.md](docs/15-virtual-session-slice.md) — reusable observation, verified virtual transactions and executed validation
 
 ## Run the vision benchmark
 
