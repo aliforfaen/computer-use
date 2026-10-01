@@ -13,6 +13,13 @@ Next step is the **P0 probe checklist** in `docs/05-open-questions.md`. Do not s
 compiler or MCP server until P0 measurements are in — and ask before adding code to `main`
 beyond throwaway probe scripts.
 
+**Update, 2026-10-01:** the owner explicitly authorized the runnable vision
+benchmark in `vision_benchmark.py` and `benchmark_capture.py`, after the P0/P2
+probes. App-window capture is its default (ADR-013), with optional regions and
+configurable DeepSeek/MiMo readers. See `docs/13-runnable-vision-benchmark.md`
+for current commands and measurements. This authorization is scoped to the
+benchmark; the general state compiler and MCP server remain pending.
+
 ## Owner context
 
 - Owner: messhias. Machine: `cachy` (CachyOS, Arch-based), KDE Plasma 6, Wayland session.

@@ -1,7 +1,7 @@
 # HANDOFF — fresh session, start here
 
 **Repo:** `/home/messhias/lamasync/projects/computer-use` (standalone git, branch `main`,
-no remote). Read `AGENTS.md` next, then run P0.
+no remote). Read `AGENTS.md` next, then doc 13 for the current runnable benchmark.
 
 **One-line state:** ADR-001…010 are locked (ADR-008 confirmed in ADR-009);
 P0 measurements, a decision-only P1 probe and a narrow executed KCalc P2 proof
@@ -16,6 +16,13 @@ Direct DeepSeek Flash has a ten-call static-image probe in
 twice at 786/1,528 ms. App/region crops reduced input tokens; stable speed
 gains and general recognition accuracy remain unproven. App-only and optional
 viewport-region observation requirements are recorded in doc 10.
+The owner subsequently authorized a runnable benchmark: `vision_benchmark.py`
+and `benchmark_capture.py` now capture five isolated Kate/Firefox fixtures,
+default to app images, and allow DeepSeek/MiMo/generic provider configuration.
+[Doc 13](13-runnable-vision-benchmark.md) records the commands and thirty-call
+comparison. DeepSeek's app baseline had 28/30 exact facts at 1.24 s median;
+MiMo had 27/30 at 5.45 s. Both missed disabled-control state. ADR-013 locks
+app scope as default and leaves crops optional. No general server exists.
 
 **Owner:** messhias. Machine `cachy` — CachyOS (Arch-based), KDE Plasma 6, Wayland.
 Owner learns by doing and wants *short* prose: small runnable probes beat long documents.

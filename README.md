@@ -55,6 +55,21 @@ Jev-led architecture below is retained pending ADR-011's final contract.
 11. [docs/10-heartbeat-direction.md](docs/10-heartbeat-direction.md) — current direction and benchmark
 12. [docs/11-vision-model-shortlist.md](docs/11-vision-model-shortlist.md) — provider/model candidates
 13. [docs/12-deepseek-speed-probe.md](docs/12-deepseek-speed-probe.md) — measured image latency and crop comparison
+14. [docs/13-runnable-vision-benchmark.md](docs/13-runnable-vision-benchmark.md) — runnable Kate/webpage suite and DeepSeek/MiMo comparison
+
+## Run the vision benchmark
+
+With `DEEPSEEK_API_KEY` in ignored `.env`, capture five disposable virtual
+Kate/Firefox fixtures and run ten bounded image-reading requests:
+
+```bash
+uv run --with kwin-mcp==0.10.0 --with Pillow --with httpx python vision_benchmark.py --output run/baseline --max-calls 10
+```
+
+App-window images are the default. See [the benchmark guide](docs/13-runnable-vision-benchmark.md)
+for capture-only mode, reusing images with MiMo or another compatible provider,
+optional crops and results. This suite scripts the fixture actions; general
+agent planning and the desktop server are still pending.
 
 ## Locked shape (ADR-001…010)
 

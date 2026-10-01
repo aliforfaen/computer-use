@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Jev benchmark: table and disabled control</title>
+  <style>
+    body { font: 15px sans-serif; margin: 28px; color: #17212b; }
+    table { border-collapse: collapse; margin-top: 16px; }
+    th, td { border: 1px solid #667; padding: 7px 12px; text-align: left; }
+    .small { font-size: 10px; margin-top: 18px; }
+    button { margin-top: 16px; padding: 8px 12px; }
+  </style>
+</head>
+<body>
+  <h1>Field notes</h1>
+  <p>Two sample observations from the garden.</p>
+  <table aria-label="Garden observations">
+    <thead><tr><th>Plant</th><th>Height</th><th>Water</th></tr></thead>
+    <tbody>
+      <tr><td>Mint</td><td>18 cm</td><td>Tuesday</td></tr>
+      <tr><td>Bean</td><td>42 cm</td><td>Monday</td></tr>
+    </tbody>
+  </table>
+  <p class="small">Archive code: G-204. Measured at 09:15.</p>
+  <button disabled>Save observations</button>
+</body>
+</html>

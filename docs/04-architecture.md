@@ -233,3 +233,14 @@ not have vision. Remote metadata-only defaults remain; image return and
 provider interpretation are explicit requests. Jev remains a pure bounded
 selector. Capture identity, interpreter provenance, failures and usage must
 be represented. API details and provider selection remain open; see doc 10.
+
+### ADR-013 — App-scoped observation by default; optional region crops
+**Locked 2026-10-01 (owner requirement).** Explicit image or interpreted-data
+observations default to the working app window. Full-session context and
+region crops remain explicit choices. Browser-specific capture adapters can
+follow later; an initial webpage capture uses the browser window. Preserve
+capture identity, window identity and crop mappings. Metadata remains the
+default remote response under ADR-012. Direct DeepSeek Flash is the baseline
+for a runnable, provider-configurable fixture benchmark; provider selection
+remains provisional. The benchmark is authorized implementation, without
+authorizing the general MCP server or state compiler.
