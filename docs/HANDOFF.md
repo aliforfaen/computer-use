@@ -9,6 +9,8 @@ are recorded. `p2_kcalc.py` and its focused tests exist; no general service exis
 The current owner-supported direction is a screenshot agent plus optional
 vision or OCR + Jev heartbeat; see [doc 10](10-heartbeat-direction.md).
 ADR-011 is proposed, with planner placement and grounding still open.
+Observation must support direct screenshot return and configured vision-model
+interpretation as data, so text-only agents can also use the desktop.
 
 **Owner:** messhias. Machine `cachy` — CachyOS (Arch-based), KDE Plasma 6, Wayland.
 Owner learns by doing and wants *short* prose: small runnable probes beat long documents.

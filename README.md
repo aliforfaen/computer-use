@@ -6,6 +6,8 @@ reachable by **remote agents over the tailnet** as well as local ones.
 **Status: decisions locked (ADR-001…010); P0 measurements and a narrow KCalc P2 proof are recorded.**
 The owner-supported next direction is a primary vision agent with optional
 heartbeat acceleration. Read [the recommendation and benchmark](docs/10-heartbeat-direction.md).
+Observation supports explicitly requested images for vision-capable callers,
+or configured vision-model interpretation returned as data for text-only callers.
 ADR-011 proposes the architecture update; planner placement and action grounding remain open.
 Picking this up cold? Read [docs/HANDOFF.md](docs/HANDOFF.md).
 

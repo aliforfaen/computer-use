@@ -17,6 +17,40 @@ precise action targeting are distinct concerns: define and test the grounding
 interface before broad desktop execution. Jev continues to select only
 code-enumerated options; it never supplies coordinates or executable text.
 
+## Observation for agents with or without vision
+
+**Owner requirement, 2026-10-01:** support both direct image viewing and
+server-side image interpretation. A caller's planning model need not support
+images. These are explicit observation choices, available per request:
+
+| Requested output | Behavior |
+| --- | --- |
+| Metadata | Return capture ID, timestamp, dimensions and hash. Default remote response. |
+| Image | Return an explicitly requested screenshot as an MCP image or supported client image response, for the caller to inspect itself. |
+| Data | Send the captured screenshot to a configured vision provider and return structured observations answering the caller's question. |
+| Image + data | Return both from the same capture, when explicitly requested. |
+
+Data may include visible text, scene description, dialogs, loading indicators
+and observed UI state. Include capture ID/time and interpreter provider/model;
+represent unreadable or uncertain facts explicitly. Preserve any AT-SPI target
+references separately from model descriptions. A description does not by
+itself establish a valid executable target or prove task success.
+
+Bind every interpretation to its exact capture; do not take another screenshot
+between returning an image and interpreting it. Permit a fresh capture or a
+retained capture ID, and report expiry rather than silently substituting a
+new frame. Crops must identify their position in the original image.
+
+Expose configured image-return and interpretation capabilities so a caller can
+choose. Provider credentials stay on `cachy`. If interpretation is unavailable
+or fails, return an explicit error; a text-only caller cannot consume an image
+fallback automatically. Use the same configurable vision adapter for ordinary
+observation and heartbeat judgments, with different questions and budgets.
+Record interpretation latency, usage and capture identity without logging
+raw screenshots or extracted sensitive text. Retention and redaction policy
+must be defined before use on live desktops, consistent with the existing
+no-secrets-in-state/logs rule.
+
 ## Waiting without repeated agent turns
 
 The primary agent registers a wait: what it expects, a relevant region or
@@ -82,8 +116,10 @@ after the basic session and heartbeat comparison work.
 
 ## Decisions still needed
 
-Where the primary agent runs (on `cachy` or in the connecting client), its
-model/provider, and the screenshot-to-action grounding contract remain open.
+Where the primary agent runs (on `cachy` or in the connecting client), the
+vision interpretation provider, and the screenshot-to-action grounding
+contract remain open. Caller-side vision and server-side interpretation are
+both required; the primary planning model may be text-only.
 Local session ownership, locking, verification, audit and cancellation stay
 on `cachy`. A client running the vision loop must explicitly request images;
 the existing metadata-only remote default still applies. The local watcher

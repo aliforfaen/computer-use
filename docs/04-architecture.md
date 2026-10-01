@@ -224,3 +224,12 @@ This would supersede ADR-001's Jev-led policy and the Jev-specific loop in
 ADR-009; session ownership and controls stay on `cachy`. Planner placement and
 action grounding must be resolved before locking this ADR. See
 [doc 10](10-heartbeat-direction.md) for scope, metrics and remaining decisions.
+
+### ADR-012 — Images or interpreted data for callers with different vision capabilities
+**Locked 2026-10-01 (owner requirement).** Callers may explicitly request a
+screenshot to inspect themselves or have a configured vision model interpret
+it and return data. Support both from the same capture. Planning agents need
+not have vision. Remote metadata-only defaults remain; image return and
+provider interpretation are explicit requests. Jev remains a pure bounded
+selector. Capture identity, interpreter provenance, failures and usage must
+be represented. API details and provider selection remain open; see doc 10.
