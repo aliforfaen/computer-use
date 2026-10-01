@@ -66,6 +66,7 @@ the design and measurement history.
 12. [docs/11-vision-model-shortlist.md](docs/11-vision-model-shortlist.md) — provider/model candidates
 13. [docs/12-deepseek-speed-probe.md](docs/12-deepseek-speed-probe.md) — measured image latency and crop comparison
 14. [docs/13-runnable-vision-benchmark.md](docs/13-runnable-vision-benchmark.md) — runnable Kate/webpage suite and DeepSeek/MiMo comparison
+15. [docs/14-app-build-plan.md](docs/14-app-build-plan.md) — staged app plan, worker handoffs, acceptance gates and deferred owner decisions
 
 ## Run the vision benchmark
 

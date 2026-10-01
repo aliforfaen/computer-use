@@ -126,6 +126,15 @@ drivers. Luna High subagents are authorized. Trusted tailnet and high access
 are intentional; avoid unsolicited security reviews. Follow existing project
 controls without reopening settled remote-access decisions.
 
+## App plan and worker handoffs
+
+The owner requested an app build plan on 2026-10-01. Three Luna High reviews
+were consolidated into [doc 14](14-app-build-plan.md): reusable observation,
+verified virtual actions/CLI, single-owner service/local MCP, measured waits,
+then live and tailnet support. It includes concrete worker assignments,
+acceptance gates and owner-dependent deferrals. No general service code was
+added. The next bounded assignment after implementation scope approval is M1.
+
 ## Recommended next work
 
 1. **Small reusable observation adapter:** extract app-scoped capture and the
