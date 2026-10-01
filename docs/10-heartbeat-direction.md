@@ -41,6 +41,27 @@ between returning an image and interpreting it. Permit a fresh capture or a
 retained capture ID, and report expiry rather than silently substituting a
 new frame. Crops must identify their position in the original image.
 
+**Owner requirement, 2026-10-01:** allow observing only the working app,
+or a caller-selected region such as part of a webpage. Prefer an app-window
+image for ordinary work; retain an explicit full-session option for context
+and recovery. A webpage region is a crop of the rendered viewport, not an
+offscreen or full-page browser capture. Reuse `kwin-mcp` capture and KWin
+window geometry; reuse browser DOM geometry when a browser adapter supplies it.
+
+Keep the source capture ID, source dimensions, window identity, crop rectangle
+and any resize scale with each image or interpretation. Translate region
+coordinates through that mapping, then revalidate targets against fresh state
+before acting. Resolve the window and geometry for each fresh capture; refuse
+missing windows or invalid rectangles instead of silently changing scope.
+Capturing a whole session then cropping reduces upload and inference work;
+it does not establish a faster capture path. Measure native window capture
+separately before claiming capture savings.
+
+A narrow crop can hide dialogs, navigation changes or error banners. Keep
+the local broader change watcher described below, and let the agent request
+wider context when the region is insufficient. Preserve readable text size;
+benchmark low detail independently rather than always shrinking images.
+
 Expose configured image-return and interpretation capabilities so a caller can
 choose. Provider credentials stay on `cachy`. If interpretation is unavailable
 or fails, return an explicit error; a text-only caller cannot consume an image
@@ -102,8 +123,9 @@ and tail latency. A faster incorrect wake is not a win.
 
 The owner reports using DeepSeek v4.1 Flash at about 200 output tokens/s.
 Current direct model ID, image support and published prices are verified in
-[the vision shortlist](11-vision-model-shortlist.md); the owner's configured
-provider and actual screenshot latency still need measurement. Output throughput does not establish
+[the vision shortlist](11-vision-model-shortlist.md). A narrow direct-endpoint
+[screenshot speed probe](12-deepseek-speed-probe.md) now records actual latency;
+the heartbeat benchmark remains unmeasured. Output throughput does not establish
 image request latency. Earlier synthetic direct Jev calls had a 254 ms median;
 this excludes capture/OCR and is not a heartbeat benchmark.
 

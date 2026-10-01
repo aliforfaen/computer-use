@@ -53,6 +53,8 @@ Jev-led architecture below is retained pending ADR-011's final contract.
 9. [docs/08-p2-kcalc-proof.md](docs/08-p2-kcalc-proof.md) — one executed and verified action
 10. [docs/09-observation-options.md](docs/09-observation-options.md) — structured observation alternatives
 11. [docs/10-heartbeat-direction.md](docs/10-heartbeat-direction.md) — current direction and benchmark
+12. [docs/11-vision-model-shortlist.md](docs/11-vision-model-shortlist.md) — provider/model candidates
+13. [docs/12-deepseek-speed-probe.md](docs/12-deepseek-speed-probe.md) — measured image latency and crop comparison
 
 ## Locked shape (ADR-001…010)
 

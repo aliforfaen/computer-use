@@ -11,6 +11,11 @@ vision or OCR + Jev heartbeat; see [doc 10](10-heartbeat-direction.md).
 ADR-011 is proposed, with planner placement and grounding still open.
 Observation must support direct screenshot return and configured vision-model
 interpretation as data, so text-only agents can also use the desktop.
+Direct DeepSeek Flash has a ten-call static-image probe in
+[doc 12](12-deepseek-speed-probe.md): corrected app-window questions passed
+twice at 786/1,528 ms. App/region crops reduced input tokens; stable speed
+gains and general recognition accuracy remain unproven. App-only and optional
+viewport-region observation requirements are recorded in doc 10.
 
 **Owner:** messhias. Machine `cachy` — CachyOS (Arch-based), KDE Plasma 6, Wayland.
 Owner learns by doing and wants *short* prose: small runnable probes beat long documents.

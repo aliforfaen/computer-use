@@ -1,6 +1,8 @@
 # 11 — Vision reader shortlist
 
-**2026-10-01 · public provider research; no paid image benchmark performed.**
+**2026-10-01 · public provider research.** A subsequent narrow paid DeepSeek
+probe is recorded in [doc 12](12-deepseek-speed-probe.md); the cross-provider
+benchmark below remains unperformed.
 Prices below are USD per million uncached input/output tokens, as currently
 published. Image tokenization differs between models, so these are not
 per-screenshot costs. Provider speed claims are not measurements on `cachy`.
