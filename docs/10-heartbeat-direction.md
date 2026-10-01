@@ -100,9 +100,10 @@ backend calls, tokens and cost; capture/OCR/judgment latency; false wakes,
 missed events and detection delay. Count retries and timeouts. Report medians
 and tail latency. A faster incorrect wake is not a win.
 
-The owner reports using a vision model described as DeepSeek v4.1 Flash at
-about 200 output tokens/s. Exact provider, model ID, image support and pricing
-must be confirmed before the comparison. Output throughput does not establish
+The owner reports using DeepSeek v4.1 Flash at about 200 output tokens/s.
+Current direct model ID, image support and published prices are verified in
+[the vision shortlist](11-vision-model-shortlist.md); the owner's configured
+provider and actual screenshot latency still need measurement. Output throughput does not establish
 image request latency. Earlier synthetic direct Jev calls had a 254 ms median;
 this excludes capture/OCR and is not a heartbeat benchmark.
 
