@@ -1,9 +1,10 @@
 # 14 — App build plan and worker handoffs
 
-**2026-10-01 · proposed implementation sequence.** Prepared with Luna High
-reviews of the core, acceleration and CLI/remote surface. This document is a
-plan, not a report of implemented features. The owner subsequently approved
-launch of the bounded M1–M2 slice. General service deployment, broad planning
+**2026-10-01 · implementation sequence and worker handoffs.** Prepared with
+Luna High reviews of the core, acceleration and CLI/remote surface. The owner
+approved the bounded M1–M2 slice, then M3 local owner/CLI/MCP work. Current
+status is recorded in the milestone table; detailed M1–M2 and M3 evidence
+boundaries are in docs 15 and 16. Tailnet service deployment, broad planning
 and live-desktop tasks remain later gates.
 
 ## Recommendation
@@ -66,7 +67,7 @@ virtual sessions and paid requests bounded and explicitly scoped.
 | --- | --- | --- | --- |
 | M1 (implemented) | Reusable observation adapter | Authorized and validated; doc 15 | Same-capture image/data; app scope default; explicit full/crop; errors, hashes and mappings preserved |
 | M2 (implemented, virtual fixtures) | Grounded action transaction + disposable harness | Authorized and validated; doc 15 | A real Kate edit and local webpage action verified after every action; stale/disabled targets refused |
-| M3 | Single-owner service + local MCP | M2 | CLI and stdio share the owner; cancellation, child failure, stop-all and competing clients handled |
+| M3 (implemented and host-validated) | Single-owner virtual service + local CLI/MCP | M2 | CLI and stdio share the owner; verified fixture effects, competing-call refusal, cancellation and child-death cleanup checked; doc 16 |
 | M4 | Dynamic wait + acceleration comparison | M1–M2; common baseline task | Truthful detection metrics and end-to-end task results across polling and accelerated arms |
 | M5 | Live desktop support | M3; idle/focus probes; explicit owner live task | Explicit audited per-task live request; focus restored on success/error/cancel; recent physical input blocks entry; one live task |
 | M6 | Tailnet surface + real remote client | M3; deployment approval and peer availability | Loopback HTTP, preserved Serve routes, remote virtual task, truthful caller provenance and stop controls |
@@ -165,7 +166,7 @@ preceding work produces concrete options:
 
 1. **Implementation scope:** M1–M2 approved by the owner on 2026-10-01
    ("You are go for launch"). No further scope question is needed for that slice.
-   M3 service expansion should be separately explicit.
+   M3 local owner/CLI/MCP continuation was subsequently authorized.
 2. **Planner and grounding:** before a broad task runner, settle ADR-011 with
    a tested primitive contract and example failed grounding cases. Recommend
    semantic targets first, with unsupported-app failure explicit.
@@ -196,8 +197,10 @@ preceding work produces concrete options:
 
 ## Fresh-session routing
 
-Read HANDOFF.md for executed facts, doc 13 for perception measurements and this
-plan for proposed work. M1–M2 are implemented and reviewed; [doc 15](15-virtual-session-slice.md)
-records actual validation. Next assignment is Worker C/M3 after service scope
-approval, using the proven contracts. Avoid
-starting a general planner, browser-specific adapter or replay engine first.
+Read HANDOFF.md for current status, doc 13 for perception measurements, doc 15
+for M1–M2 evidence and [doc 16](16-local-owner-and-mcp.md) for the M3 local
+owner/CLI/MCP lifecycle. M3 implementation and disposable host integration
+checks passed. Next, build the M4 dynamic wait fixture without paid comparisons.
+Planner/visual grounding, live desktop and tailnet
+deployment remain separate later gates; do not infer their support from the
+local virtual service.

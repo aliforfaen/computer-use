@@ -1,13 +1,13 @@
 # Jev Computer-Use Layer (working title)
 
 A screenshot-driven computer-use layer for agents on **CachyOS + KDE Plasma 6 Wayland**,
-reachable by **remote agents over the tailnet** as well as local ones.
+with local CLI/MCP surfaces implemented and tailnet access as a later target.
 
-**Status, 2026-10-01: reusable app observation and verified virtual actions.**
-The disposable harness passed two Kate edits, a local Firefox button transition
-and disabled-control refusal, plus KCalc observation; all sessions cleaned up.
-The configurable vision benchmark remains available, with DeepSeek as the
-provisional reader. No general daemon, MCP surface or heartbeat exists yet.
+**Status, 2026-10-01: M1–M2 core and M3 local surfaces are implemented.** The
+reusable virtual observation/transaction harness has reviewed host results.
+The single-owner daemon, CLI and MCP stdio facade are implemented; the separate
+host integration probe passed, including worker-death recovery. No remote
+HTTP surface, live desktop mode, general planner or heartbeat is implemented.
 
 Picking this up cold? Start with [docs/HANDOFF.md](docs/HANDOFF.md), then
 [the virtual slice](docs/15-virtual-session-slice.md) and
@@ -16,6 +16,10 @@ Picking this up cold? Start with [docs/HANDOFF.md](docs/HANDOFF.md), then
 ```bash
 # No paid calls: disposable virtual tasks and app-scoped observations.
 uv run --with kwin-mcp==0.10.0 --with Pillow --with httpx python virtual_tasks.py
+The diagram shows the intended end state. The current M3 build only provides
+the local Unix socket, CLI and MCP stdio surfaces; no remote listener or Serve
+route is configured.
+
 ```
 
 ## Endgoal
@@ -70,6 +74,7 @@ the design and measurement history.
 14. [docs/13-runnable-vision-benchmark.md](docs/13-runnable-vision-benchmark.md) — runnable Kate/webpage suite and DeepSeek/MiMo comparison
 15. [docs/14-app-build-plan.md](docs/14-app-build-plan.md) — staged app plan, worker handoffs, acceptance gates and deferred owner decisions
 16. [docs/15-virtual-session-slice.md](docs/15-virtual-session-slice.md) — reusable observation, verified virtual transactions and executed validation
+17. [docs/16-local-owner-and-mcp.md](docs/16-local-owner-and-mcp.md) — M3 owner lifecycle, local CLI/MCP, reader opt-in and validation boundary
 
 ## Run the vision benchmark
 
@@ -82,8 +87,8 @@ uv run --with kwin-mcp==0.10.0 --with Pillow --with httpx python vision_benchmar
 
 App-window images are the default. See [the benchmark guide](docs/13-runnable-vision-benchmark.md)
 for capture-only mode, reusing images with MiMo or another compatible provider,
-optional crops and results. This suite scripts the fixture actions; general
-agent planning and the desktop server are still pending.
+optional crops and results. This benchmark is separate from the local owner
+surface described in [doc 16](docs/16-local-owner-and-mcp.md).
 
 ## Original decisions (ADR-001…010)
 

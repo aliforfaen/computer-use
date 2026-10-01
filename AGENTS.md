@@ -4,10 +4,12 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**2026-10-01: reusable observation, verified virtual transactions and a
-Kate/Firefox/KCalc harness now exist alongside the vision benchmark. No general
-desktop service exists.** Start with `docs/HANDOFF.md` and
-`docs/15-virtual-session-slice.md`.
+**2026-10-01: M1–M2 reusable observation/verified virtual transactions and
+M3 local owner/CLI/MCP surfaces are implemented and host-validated.** CLI/MCP
+share a virtual session; KCalc, Kate and Firefox effects and cleanup passed.
+There is no remote HTTP surface, live desktop mode or general planner.
+Start with `docs/HANDOFF.md`, `docs/15-virtual-session-slice.md` and
+`docs/16-local-owner-and-mcp.md`.
 
 The current owner-supported direction is screenshot-driven computer use over
 `kwin-mcp`, with Jev as an optional accelerator. ADR-011 remains proposed;
@@ -17,8 +19,10 @@ the default. DeepSeek Flash is the provisional reader; MiMo is configurable.
 The owner explicitly authorized benchmark implementation and DeepSeek/MiMo
 tests, then approved launch of the M1–M2 observation and verified virtual-task
 slice on 2026-10-01 (doc 14). That slice may proceed without further approval.
-The general planner, service/MCP deployment and live tasks remain later gates;
-do not repeat authorization questions for M1–M2. Remaining P0
+The owner authorized continuing with M3 local owner/CLI/MCP implementation on
+2026-10-01. That local virtual slice may proceed without further approval.
+General planning, tailnet deployment and live tasks remain later gates;
+do not repeat authorization questions for M1–M3. Remaining P0
 measurements are in `docs/05-open-questions.md`, not the entire next-work plan.
 
 ## Owner context
@@ -88,7 +92,7 @@ HANDOFF.md           (in docs/) start here for a fresh session
 docs/01-jev-primer.md
 docs/02-prior-art.md
 docs/03-wayland-constraints.md
-docs/04-architecture.md       ADR-001..008 log
+docs/04-architecture.md       append-only ADR-001..015 log
 docs/05-open-questions.md     P0 checklist
 docs/06-remote-agents.md      tailnet topology + access model
 docs/07-p1-selector-probe.md  KCalc observation + decision-only Jev probe
@@ -98,13 +102,16 @@ docs/10-heartbeat-direction.md
 docs/11-vision-model-shortlist.md
 docs/12-deepseek-speed-probe.md
 docs/13-runnable-vision-benchmark.md
+docs/14-app-build-plan.md       staged app plan and worker handoffs
+docs/15-virtual-session-slice.md reusable observation and verified actions
+docs/16-local-owner-and-mcp.md local owner, CLI/MCP and lifecycle limits
 benchmark_capture.py        isolated fixture capture; benchmark_fixtures/
 vision_benchmark.py         configurable image-reader benchmark
 ```
 
 ## Conventions
 
-- Docs, the benchmark and the authorized M1–M2 virtual core are deliverables.
+- Docs, the benchmark and the authorized M1–M3 local virtual core are deliverables.
   One idea per doc, short sections, link out to sources.
 - Cite external claims with a URL. Mark vendor-reported numbers as vendor-reported.
 - Record decisions as short ADR-style entries in the ADR log at the end of

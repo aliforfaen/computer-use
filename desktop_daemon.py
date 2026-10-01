@@ -1,0 +1,267 @@
+"""Single local owner for Jev desktop sessions, exposed over a private Unix socket."""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import os
+import signal
+import socket
+import socketserver
+import stat
+import sys
+import threading
+import re
+from pathlib import Path
+from typing import Any
+
+MAX_REQUEST_BYTES = 1_048_576
+MAX_RESPONSE_BYTES = 8_388_608
+SOCKET_ENV = "JEV_DESKTOP_SOCKET"
+
+
+def default_run_dir() -> Path:
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime:
+        return Path(runtime) / "jev-desktop"
+    return Path("/tmp") / f"jev-desktop-{os.getuid()}"
+
+
+def default_socket_path() -> Path:
+    configured = os.environ.get(SOCKET_ENV)
+    return Path(configured) if configured else default_run_dir() / "owner.sock"
+
+
+def _safe_error(code: str, message: str, retryable: bool = False) -> dict[str, Any]:
+    return {"code": code[:80], "message": message[:300], "retryable": retryable}
+
+
+class DesktopSocketServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = False
+    block_on_close = True
+
+    def __init__(self, socket_path: Path, service: Any):
+        self.service = service
+        self.socket_path = socket_path
+        self.shutdown_requested = threading.Event()
+        self.closing = threading.Event()
+        super().__init__(str(socket_path), RequestHandler)
+        self.socket_identity = (socket_path.stat().st_dev, socket_path.stat().st_ino)
+
+    def dispatch(self, method: str, params: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        if method == "shutdown":
+            if params:
+                return {"ok": False, "error": _safe_error("invalid_params", "shutdown takes no parameters")}
+            if self.closing.is_set():
+                return {"ok": False, "error": _safe_error("owner_closing", "desktop owner is shutting down", True)}
+            self.closing.set()
+            try:
+                result = self.service.dispatch("stop_all", {}, context)
+            except Exception:
+                result = {"ok": False, "error": _safe_error("owner_error", "owner shutdown failed")}
+            self.shutdown_requested.set()
+            threading.Thread(target=self.shutdown, daemon=True).start()
+            return result if isinstance(result, dict) else {"ok": True, "result": result}
+        if self.closing.is_set():
+            return {"ok": False, "error": _safe_error("owner_closing", "desktop owner is shutting down", True)}
+        try:
+            result = self.service.dispatch(method, params, context)
+        except Exception:
+            return {"ok": False, "error": _safe_error("owner_error", "desktop owner request failed")}
+        if not isinstance(result, dict):
+            return {"ok": False, "error": _safe_error("invalid_owner_response", "desktop owner returned an invalid response")}
+        return result
+
+
+class RequestHandler(socketserver.StreamRequestHandler):
+    def handle(self) -> None:
+        try:
+            self.connection.settimeout(5.0)
+            raw = self.rfile.readline(MAX_REQUEST_BYTES + 1)
+            if not raw or len(raw) > MAX_REQUEST_BYTES or not raw.endswith(b"\n"):
+                self._write({"id": None, "error": _safe_error("invalid_request", "request line is missing or too large")})
+                return
+            try:
+                request = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._write({"id": None, "error": _safe_error("invalid_json", "request is not valid JSON")})
+                return
+            if not isinstance(request, dict) or not isinstance(request.get("id"), (str, int)):
+                self._write({"id": None, "error": _safe_error("invalid_request", "request must include an id")})
+                return
+            method = request.get("method")
+            params = request.get("params", {})
+            context = request.get("context", {})
+            if (not isinstance(method, str) or len(method) > 80 or not isinstance(params, dict)
+                    or not isinstance(context, dict)):
+                self._write({"id": request["id"], "error": _safe_error("invalid_request", "method, params or context has an invalid shape")})
+                return
+            result = self.server.dispatch(method, params, context)  # type: ignore[attr-defined]
+            self._write({"id": request["id"], "result": result})
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
+
+    def _write(self, response: dict[str, Any]) -> None:
+        encoded = (json.dumps(response, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
+        if len(encoded) > MAX_RESPONSE_BYTES:
+            encoded = (json.dumps({"id": response.get("id"), "error": _safe_error("response_too_large", "response exceeds the IPC limit")}) + "\n").encode()
+        self.wfile.write(encoded)
+        self.wfile.flush()
+
+
+class OwnerLock:
+    """flock owns a stable lock file; the file itself is never unlinked."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.fd: int | None = None
+
+    def acquire(self) -> None:
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        parent_info = self.path.parent.stat()
+        if parent_info.st_uid != os.getuid() or stat.S_IMODE(parent_info.st_mode) & 0o077:
+            raise RuntimeError("IPC directory must be owned by this user and private (mode 0700)")
+        self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0), 0o600)
+        os.fchmod(self.fd, 0o600)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            os.close(self.fd)
+            self.fd = None
+            raise RuntimeError("desktop owner is already running") from exc
+
+    def close(self) -> None:
+        if self.fd is not None:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+            os.close(self.fd)
+            self.fd = None
+
+
+def _remove_own_socket(server: DesktopSocketServer) -> None:
+    try:
+        info = server.socket_path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISSOCK(info.st_mode) and (info.st_dev, info.st_ino) == server.socket_identity:
+        server.socket_path.unlink()
+
+
+def _make_service(args: argparse.Namespace) -> Any:
+    from desktop_service import DesktopService
+
+    allowed_apps = frozenset(app.casefold() for app in args.allow_app)
+    if not allowed_apps:
+        raise RuntimeError("at least one explicit --allow-app entry is required")
+    audit_path = args.audit or str((args.run_dir or default_run_dir()) / "audit.jsonl")
+    reader = None
+    if args.reader_provider:
+        if args.max_reader_calls is None or args.max_reader_calls <= 0:
+            raise RuntimeError("--reader-provider requires a positive --max-reader-calls opt-in cap")
+        from vision_reader import ReaderConfig, VisionReader
+
+        defaults = {
+            "deepseek": ("https://api.deepseek.com", "deepseek-flash", "DEEPSEEK_API_KEY"),
+            "mimo": ("https://api.xiaomimimo.com/v1", "mimo-v2.6-flash", "MIMO_API_KEY"),
+            "generic": (None, None, None),
+        }
+        default_url, default_model, default_key = defaults[args.reader_provider]
+        base_url = args.reader_base_url or default_url
+        model = args.reader_model or default_model
+        key_env = args.reader_key_env or default_key
+        if not base_url or not model or not key_env:
+            raise RuntimeError("generic reader requires --reader-base-url, --reader-model and --reader-key-env")
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", key_env):
+            raise RuntimeError("--reader-key-env must be an environment variable name")
+        try:
+            config = ReaderConfig(provider=args.reader_provider, base_url=base_url, model=model, key_env=key_env)
+        except ValueError as exc:
+            raise RuntimeError("reader configuration is invalid") from exc
+        # The reader resolves the selected key name from the process environment
+        # only when explicit interpreted data is requested.
+        reader = VisionReader(config)
+    elif args.max_reader_calls is not None or args.reader_base_url or args.reader_model or args.reader_key_env:
+        raise RuntimeError("reader options require --reader-provider")
+    return DesktopService(audit_path=audit_path, allowed_apps=allowed_apps, reader=reader,
+                          max_reader_calls=args.max_reader_calls or 0)
+
+
+def serve(*, socket_path: Path, service: Any, stop_event: threading.Event | None = None) -> None:
+    socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock = OwnerLock(socket_path.with_name(socket_path.name + ".lock"))
+    lock.acquire()
+    server = None
+    cleanup_error: BaseException | None = None
+    try:
+        try:
+            info = socket_path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            # With the exclusive lock held, a same-user socket at this configured
+            # endpoint can only be stale. Never remove regular files or foreign sockets.
+            if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+                raise RuntimeError("refusing to replace an unowned IPC path")
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                    probe.settimeout(0.15)
+                    probe.connect(str(socket_path))
+                raise RuntimeError("desktop socket is serving despite the owner lock")
+            except (ConnectionRefusedError, FileNotFoundError, TimeoutError):
+                socket_path.unlink()
+        server = DesktopSocketServer(socket_path, service)
+        os.chmod(socket_path, 0o600)
+        if stop_event is not None:
+            def waiter() -> None:
+                stop_event.wait()
+                threading.Thread(target=server.shutdown, daemon=True).start()
+            threading.Thread(target=waiter, daemon=True).start()
+        server.serve_forever(poll_interval=0.1)
+    finally:
+        if server is not None:
+            server.server_close()
+            _remove_own_socket(server)
+        close = getattr(service, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception as exc:
+                cleanup_error = exc
+        lock.close()
+    if cleanup_error is not None:
+        raise RuntimeError("desktop owner cleanup failed") from cleanup_error
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run the single-owner local desktop service.")
+    parser.add_argument("--foreground", action="store_true", help="run in the current process (the only supported daemon mode)")
+    parser.add_argument("--socket", type=Path, default=None, help="Unix socket path; defaults to JEV_DESKTOP_SOCKET or the local runtime directory")
+    parser.add_argument("--run-dir", type=Path, default=None, help="owner audit/runtime directory (use a private local directory)")
+    parser.add_argument("--audit", type=Path, default=None, help="append-only JSONL audit path")
+    parser.add_argument("--allow-app", action="append", default=[], help="explicitly allow one app identity; deny by default")
+    parser.add_argument("--reader-provider", choices=("deepseek", "mimo", "generic"), default=None,
+                        help="enable image interpretation (off unless explicitly selected)")
+    parser.add_argument("--reader-base-url", default=None, help="OpenAI-compatible reader endpoint base URL")
+    parser.add_argument("--reader-model", default=None, help="reader model name")
+    parser.add_argument("--reader-key-env", default=None, help="environment variable name holding the reader key; its value is never displayed")
+    parser.add_argument("--max-reader-calls", type=int, default=None,
+                        help="positive per-session provider call cap; required to enable a reader")
+    args = parser.parse_args(argv)
+    if not args.foreground:
+        parser.error("daemon requires --foreground; automatic background spawning is disabled")
+    args.run_dir = args.run_dir or default_run_dir()
+    socket_path = args.socket or (Path(os.environ[SOCKET_ENV]) if os.environ.get(SOCKET_ENV) else args.run_dir / "owner.sock")
+    try:
+        service = _make_service(args)
+        stopping = threading.Event()
+        signal.signal(signal.SIGTERM, lambda *_: stopping.set())
+        signal.signal(signal.SIGINT, lambda *_: stopping.set())
+        serve(socket_path=socket_path, service=service, stop_event=stopping)
+        return 0
+    except (RuntimeError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

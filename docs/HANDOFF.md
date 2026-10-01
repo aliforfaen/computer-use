@@ -2,19 +2,27 @@
 
 **Updated 2026-10-01.** Repo: `/home/messhias/lamasync/projects/computer-use`.
 Standalone Git, `main`, no remote.
-Read `AGENTS.md`, this file, then [the virtual slice](15-virtual-session-slice.md).
+Read `AGENTS.md`, this file, [the virtual slice](15-virtual-session-slice.md),
+then [the local owner surface](16-local-owner-and-mcp.md).
 
 ## Current state
 
-We have reusable app observation, semantic action transactions and a
-disposable virtual Kate/Firefox/KCalc task harness, alongside the platform
-probes and vision benchmark. No general desktop service, MCP server,
-autonomous planner or heartbeat watcher exists yet.
+M1–M2 provide reusable app observation, semantic action transactions and a
+disposable virtual Kate/Firefox/KCalc task harness. M3 adds the single-owner
+virtual daemon, thin CLI and official MCP SDK stdio facade. The disposable host
+integration probe passed; CLI and MCP observe the same session, CLI verifies a
+KCalc transition and worker-death recovery confirms cleanup. There is no
+remote HTTP service, live desktop mode, general planner or heartbeat watcher.
 
 **Latest M1–M2 validation:** 39 tests pass. The reviewed host harness passed
 two exact Kate edits, Firefox button transition and disabled refusal, plus
 KCalc app observation; all three sessions and temporary files cleaned up.
 No paid calls. See [doc 15](15-virtual-session-slice.md) for results and limits.
+
+**Latest M3 validation:** 59 tests pass. Real owner checks verified Kate typing,
+Firefox idle→complete and KCalc blank→1; normal sessions reuse the same worker.
+Crash recovery and cleanup passed. Zero paid calls; [doc 16](16-local-owner-and-mcp.md)
+records evidence, commands and limits.
 
 The owner-supported direction is a screenshot-driven computer-use terminal
 for local and tailnet agents, using `kwin-mcp` for sessions, capture and input.
@@ -31,14 +39,17 @@ reader, with provider/model switching supported by the benchmark.
 ## What exists and how to run it
 
 | File | Purpose |
+| --- | --- |
 | `observation.py` + `vision_reader.py` | Allowlisted mapped captures, bounded TTL store, same-capture metadata/image/data and shared reader transport. |
 | `transactions.py` | Fresh AT-SPI target refs, virtual-only input, policy/caps/audit, read-after-action verification and failure latch. |
 | `virtual_tasks.py` + `benchmark_fixtures/action.html` | Disposable Kate edits, Firefox action/disabled refusal and KCalc capture; no paid calls. |
-| --- | --- |
 | `benchmark_capture.py` + `benchmark_fixtures/` | Five synthetic Kate/Firefox cases, isolated sessions, AT-SPI setup verification, mapped full/app/region PNGs. |
 | `vision_benchmark.py` | Saved-image evaluation, DeepSeek/MiMo/generic endpoint configuration, seeded order, bounded calls, strict scoring and JSONL results. |
 | `test_vision_benchmark.py` | Six validation tests covering schemas, streams, image hashes, call caps, provider payload and expected-answer isolation. |
 | `p2_kcalc.py` + `test_p2_kcalc.py` | One Jev-selected button press, fresh target check, exact blank-to-1 display verification; five tests. |
+| `desktop_service.py` + `desktop_worker.py` | One virtual session owner and one persistent `AutomationEngine` worker child. |
+| `desktop_daemon.py` + `desktop_cli.py` + `desktop_mcp.py` | Private Unix socket owner, thin CLI and official MCP SDK stdio client. |
+| `test_desktop_surfaces.py` + `local_service_probe.py` | Synthetic socket/MCP checks and the passing separate host integration probe. |
 
 From the repo root:
 
@@ -57,6 +68,19 @@ uv run --with httpx python vision_benchmark.py --manifest run/fixtures/manifest.
 
 # Validation only.
 uv run --with Pillow --with httpx python -m unittest discover -v
+
+# M3 local surface: start an explicitly allowlisted virtual owner.
+uv run jev-desktop daemon --foreground --allow-app kate --allow-app firefox --allow-app kcalc
+
+# In another local terminal: inspect and control the owner.
+uv run jev-desktop capabilities
+uv run jev-desktop session start kcalc
+uv run jev-desktop observe kcalc
+uv run jev-desktop session stop
+uv run jev-desktop stop --all
+
+# Local MCP stdio client for an MCP host; it connects to the same Unix owner.
+uv run jev-desktop-mcp
 ```
 
 Keys stay in ignored `.env`: `JEV_API_KEY`, `DEEPSEEK_API_KEY`, `MIMO_API_KEY`.
@@ -144,32 +168,29 @@ The owner requested an app build plan on 2026-10-01. Three Luna High reviews
 were consolidated into [doc 14](14-app-build-plan.md): reusable observation,
 verified virtual actions/CLI, single-owner service/local MCP, measured waits,
 then live and tailnet support. It includes concrete worker assignments,
-acceptance gates and owner-dependent deferrals. No general service code was
-added at planning time. The owner then approved M1–M2 launch; both are now
-implemented and validated. The next service handoff is Worker C/M3, after
-explicit service scope approval. Grounding currently covers unique mapped
-AT-SPI buttons/editors; general visual grounding and ADR-011 remain open.
+acceptance gates and owner-dependent deferrals. The owner approved M1–M2, then
+M3 local owner/CLI/MCP. Those surfaces are implemented and host-validated.
+Grounding currently covers unique mapped
+AT-SPI buttons/editors; general visual grounding and ADR-011 remain open. See
+[doc 16](16-local-owner-and-mcp.md) for commands, IPC ownership and lifecycle
+limits.
 
 ## Recommended next work
 
-1. **Single-owner service and local surfaces (M3):** persistent kwin-mcp child,
-   local IPC, thin CLI/MCP clients, capabilities/session status, cancellation,
-   stop-all and driver failure handling. Reuse the validated core; see Worker C
-   in doc 14. No public/server planner contract has been finalized.
-2. **Dynamic wait fixture (M4):** loading→ready/error, no change, animation noise
+1. **Dynamic wait fixture (M4):** loading→ready/error, no change, animation noise
    and an unexpected dialog outside the watched region. Record actual
    transition timestamps before comparing polling and accelerated waits.
-3. **Planner contract:** resolve ADR-011 and visual grounding before broad task
+2. **Planner contract:** resolve ADR-011 and visual grounding before broad task
    execution. Current transactions support unique mapped semantic targets,
    not arbitrary screenshot coordinates from a model. Task-specific verifiers
    and guarded effect policies need expansion beyond the synthetic fixtures.
-4. **Live and tailnet (M5/M6):** idle/focus measurements, explicit live tasks,
+3. **Live and tailnet (M5/M6):** idle/focus measurements, explicit live tasks,
    cancellation/error restoration, preserved Serve routes and actual remote
    caller tests. These do not block a useful virtual local service.
-5. **Workflow acceleration later:** semantic replay prerequisites, expected
+4. **Workflow acceleration later:** semantic replay prerequisites, expected
    effects and recovery exits, with Jev as an optional bounded selector.
 
-M1–M2 implementation was authorized and completed. Do not ask for that
-approval again. General service/planner work, live tasks and remote deployment
-remain later gates in doc 14; no Serve configuration was changed. Paid tests
-in this slice were unnecessary. Worker handoffs are complete in doc 14.
+M1–M3 local virtual implementation was authorized. Do not ask for that
+approval again. The M3 integration probe passed. Planner, live tasks and
+remote deployment remain later gates in doc 14; no Serve configuration was
+changed. No paid provider calls are needed for the M3 host probe.

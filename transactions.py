@@ -470,6 +470,7 @@ class TransactionEngine:
         action: Action,
         *,
         verifier: Callable[[Snapshot], Verification],
+        precondition: Callable[[Snapshot], bool] | None = None,
         mode: AutonomyMode | str = AutonomyMode.GUARDED,
         approve: Callable[[Action, Candidate], bool] | None = None,
         cancel: threading.Event | Callable[[], bool] | None = None,
@@ -526,6 +527,10 @@ class TransactionEngine:
                 raise TransactionError("cancelled")
             # Recheck after the AT-SPI resolution and immediately before any
             # focus-routed EIS input.
+            if precondition is not None and not precondition(fresh):
+                raise TransactionError("action_precondition_failed")
+            if _cancelled(cancel):
+                raise TransactionError("cancelled")
             active_now = self.backend.active_window()
             active_ids = _ID.findall(active_now)
             if len(active_ids) != 1 or active_ids[0] != fresh.window_id:
@@ -645,7 +650,7 @@ _AUDIT_REASONS = frozenset({
     "window_identity_changed", "window_app_mismatch", "window_identity_ambiguous",
     "target_window_not_active", "editable_target_not_focused", "input_pending", "cancelled_after_action",
     "verification_failed", "verifier_contract_invalid", "backend_or_verifier_error", "action_failed",
-    "verified",
+    "verified", "action_precondition_failed",
 })
 
 

@@ -14,6 +14,7 @@ screenshots/
 *.mp4
 
 # python
+*.egg-info/
 __pycache__/
 *.py[cod]
 .venv/

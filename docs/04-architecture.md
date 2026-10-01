@@ -258,3 +258,22 @@ This slice does not decide primary planner placement, general visual grounding
 or supersede ADR-009's server ownership. No daemon, MCP surface, live tasks or
 remote deployment is included. Recorded implementation and actual host checks:
 [doc 15](15-virtual-session-slice.md). ADR-011 remains proposed.
+
+### ADR-015 — Local virtual owner with CLI and MCP stdio clients
+**2026-10-01 · M3 implementation direction.** The local service is one
+foreground `jev-desktop` owner with a private Unix socket. It owns one
+`DesktopService`, one active virtual session and one persistent
+`kwin-mcp==0.10.0` worker/`AutomationEngine` child. CLI and official Python MCP
+SDK 2.2.0 stdio surfaces are thin clients of that owner; they do not construct
+separate desktop engines or policy state. The app allowlist is explicit and
+deny-by-default. Observation defaults to metadata; image and interpreted data
+are requested explicitly, and provider use stays disabled unless configured
+with a positive per-session call cap.
+
+Cancellation is cooperative around synchronous driver calls and verifiers.
+Disconnecting a CLI or MCP client does not cancel owner work; clients request
+`cancel`, `session_stop` or `stop_all` explicitly. This implementation does not
+add the proposed task planner, general visual grounding, live desktop support,
+HTTP/Streamable HTTP, Tailscale Serve routing or remote access. Host integration
+validation is recorded separately from synthetic socket/MCP tests; see
+[doc 16](16-local-owner-and-mcp.md). ADR-011 remains proposed.

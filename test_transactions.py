@@ -106,6 +106,21 @@ class TransactionTests(unittest.TestCase):
             self._act_click(first)
         self.assertEqual(self.backend.clicks, [])
 
+    def test_fresh_precondition_refuses_input_without_poisoning_session(self):
+        first = self._snapshot_button()
+        seen = []
+        def refuse(snapshot):
+            seen.append(snapshot)
+            return False
+        with self.assertRaisesRegex(TransactionError, "action_precondition_failed"):
+            self.engine.act("s-test", "kate", Action("click", first.candidates[0].ref),
+                             verifier=lambda _: Verification(True), precondition=refuse)
+        self.assertEqual(self.backend.clicks, [])
+        self.assertEqual(len(seen), 1)
+        self.assertNotEqual(seen[0].generation, first.generation)
+        next_snapshot = self.engine.observe("s-test", "kate")
+        self.assertEqual(self._act_click(next_snapshot).status, "ok")
+
     def test_disabled_button_is_enumerated_but_never_clicked(self):
         self.backend.tree = [button(states=("showing", "visible"), actions=())]
         snap = self.engine.observe("s-test", "kate")
