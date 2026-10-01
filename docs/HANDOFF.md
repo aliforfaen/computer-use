@@ -1,161 +1,154 @@
-# HANDOFF — fresh session, start here
+# HANDOFF — start here for a fresh session
 
-**Repo:** `/home/messhias/lamasync/projects/computer-use` (standalone git, branch `main`,
-no remote). Read `AGENTS.md` next, then doc 13 for the current runnable benchmark.
+**Updated 2026-10-01.** Repo: `/home/messhias/lamasync/projects/computer-use`.
+Standalone Git, `main`, no remote. Latest implementation commit: `93d0351`.
+Read `AGENTS.md`, this file, then [the runnable benchmark](13-runnable-vision-benchmark.md).
 
-**One-line state:** ADR-001…010 are locked (ADR-008 confirmed in ADR-009);
-P0 measurements, a decision-only P1 probe and a narrow executed KCalc P2 proof
-are recorded. `p2_kcalc.py` and its focused tests exist; no general service exists.
-The current owner-supported direction is a screenshot agent plus optional
-vision or OCR + Jev heartbeat; see [doc 10](10-heartbeat-direction.md).
-ADR-011 is proposed, with planner placement and grounding still open.
-Observation must support direct screenshot return and configured vision-model
-interpretation as data, so text-only agents can also use the desktop.
-Direct DeepSeek Flash has a ten-call static-image probe in
-[doc 12](12-deepseek-speed-probe.md): corrected app-window questions passed
-twice at 786/1,528 ms. App/region crops reduced input tokens; stable speed
-gains and general recognition accuracy remain unproven. App-only and optional
-viewport-region observation requirements are recorded in doc 10.
-The owner subsequently authorized a runnable benchmark: `vision_benchmark.py`
-and `benchmark_capture.py` now capture five isolated Kate/Firefox fixtures,
-default to app images, and allow DeepSeek/MiMo/generic provider configuration.
-[Doc 13](13-runnable-vision-benchmark.md) records the commands and thirty-call
-comparison. DeepSeek's app baseline had 28/30 exact facts at 1.24 s median;
-MiMo had 27/30 at 5.45 s. Both missed disabled-control state. ADR-013 locks
-app scope as default and leaves crops optional. No general server exists.
+## Current state
 
-**Owner:** messhias. Machine `cachy` — CachyOS (Arch-based), KDE Plasma 6, Wayland.
-Owner learns by doing and wants *short* prose: small runnable probes beat long documents.
+We have working platform probes, one verified KCalc action, and a runnable
+vision-reader benchmark. No general desktop service, MCP server, autonomous
+planner, or heartbeat watcher exists yet.
 
----
+The owner-supported direction is a screenshot-driven computer-use terminal
+for local and tailnet agents, using `kwin-mcp` for sessions, capture and input.
+Virtual sessions are the default; real desktop and `yolo` remain intended
+features. The primary agent interprets tasks and handles recovery. Jev is an
+optional accelerator for bounded judgments and familiar workflows.
 
-## 1. What we are building
+**Observation requirements:** app-window capture by default; explicit images
+for callers with vision, interpreted data for callers without it; both may
+refer to the same capture. Full-session context and region crops are optional.
+Browser-specific capture adapters come later. DeepSeek Flash is the provisional
+reader, with provider/model switching supported by the benchmark.
 
-A computer-use layer for agents on this desktop. The original design made decisions with **Jev**
-(TypeSafe AI "System One": `state` + typed `questions` → typed `answers`; primitives `choice`,
-`score`, `noul`; it generates no text). The current direction gives a primary
-vision agent task interpretation and recovery, with Jev as an optional
-accelerator. Execution stays in deterministic, guardrailed code.
+## What exists and how to run it
 
-**Endgoal:** local agents (Pi, Claude Code) *and* **remote Hermes assistants over the tailnet**
-can drive this desktop. Not all callers are local.
-
-## 2. What is already decided (do not relitigate without asking)
-
-| ADR | Decision |
+| File | Purpose |
 | --- | --- |
-| 001 | Thin **policy layer over `isac322/kwin-mcp`**. We do not write a driver, we do not fork kwin-mcp. |
-| 002 | Both session modes; **virtual (`kwin_wayland --virtual`) is the default**, live is opt-in per task. |
-| 003 | Three autonomy modes: `supervised`, `guarded` (default), `yolo`. App allowlist, step caps and audit log apply in **every** mode including `yolo`. |
-| 004 | One core, two surfaces: **CLI + MCP server**. |
-| 005 | **Single instance on `cachy`**, MCP **stdio** for local + **Streamable HTTP** for remote via `tailscale serve` → `127.0.0.1:7810`. |
-| 006 | **Remote callers have the same reach as local** — live desktop and `yolo` included. (Owner decision.) |
-| 007 | **Tailnet ACLs are the only access gate.** No tokens, no OAuth. (Owner decision.) |
-| 008/009 | Confirmed: run observe→decide→act→verify on `cachy`; remote callers submit a task. Jev chooses one bounded step at a time. |
+| `benchmark_capture.py` + `benchmark_fixtures/` | Five synthetic Kate/Firefox cases, isolated sessions, AT-SPI setup verification, mapped full/app/region PNGs. |
+| `vision_benchmark.py` | Saved-image evaluation, DeepSeek/MiMo/generic endpoint configuration, seeded order, bounded calls, strict scoring and JSONL results. |
+| `test_vision_benchmark.py` | Six validation tests covering schemas, streams, image hashes, call caps, provider payload and expected-answer isolation. |
+| `p2_kcalc.py` + `test_p2_kcalc.py` | One Jev-selected button press, fresh target check, exact blank-to-1 display verification; five tests. |
 
-Our ~30% of new code: **state compiler**, **Jev policy**, **guardrails**, **verifier**.
-The other ~70% is `kwin-mcp` plus small borrowings from `browser-use/jev-ultrafast` (loop shape)
-and `trycua/cua` / `agent-sh/computer-use-linux` (a11y flag flip, readiness report).
+From the repo root:
 
-## 3. The three facts that will bite you
+```bash
+# No paid calls: capture the fixture suite.
+uv run --with kwin-mcp==0.10.0 --with Pillow --with httpx python vision_benchmark.py --capture-only --output run/fixtures
 
-1. **Wayland input is focus-routed.** You cannot inject keystrokes into a background window.
-   kwin-mcp **0.7.0 misroutes input; 0.8.0+ fixed it** via real activation. Keyboard follows
-   focus; pointer scroll follows the pointer. Live tasks must **save focus → act → restore**
-   or the owner's next keystrokes land in whatever the agent touched.
-   `wtype` is unusable on KWin (no `zwp_virtual_keyboard`; KDE bug 502882).
-2. **Accessibility varies by app.** Enabling `org.a11y.Status` `IsEnabled` and
-   `ScreenReaderEnabled` yielded useful Kate and Firefox trees on this host,
-   while isolated Brave Origin still exposed an empty root. See the P0 counts.
-3. **Per-step remote loops are expensive.** A tailnet round trip plus a Jev
-   call per step. In 12 matched synthetic requests, TypeSafe direct had a
-   254 ms median and the hosted gateway 839 ms; measure desktop states next.
-   Hence ADR-008.
+# DeepSeek: five app images, two repetitions, ten calls.
+uv run --with httpx python vision_benchmark.py --manifest run/fixtures/manifest.json --output run/deepseek --max-calls 10
 
-## 4. Next action: P0 probe (half a day, measurements only)
+# MiMo: reuse those exact captures and questions.
+uv run --with httpx python vision_benchmark.py --manifest run/fixtures/manifest.json --output run/mimo --provider mimo --base-url https://api.xiaomimimo.com/v1 --model mimo-v2.6-flash --key-env MIMO_API_KEY --max-calls 10
 
-**Current next step:** a disposable virtual-session heartbeat fixture comparing
-agent polling, fast vision judgments, and OCR + Jev. Confirm the owner's exact
-vision endpoint before paid comparisons. Follow doc 10's metrics and remaining
-design decisions. The checklist below records remaining platform measurements.
-
-Full checklist in **`docs/05-open-questions.md`**. The short version, in the order that
-unblocks the most:
-
-1. **KWin + EIS / virtual and live KCalc** — passed with disposable
-   `kwin-mcp==0.10.0`; live focus was restored. See P0 measurements.
-2. **AT-SPI tree dump** — completed for Kate, Firefox and isolated Brave.
-   Kate/Firefox offer useful elements; Brave did not.
-3. **ydotool fallback** — `/dev/uinput` ACL and `ydotoold` service passed;
-   input behavior remains untested. KWin EIS currently works.
-4. **Screenshot path** — ScreenShot2 worked in virtual and live sessions;
-   ten virtual captures had 150 ms median latency. Fallbacks remain unmeasured.
-5. **Tailnet** — preserve existing Serve `/` route; add `/mcp` → `127.0.0.1:7810`
-   after the endpoint exists. Confirm not LAN-reachable; confirm
-   **Funnel off**; `tailscale ping cachy` from a remote node (direct vs DERP, RTT); list which
-   devices can reach the URL and which are tagged.
-6. **Hermes client** — add an `mcp_servers` entry with `url:`, list tools, call one.
-7. **Jev** — both endpoints worked in the paired P0 test. TypeSafe direct is
-   selected for P1; its key is `JEV_API_KEY` in ignored `.env`. Re-measure
-   with desktop states and choose the small text LLM.
-
-Read `docs/05-open-questions.md` for measurements already made on 2026-09-29 and
-the remaining process/caller-identity seams.
-
-### Probe hygiene
-
-- Throwaway scripts only; do **not** commit implementation to `main` until P0 is reviewed.
-- Record every measurement in the doc it belongs to (KWin version next to the EIS claim, RTT next
-  to the tailnet section). Claims without a recorded version/timestamp rot fast here.
-- Nothing in a probe should type into a terminal, touch a password manager, or run unattended.
-
-## 5. Open owner preferences (ask, don't assume)
-
-App scope for v1 · hard no-go zones · whether remote gets a narrower allowlist than local ·
-notification on remote live-desktop task start (recommended) · visible agent cursor/overlay ·
-where the Jev key lives · whether the goal is learning internals or shipping fast ·
-repo home (stays here / GitHub remote / Multica card).
-
-## 6. After P0 — the shape of P1…P4
-
-- **P1 · Single-app decision.** State compiler + one Jev call for one app, **no execution** —
-  print the chosen action/target/confidence and judge whether Jev is picking sensibly.
-- **P2 · Closed loop.** Execute + verify one narrow task, with focus save/restore,
-  narrow app scope, step cap, stop control and audit from the first executable probe.
-  Measure steps, latency, cost and failure modes.
-- **P3 · Guardrails.** Generalize the probe controls into the full policy:
-  destructive-action gate, confirmation UX, allowlist and budgets.
-- **P4 · Surface.** MCP stdio first, then Streamable HTTP behind `tailscale serve`. Ship a skill
-  that teaches agents which tool to call when — copy kwin-mcp's plugin pattern.
-
-## 7. Repo contents
-
-```
-README.md                        overview + endgoal + locked shape
-AGENTS.md                        rules for agents in this repo (incl. remote-caller rules)
-docs/HANDOFF.md                  this file
-docs/01-jev-primer.md            Jev: primitives, API, cost, why it fits computer use
-docs/02-prior-art.md             what to reuse (kwin-mcp, jev-ultrafast, cua, …) and what's missing
-docs/03-wayland-constraints.md   the honest platform limits, incl. remote amplification of them
-docs/04-architecture.md          diagram, build-vs-reuse table, options, phasing, ADR log
-docs/05-open-questions.md        answered questions, ADR-008, P0 checklist, open preferences
-docs/06-remote-agents.md         tailnet topology, access model + mandatory compensations, Hermes config
-docs/07-p1-selector-probe.md     virtual KCalc observation and TypeSafe choice probe
-docs/08-p2-kcalc-proof.md        executed one-action proof and limits
-docs/09-observation-options.md  structured observer research
-docs/10-heartbeat-direction.md  current direction and three-arm benchmark
-p2_kcalc.py / test_p2_kcalc.py  narrow disposable-session proof
-.memsearch/memory/               kickoff note (indexed in the workspace memory store)
+# Validation only.
+uv run --with httpx python -m unittest -v test_vision_benchmark.py test_p2_kcalc.py
 ```
 
-## 8. Gotchas / anti-patterns to avoid
+Keys stay in ignored `.env`: `JEV_API_KEY`, `DEEPSEEK_API_KEY`, `MIMO_API_KEY`.
+Read names only when checking configuration. Never display values. Results
+and captures are under ignored `run/`; they are local artifacts, not committed
+fixtures. The suite can regenerate them. The earlier doc-12 probe lives in
+`/tmp/jev-deepseek-speed/` and may disappear.
 
-- Do not "improve" the auth situation by adding a half-built token scheme. ADR-007 stands; the
-  `authorizer` seam exists so a bearer token or Tailscale app capabilities can be added
-  deliberately later.
-- Do not let the model produce coordinates, selectors, paths or commands. It chooses **indices we
-  created**; a small LLM may write only the text for a `TYPE_TEXT` action, JSON-parsed.
-- Do not treat the model's `DONE` as proof. Re-read state; verify.
-- Do not stream screenshots to remote callers by default.
-- Do not assume kwin-mcp's KWin EIS interface is stable across Plasma releases — pin the version.
-- Do not use `tailscale funnel`, ever, for this.
+## What we learned
+
+The runnable suite types an original three-line poem into Kate, reads a local
+webpage table and small text, checks a disabled button, and distinguishes
+loading, ready and error pages. Actions are scripted; models read screenshots.
+These are static perception tests, not autonomous task-completion tests.
+
+| Run | Calls | Exact facts | All-fact passes | Median completion |
+| --- | ---: | ---: | ---: | ---: |
+| DeepSeek Flash, app | 10 | 28/30 | 8/10 | 1.24 s |
+| MiMo V2.6 Flash, app | 10 | 27/30 | 7/10 | 5.45 s |
+| DeepSeek Flash, region | 5 | 11/15 | 3/5 | 1.08 s |
+| MiMo V2.6 Flash, region | 5 | 15/15 | 5/5 | 9.38 s |
+
+- Both models read the poem correctly in both app runs. Both missed the
+  disabled-button state twice. Prefer AT-SPI properties for control state.
+- MiMo's other app mismatch was a trailing period on a reference code.
+  DeepSeek's region run included one JSON object with entirely wrong fields.
+  Strict JSON syntax alone does not establish a usable observation.
+- Crops reduced average input tokens by about 47% for DeepSeek and 58% for
+  MiMo. Speed and correctness gains were inconsistent. Keep crops optional.
+- Source captures took 135–141 ms. Provider timings include request work but
+  exclude app setup/capture. Service load may affect the sequential provider
+  comparison; small samples do not establish stable tail latency.
+- Use exact visible labels in questions: KCalc prints `1`, while AT-SPI calls
+  it `One`. Distinguish blank text from unreadable text; enforce response shape.
+
+Full methodology, usage totals and limitations: [doc 13](13-runnable-vision-benchmark.md).
+
+## Platform facts and constraints
+
+Measured on `cachy`: KWin **6.7.5**, `kwin-mcp` **0.10.0**, AT-SPI **2.60.7**,
+Kate **26.08.1**, Firefox **157.0** for the latest fixture run. Recheck versions
+before new behavior claims; the KWin EIS interface is private.
+
+- Virtual KWin/EIS and ScreenShot2 work. A prior live KCalc probe also worked
+  and restored focus. Wayland input is focus-routed; live tasks must restore it.
+- Kate/Firefox accessibility requires both `org.a11y.Status` `IsEnabled` and
+  `ScreenReaderEnabled`. The benchmark enables these only on each isolated bus.
+  Earlier isolated Brave exposed no useful tree.
+- Resolve actual KWin window identities: filtering for `kcalc` missed
+  `org.kde.kcalc`. Require known screenshot origin/size/full coverage before
+  applying geometry. Keep capture identity, hashes and crop mapping together.
+- Firefox is maximized in these fixtures, so app and full images coincide.
+  The optional region image is a real smaller crop. Fixed fixture rectangles
+  are not a general webpage-region detector.
+- Fresh Firefox profiles suppress first-run pages. All virtual sessions were
+  stopped. Driver `Broken pipe` warnings occurred despite successful capture
+  and teardown; do not treat the warning alone as task failure.
+- Tesseract 5.5.3 was installed, but English trained data was missing in the
+  earlier OCR probe. OCR + Jev has not been benchmarked successfully.
+- ydotool input fallback and screenshot fallbacks remain unmeasured. Existing
+  Tailscale Serve `/` targets localhost:3080; preserve it. No project `/mcp`
+  endpoint is deployed, and no Hermes client round trip has been completed.
+
+## Decisions and remaining questions
+
+ADR-001…010 record the original Jev-led design. ADR-011 proposes screenshot-led
+planning and optional acceleration; it remains proposed. ADR-012 locks image
+and interpreted-data support. ADR-013 locks app observation as default.
+Read the append-only log in [doc 04](04-architecture.md); older Jev-loop diagrams
+are historical proposals where the newer direction differs.
+
+Session ownership, locking, execution verification and cancellation stay on
+`cachy`. Placement of the primary planner and screenshot-to-action grounding
+remain unresolved. Jev stays a selector over code-enumerated choices. Vision
+interpretations are observations, not executable targets or proof of success.
+
+Owner preferences: concise updates, small runnable steps, reuse existing
+drivers. Luna High subagents are authorized. Trusted tailnet and high access
+are intentional; avoid unsolicited security reviews. Follow existing project
+controls without reopening settled remote-access decisions.
+
+## Recommended next work
+
+1. **Small reusable observation adapter:** extract app-scoped capture and the
+   vision request path from the benchmark. Return metadata, explicit image,
+   data, or both for one capture. Preserve provider errors, uncertainty,
+   freshness and mappings. Test an unfamiliar app before generalizing.
+2. **Grounding and one real task:** define how caller actions resolve fresh
+   targets, using AT-SPI where useful. Write/edit a Kate document or interact
+   with a webpage through the chosen contract, verifying each action. Resolve
+   planner placement and finalize ADR-011 before a broad execution loop.
+3. **Dynamic wait fixture:** loading → ready, loading → error, no change,
+   and an unexpected dialog outside a watched region, with timestamps for
+   actual transitions. Existing pages are static states; they do not measure
+   wakeup behavior.
+4. **Heartbeat comparison:** normal agent polling vs local change watcher +
+   fast vision vs local OCR + Jev. Measure success, elapsed time, primary turns
+   and tokens, every backend call/cost, false wakes, missed events and detection
+   delay. Install/verify OCR language data only when testing that arm.
+5. **Then CLI/MCP and tailnet integration:** cancellation/stop, session controls,
+   stdio, Streamable HTTP, preserved Serve routes, and a real remote caller.
+   Browser-specific capture/replay accelerators follow after this foundation.
+
+These are recommendations, not authorization for the general server/state
+compiler. The owner authorized the bounded benchmark implementation and paid
+DeepSeek/MiMo runs. Ask before expanding beyond that scope under `AGENTS.md`;
+do not repeat permission questions for work already authorized.

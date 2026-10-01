@@ -3,13 +3,18 @@
 A screenshot-driven computer-use layer for agents on **CachyOS + KDE Plasma 6 Wayland**,
 reachable by **remote agents over the tailnet** as well as local ones.
 
-**Status: decisions locked (ADR-001…010); P0 measurements and a narrow KCalc P2 proof are recorded.**
-The owner-supported next direction is a primary vision agent with optional
-heartbeat acceleration. Read [the recommendation and benchmark](docs/10-heartbeat-direction.md).
-Observation supports explicitly requested images for vision-capable callers,
-or configured vision-model interpretation returned as data for text-only callers.
-ADR-011 proposes the architecture update; planner placement and action grounding remain open.
-Picking this up cold? Read [docs/HANDOFF.md](docs/HANDOFF.md).
+**Status, 2026-10-01: runnable virtual Kate/Firefox vision benchmark, plus a
+verified one-action KCalc proof.** App-window capture is the default; DeepSeek
+Flash is the provisional reader, with MiMo and optional crops configurable.
+The app baseline measured 28/30 exact facts at 1.24 s median for DeepSeek,
+27/30 at 5.45 s for MiMo. Both missed disabled-button state.
+
+The owner-supported direction is a primary screenshot agent with optional
+heartbeat acceleration. Explicit images and interpreted data for text-only
+callers are required. No general service or heartbeat exists yet; planner
+placement and action grounding remain open under proposed ADR-011.
+Picking this up cold? Start with [docs/HANDOFF.md](docs/HANDOFF.md), then
+[the runnable benchmark and measurements](docs/13-runnable-vision-benchmark.md).
 
 ## Endgoal
 
@@ -17,7 +22,8 @@ Your Hermes assistants — and other agents that do **not** run on this machine 
 tailnet and operate the desktop. A primary vision agent interprets the task;
 [Jev](docs/01-jev-primer.md) is a candidate accelerator for waits and familiar
 workflows. Execution stays in deterministic, guardrailed code. The original
-Jev-led architecture below is retained pending ADR-011's final contract.
+Jev-led architecture below is retained as historical context pending
+ADR-011's final contract; it is not a diagram of a deployed service.
 
 ```
    local agents (stdio)          remote agents over tailnet (Streamable HTTP)
@@ -40,7 +46,11 @@ Jev-led architecture below is retained pending ADR-011's final contract.
   candidate table), a **decision + guardrail policy**, and a **remote surface** that keeps
   guardrails non-bypassable.
 
-## Read in this order
+## Reading guide
+
+For current work, read the handoff, doc 13's runnable suite, and doc 10's
+observation/heartbeat direction first. The numbered documents below retain
+the design and measurement history.
 
 1. [docs/HANDOFF.md](docs/HANDOFF.md) — start here for a fresh session
 2. [docs/01-jev-primer.md](docs/01-jev-primer.md) — what Jev is, the three primitives
@@ -71,7 +81,7 @@ for capture-only mode, reusing images with MiMo or another compatible provider,
 optional crops and results. This suite scripts the fixture actions; general
 agent planning and the desktop server are still pending.
 
-## Locked shape (ADR-001…010)
+## Original decisions (ADR-001…010)
 
 - A thin **Jev policy layer over `kwin-mcp`** — we do not write a driver.
 - **One instance on `cachy`**; MCP **stdio** locally, **Streamable HTTP** remotely via `tailscale serve`.
@@ -83,6 +93,10 @@ agent planning and the desktop server are still pending.
 - One core, two surfaces: **CLI + MCP server**.
 - The loop runs on `cachy`, with Jev choosing one step at a time (ADR-008/009).
 - TypeSafe direct is the selected Jev provider for P1 (ADR-010).
+
+Later requirements: image or interpreted-data observations (ADR-012),
+app-window scope by default (ADR-013). Screenshot-led planning and optional
+Jev acceleration remain proposed in ADR-011; see the handoff for next work.
 
 ## Constraints
 

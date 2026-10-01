@@ -1,6 +1,8 @@
 # 10 — Screenshot agent and optional heartbeat
 
-**2026-10-01 · owner-supported direction; implementation and performance unproven.**
+**2026-10-01 · owner-supported direction.** A runnable static-image benchmark
+exists in [doc 13](13-runnable-vision-benchmark.md). The general session
+surface and heartbeat implementation/performance remain unproven.
 
 ## Recommendation
 
@@ -148,6 +150,10 @@ on `cachy`. A client running the vision loop must explicitly request images;
 the existing metadata-only remote default still applies. The local watcher
 must be available independently of where the primary agent runs.
 
-Next implementation milestone: a disposable virtual-session heartbeat fixture
-and benchmark harness, followed by the minimal usable session surface. Broad
-server implementation remains subject to the repository's P0 review gate.
+The static Kate/webpage perception harness now exists; DeepSeek remains the
+provisional reader after the recorded MiMo comparison. Recommended next work
+is a reusable app observation adapter, then action grounding and a dynamic
+wait fixture for the three-arm comparison. The existing loading/ready/error
+pages are separate static states, not a measured transition watcher.
+Broad server implementation remains subject to the repository's review gate.
+See [the handoff](HANDOFF.md) for current scope and ordered next steps.

@@ -4,21 +4,19 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**Decisions locked (ADR-001…010; ADR-008 confirmed in ADR-009), no implementation yet.**
-P0 measurement is underway. The shape: a Jev policy layer over `kwin-mcp`, one instance
-on `cachy`, virtual sessions by default, CLI + MCP surfaces, three autonomy modes, reachable by
-remote agents over the tailnet.
+**2026-10-01: platform probes, a narrow KCalc proof and a runnable vision
+benchmark exist; no general desktop service exists.** Start with
+`docs/HANDOFF.md` and `docs/13-runnable-vision-benchmark.md`.
 
-Next step is the **P0 probe checklist** in `docs/05-open-questions.md`. Do not start the state
-compiler or MCP server until P0 measurements are in — and ask before adding code to `main`
-beyond throwaway probe scripts.
+The current owner-supported direction is screenshot-driven computer use over
+`kwin-mcp`, with Jev as an optional accelerator. ADR-011 remains proposed;
+ADR-012 requires images or interpreted data, and ADR-013 makes app capture
+the default. DeepSeek Flash is the provisional reader; MiMo is configurable.
 
-**Update, 2026-10-01:** the owner explicitly authorized the runnable vision
-benchmark in `vision_benchmark.py` and `benchmark_capture.py`, after the P0/P2
-probes. App-window capture is its default (ADR-013), with optional regions and
-configurable DeepSeek/MiMo readers. See `docs/13-runnable-vision-benchmark.md`
-for current commands and measurements. This authorization is scoped to the
-benchmark; the general state compiler and MCP server remain pending.
+The owner explicitly authorized benchmark implementation and DeepSeek/MiMo
+tests. The general state compiler and MCP server remain pending; ask before
+expanding implementation beyond the benchmark/probe scope. Remaining P0
+measurements are in `docs/05-open-questions.md`, not the entire next-work plan.
 
 ## Owner context
 
@@ -30,9 +28,11 @@ benchmark; the general state compiler and MCP server remain pending.
 
 - **Reuse before writing.** A driver already exists for almost every layer here
   (`docs/02-prior-art.md`). Name the project being reused in the design before proposing new code.
-- **The model is a pure selector.** Jev output selects from options we enumerated in code.
+- **Jev is a pure selector.** Jev output selects from options we enumerated in code.
   It must never produce coordinates, CSS selectors, shell commands, file paths or code.
   Only a text-argument helper (a small LLM) may produce free text, and only for typing.
+  The separate vision reader may report observed text/data under ADR-012;
+  its descriptions are not executable targets. Action grounding remains open.
 - **Every action is verified.** After execution, re-read state (AT-SPI property or
   screenshot diff) before the next decision. `DONE` from the model is a proposal, not proof.
 - **Guardrails live outside the model.** Allow/deny lists, confirmation gates, step and
@@ -89,11 +89,20 @@ docs/04-architecture.md       ADR-001..008 log
 docs/05-open-questions.md     P0 checklist
 docs/06-remote-agents.md      tailnet topology + access model
 docs/07-p1-selector-probe.md  KCalc observation + decision-only Jev probe
+docs/08-p2-kcalc-proof.md     one executed and verified action
+docs/09-observation-options.md
+docs/10-heartbeat-direction.md
+docs/11-vision-model-shortlist.md
+docs/12-deepseek-speed-probe.md
+docs/13-runnable-vision-benchmark.md
+benchmark_capture.py        isolated fixture capture; benchmark_fixtures/
+vision_benchmark.py         configurable image-reader benchmark
 ```
 
 ## Conventions
 
-- Docs are the deliverable in this phase. One idea per doc, short sections, link out to sources.
+- Docs and the authorized bounded benchmark are the current deliverables.
+  One idea per doc, short sections, link out to sources.
 - Cite external claims with a URL. Mark vendor-reported numbers as vendor-reported.
 - Record decisions as short ADR-style entries in the ADR log at the end of
   `docs/04-architecture.md` (append-only; supersede rather than rewrite).
