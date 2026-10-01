@@ -1,7 +1,10 @@
 # HANDOFF — start here for a fresh session
 
 **Updated 2026-10-01.** Repo: `/home/messhias/lamasync/projects/computer-use`.
-Standalone Git, `main`, no remote.
+Branch: `main`. GitHub/origin:
+[aliforfaen/computer-use](https://github.com/aliforfaen/computer-use).
+This is the published evening checkpoint. Testing is paused until the owner
+resumes; the latest vision timeout/journal fixes still need review and tests.
 Read `AGENTS.md`, this file, [the virtual slice](15-virtual-session-slice.md),
 then [the local owner surface](16-local-owner-and-mcp.md).
 
@@ -12,7 +15,12 @@ disposable virtual Kate/Firefox/KCalc task harness. M3 adds the single-owner
 virtual daemon, thin CLI and official MCP SDK stdio facade. The disposable host
 integration probe passed; CLI and MCP observe the same session, CLI verifies a
 KCalc transition and worker-death recovery confirms cleanup. There is no
-remote HTTP service, live desktop mode, general planner or heartbeat watcher.
+remote HTTP service, live desktop mode or general planner. M4a adds a bounded
+local screenshot-change watcher and synthetic Firefox fixture; its corrected
+seed-17 host baseline classified all ten polling/watcher outcomes and cleaned
+up all sessions. This local pixel-diff run does not use a vision reader, Jev,
+OCR or a primary task agent, and does not demonstrate acceleration. See
+[doc 17](17-dynamic-wait-baseline.md).
 
 **Latest M1–M2 validation:** 39 tests pass. The reviewed host harness passed
 two exact Kate edits, Firefox button transition and disabled refusal, plus
@@ -23,6 +31,37 @@ No paid calls. See [doc 15](15-virtual-session-slice.md) for results and limits.
 Firefox idle→complete and KCalc blank→1; normal sessions reuse the same worker.
 Crash recovery and cleanup passed. Zero paid calls; [doc 16](16-local-owner-and-mcp.md)
 records evidence, commands and limits.
+
+**Latest M4a validation:** `uv run python -m unittest discover -v` passed 77
+tests. The corrected local seed-17 wait baseline recognized 10/10 fixture
+outcomes across five states and two arms; all ten sessions and temporary
+profiles cleaned up. Initial classifier testing missed both loading→error
+trials; a grayscale threshold correction fixed the issue, and a separate
+two-arm recheck plus corrected full run passed. This is local pixel-diff only,
+not a model or primary-agent comparison. See [doc 17](17-dynamic-wait-baseline.md).
+
+**M4b paid probe status:** the first DeepSeek heartbeat run was interrupted by
+a comment-only SSE stream that exceeded four minutes. Its old runner did not
+persist attempt progress and swallowed the first interrupt; exact attempt
+count and actual usage are unknown. Cleanup of the remaining owned process and
+virtual session was confirmed. No usable paid result exists. Reserve the full
+12-attempt worst-case estimate ($0.0211968) as possibly charged. Do not make
+another provider call until the elapsed stream deadline, progress journal and
+interrupt path are independently reviewed and tested after the owner resumes.
+The frozen code now has 5-second idle, 30-second total stream and 40-second
+watch deadlines, an fsynced pre-attempt/lifecycle journal and interrupt
+propagation, but these changes have not been reviewed or retested. The probe is
+configured for at most one follow-up request. No tests, probes or paid calls
+are authorized during the current pause. See doc 17 for cost accounting and
+evidence limits.
+
+## First work after the owner resumes
+
+1. Review and test the frozen stream timeout, progress journal and interrupt path.
+2. If those pass and the owner still wants it, decide whether to use the one
+   configured follow-up provider request; otherwise preserve the no-result status.
+3. Root owns the pending documentation/code commit and push to the configured
+   empty GitHub remote.
 
 The owner-supported direction is a screenshot-driven computer-use terminal
 for local and tailnet agents, using `kwin-mcp` for sessions, capture and input.
@@ -50,6 +89,9 @@ reader, with provider/model switching supported by the benchmark.
 | `desktop_service.py` + `desktop_worker.py` | One virtual session owner and one persistent `AutomationEngine` worker child. |
 | `desktop_daemon.py` + `desktop_cli.py` + `desktop_mcp.py` | Private Unix socket owner, thin CLI and official MCP SDK stdio client. |
 | `test_desktop_surfaces.py` + `local_service_probe.py` | Synthetic socket/MCP checks and the passing separate host integration probe. |
+| `wait_watcher.py` | Bounded full-app capture wait primitive with debounce, latest-frame coalescing, cancellation/deadline checks and optional existing Reader seam. |
+| `wait_benchmark.py` + `benchmark_fixtures/wait.html` | No-provider local polling/watcher fixture comparison; five controlled states and independent loopback event receipts. |
+| `test_wait_watcher.py` + `test_wait_benchmark.py` | Wait API, fixture, schema, cancellation, deadline and pixel-diff threshold tests. |
 
 From the repo root:
 
@@ -81,6 +123,9 @@ uv run jev-desktop stop --all
 
 # Local MCP stdio client for an MCP host; it connects to the same Unix owner.
 uv run jev-desktop-mcp
+
+# No paid calls: five local fixture cases, polling vs. local screenshot watcher.
+uv run python wait_benchmark.py --seed 17 --repetitions 1 --max-trials 10
 ```
 
 Keys stay in ignored `.env`: `JEV_API_KEY`, `DEEPSEEK_API_KEY`, `MIMO_API_KEY`.
@@ -177,9 +222,12 @@ limits.
 
 ## Recommended next work
 
-1. **Dynamic wait fixture (M4):** loading→ready/error, no change, animation noise
-   and an unexpected dialog outside the watched region. Record actual
-   transition timestamps before comparing polling and accelerated waits.
+1. **M4 reader heartbeat (paused):** after the owner resumes work, independently
+   review and test the frozen stream deadline, flushed progress journal and
+   interrupt handling before its one configured follow-up request (see doc 17).
+   No tests or requests during this pause. Keep provider measurements separate
+   from the completed local pixel-diff baseline. OCR+Jev and end-to-end
+   primary-agent comparisons remain later work.
 2. **Planner contract:** resolve ADR-011 and visual grounding before broad task
    execution. Current transactions support unique mapped semantic targets,
    not arbitrary screenshot coordinates from a model. Task-specific verifiers

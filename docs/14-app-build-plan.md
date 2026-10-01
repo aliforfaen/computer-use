@@ -68,7 +68,8 @@ virtual sessions and paid requests bounded and explicitly scoped.
 | M1 (implemented) | Reusable observation adapter | Authorized and validated; doc 15 | Same-capture image/data; app scope default; explicit full/crop; errors, hashes and mappings preserved |
 | M2 (implemented, virtual fixtures) | Grounded action transaction + disposable harness | Authorized and validated; doc 15 | A real Kate edit and local webpage action verified after every action; stale/disabled targets refused |
 | M3 (implemented and host-validated) | Single-owner virtual service + local CLI/MCP | M2 | CLI and stdio share the owner; verified fixture effects, competing-call refusal, cancellation and child-death cleanup checked; doc 16 |
-| M4 | Dynamic wait + acceleration comparison | M1–M2; common baseline task | Truthful detection metrics and end-to-end task results across polling and accelerated arms |
+| M4a (implemented, local baseline) | Synthetic full-app wait fixture; screenshot polling vs. local pixel-diff watcher | M1–M2; [doc 17](17-dynamic-wait-baseline.md) | Corrected seed-17 run classified 10/10 fixture states; cleanup passed. No provider, Jev, OCR, primary agent or acceleration claim. |
+| M4b (paused; first run invalid) | Bounded DeepSeek heartbeat over real fixture captures | M4a; explicit under-$1 owner authorization on 2026-10-01 | Frozen code adds idle/total/watch deadlines, fsynced progress journaling and interrupt propagation. Independently review and test after owner resumes, before the probe's one configured follow-up request; doc 17 records unknown prior usage. No tests, probes or calls during the pause. |
 | M5 | Live desktop support | M3; idle/focus probes; explicit owner live task | Explicit audited per-task live request; focus restored on success/error/cancel; recent physical input blocks entry; one live task |
 | M6 | Tailnet surface + real remote client | M3; deployment approval and peer availability | Loopback HTTP, preserved Serve routes, remote virtual task, truthful caller provenance and stop controls |
 
@@ -137,27 +138,30 @@ trip before calling remote support complete. Do not deploy during planning.
 
 ### Worker D — Wait fixtures and accelerators (M4)
 
-Build one controllable local page with loading→ready, loading→error, no change,
-animation noise and an unexpected dialog outside the requested region. Record
-actual transition timestamps independently of model observations. Reuse the
-same reset state, observation adapter, primary agent and task across arms.
+M4a's local watcher and polling baseline are implemented. See [doc 17](17-dynamic-wait-baseline.md)
+for host evidence, the corrected error-color classifier and limits. It is a
+local pixel-difference primitive comparison, not evidence of saved model calls
+or faster end-to-end agent tasks. The first authorized DeepSeek heartbeat
+probe produced no usable result and lost exact attempt/usage counts after a
+comment-keepalive SSE stream and interrupt-handling failure. Fix and review its
+absolute deadline, flushed attempt journal and interrupt cleanup before the
+owner's one allowed follow-up request. OCR+Jev and primary-agent comparisons
+remain later arms.
 
-Start a bounded local watcher: debounce, one judgment in flight, latest-frame
-coalescing, deadline, cancellation and whole-app unexpected-change checking.
-Accessible events/text or exact matches can wake without a model. Vision
-heartbeat judges meaningful changes; OCR+Jev is a separate measured arm, with
-Jev choosing only enumerated wait/wake/unexpected outcomes.
+For M4b, after the owner resumes, reuse the controlled page and full-app capture
+path. The owner authorized one bounded DeepSeek heartbeat probe under $1.
+Record the real image bytes, request/response status, latency, usage and cleanup; count only calls
+actually sent, stop at the approved cap or on rate limits, and do not retry.
+Keep provider call cost separate from any estimated cost. No primary-agent
+turns or tokens are part of this probe. Do not report it as end-to-end speedup.
 
-Compare baseline agent polling, watcher+vision and watcher+OCR/Jev in randomized
-order over repeated runs. Count primary turns/tokens, every backend request,
-capture/OCR/judgment time, end-to-end success/elapsed time, false wakes, missed
-events, detection delay, retries/timeouts and measured or explicitly estimated
-cost. Measure savings against the same primary agent, not synthetic turn counts.
-Verify OCR language data before that arm; defer installation until needed.
-Keep dynamic run manifests/event logs separate from static perception results.
-Record reset state, seed, randomized arm order and monotonic transition/wake
-times per trial, along with capture counts and local CPU work. Never declare
-an accelerator selected from the static perception results.
+OCR+Jev and the primary-agent polling/watcher comparison remain later arms.
+For those, randomize repeated runs on a common task and count primary
+turns/tokens, every backend request, capture/OCR/judgment time, end-to-end
+success/elapsed time, false wakes, missed events, retries/timeouts and measured
+or explicitly estimated cost. Keep dynamic manifests separate from static
+perception results, and never declare an accelerator selected from the static
+perception results.
 
 ## Owner intervention — deferred gates
 
@@ -176,8 +180,12 @@ preceding work produces concrete options:
 4. **Remote deployment:** need an available remote client/peer and approval
    to change Serve configuration; preserve the existing route. No additional
    provider accounts are needed for the local baseline.
-5. **Paid comparison:** present exact arms, repetitions and maximum calls
-   before expanding beyond the already authorized static provider tests.
+5. **Paid comparison:** the owner authorized one DeepSeek heartbeat probe under
+   $1 on 2026-10-01. Keep that probe within its explicit cap; ask before any
+   broader provider comparison, OCR+Jev arm or end-to-end paid task comparison.
+   Frozen runner changes are not reviewed or retested. Work is paused now: do
+   not run tests, probes or provider calls until the owner resumes; the single
+   follow-up request is not currently cleared.
 
 ## Concerns and practical limits
 
@@ -198,9 +206,9 @@ preceding work produces concrete options:
 ## Fresh-session routing
 
 Read HANDOFF.md for current status, doc 13 for perception measurements, doc 15
-for M1–M2 evidence and [doc 16](16-local-owner-and-mcp.md) for the M3 local
-owner/CLI/MCP lifecycle. M3 implementation and disposable host integration
-checks passed. Next, build the M4 dynamic wait fixture without paid comparisons.
-Planner/visual grounding, live desktop and tailnet
-deployment remain separate later gates; do not infer their support from the
-local virtual service.
+for M1–M2 evidence, [doc 16](16-local-owner-and-mcp.md) for the M3 local
+owner/CLI/MCP lifecycle, and [doc 17](17-dynamic-wait-baseline.md) for M4a.
+M3 host integration and the corrected M4a local baseline passed. M4b is paused
+until the owner resumes; do not run tests, host probes or provider calls during
+the pause. Planner/visual grounding, live desktop and tailnet deployment remain
+separate later gates; do not infer their support from the local virtual service.

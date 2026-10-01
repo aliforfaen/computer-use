@@ -87,7 +87,21 @@ class VisionReaderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ReaderConfig(timeout_seconds=float("inf"))
         with self.assertRaises(ValueError):
+            ReaderConfig(total_timeout_seconds=0)
+        with self.assertRaises(ValueError):
             ReaderConfig(max_tokens=257)
+
+    def test_stream_absolute_deadline_stops_even_when_lines_keep_arriving(self):
+        now = [0.0]
+
+        class SlowResponse:
+            def iter_lines(self):
+                yield "data: {}"
+                now[0] = 2.0
+                yield "data: {}"
+
+        with self.assertRaisesRegex(Exception, "stream_total_timeout"):
+            parse_stream(SlowResponse(), deadline_monotonic=1.0, clock=lambda: now[0])
 
     def test_shared_body_builder_matches_provider_payload_rules(self):
         deepseek = build_request_body(b"image", "read it", provider="deepseek", model="d", max_tokens=32)

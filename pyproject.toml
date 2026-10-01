@@ -32,6 +32,8 @@ py-modules = [
     "virtual_tasks",
     "vision_benchmark",
     "vision_reader",
+    "wait_benchmark",
+    "wait_watcher",
 ]
 include-package-data = true
 

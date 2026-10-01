@@ -1,134 +1,62 @@
-# Jev Computer-Use Layer (working title)
+# Computer Use
 
-A screenshot-driven computer-use layer for agents on **CachyOS + KDE Plasma 6 Wayland**,
-with local CLI/MCP surfaces implemented and tailnet access as a later target.
+Screenshot-driven computer use for agents on **CachyOS, KDE Plasma and Wayland**.
+Built on [kwin-mcp](https://github.com/isac322/kwin-mcp), with a local CLI and MCP
+client. Jev is an optional future accelerator.
 
-**Status, 2026-10-01: M1–M2 core and M3 local surfaces are implemented.** The
-reusable virtual observation/transaction harness has reviewed host results.
-The single-owner daemon, CLI and MCP stdio facade are implemented; the separate
-host integration probe passed, including worker-death recovery. No remote
-HTTP surface, live desktop mode, general planner or heartbeat is implemented.
+## Where things stand
 
-Picking this up cold? Start with [docs/HANDOFF.md](docs/HANDOFF.md), then
-[the virtual slice](docs/15-virtual-session-slice.md) and
-[the app build plan](docs/14-app-build-plan.md).
+- **Working:** disposable virtual Kate, Firefox and KCalc sessions; app screenshots;
+  verified actions; one shared local owner; cancellation and crash recovery.
+- **Local wait baseline:** 10/10 fixture outcomes passed, with cleanup. The full
+  suite passed 77 tests at that checkpoint. This is a local pixel-difference test,
+  not evidence of model or agent speed gains.
+- **Paused for tomorrow:** the DeepSeek heartbeat test stalled and was stopped.
+  Its charged usage is unknown; the conservative first-batch allowance was
+  about **$0.022**. Timeout, interrupt and progress-recording fixes need review.
+- **Later:** general planning, live desktop operation, tailnet deployment and Jev
+  acceleration. These are not implemented in this release.
 
-```bash
-# No paid calls: disposable virtual tasks and app-scoped observations.
-uv run --with kwin-mcp==0.10.0 --with Pillow --with httpx python virtual_tasks.py
-The diagram shows the intended end state. The current M3 build only provides
-the local Unix socket, CLI and MCP stdio surfaces; no remote listener or Serve
-route is configured.
+Start tomorrow with [the handoff](docs/HANDOFF.md). Detailed results and limits:
+[local service](docs/16-local-owner-and-mcp.md) · [wait baseline](docs/17-dynamic-wait-baseline.md).
 
-```
+## Local quick start
 
-## Endgoal
-
-Your Hermes assistants — and other agents that do **not** run on this machine — connect over the
-tailnet and operate the desktop. A primary vision agent interprets the task;
-[Jev](docs/01-jev-primer.md) is a candidate accelerator for waits and familiar
-workflows. Execution stays in deterministic, guardrailed code. The original
-Jev-led architecture below is retained as historical context pending
-ADR-011's final contract; it is not a diagram of a deployed service.
-
-```
-   local agents (stdio)          remote agents over tailnet (Streamable HTTP)
-   Pi / Claude Code / Codex      Hermes @ VPS · Hermes @ GPU box · any tailnet node
-        └───────────────┬───────────────────┘
-                        │  tailscale serve -> 127.0.0.1:7810
-               cachy · jev-desktop  (single instance)
-               state compiler · Jev policy · guardrails · audit log · verifier
-                        │
-                 kwin-mcp  (AT-SPI trees, KWin EIS input, virtual sessions)
-```
-
-## Why this shape
-
-- Jev does not generate text. It picks from bounded option sets and returns
-  probabilities/confidence — a clean mapping onto "which action, which element".
-- Existing Linux computer-use drivers already solve much of the OS plumbing (AT-SPI2 trees,
-  KWin/EIS input injection, KWin ScreenShot2 with Spectacle fallback). We do not rewrite them.
-- Missing in the ecosystem and therefore ours: a **state compiler** (UI tree → bounded, budgeted
-  candidate table), a **decision + guardrail policy**, and a **remote surface** that keeps
-  guardrails non-bypassable.
-
-## Reading guide
-
-For current work, read the handoff, doc 13's runnable suite, and doc 10's
-observation/heartbeat direction first. The numbered documents below retain
-the design and measurement history.
-
-1. [docs/HANDOFF.md](docs/HANDOFF.md) — start here for a fresh session
-2. [docs/01-jev-primer.md](docs/01-jev-primer.md) — what Jev is, the three primitives
-3. [docs/02-prior-art.md](docs/02-prior-art.md) — projects that already do parts of this
-4. [docs/03-wayland-constraints.md](docs/03-wayland-constraints.md) — what is actually possible on KDE Wayland
-5. [docs/04-architecture.md](docs/04-architecture.md) — the layer, build-vs-reuse, ADR log
-6. [docs/05-open-questions.md](docs/05-open-questions.md) — P0 probe checklist + open preferences
-7. [docs/06-remote-agents.md](docs/06-remote-agents.md) — tailnet topology, access model, Hermes config
-8. [docs/07-p1-selector-probe.md](docs/07-p1-selector-probe.md) — virtual KCalc observations and bounded Jev choices
-9. [docs/08-p2-kcalc-proof.md](docs/08-p2-kcalc-proof.md) — one executed and verified action
-10. [docs/09-observation-options.md](docs/09-observation-options.md) — structured observation alternatives
-11. [docs/10-heartbeat-direction.md](docs/10-heartbeat-direction.md) — current direction and benchmark
-12. [docs/11-vision-model-shortlist.md](docs/11-vision-model-shortlist.md) — provider/model candidates
-13. [docs/12-deepseek-speed-probe.md](docs/12-deepseek-speed-probe.md) — measured image latency and crop comparison
-14. [docs/13-runnable-vision-benchmark.md](docs/13-runnable-vision-benchmark.md) — runnable Kate/webpage suite and DeepSeek/MiMo comparison
-15. [docs/14-app-build-plan.md](docs/14-app-build-plan.md) — staged app plan, worker handoffs, acceptance gates and deferred owner decisions
-16. [docs/15-virtual-session-slice.md](docs/15-virtual-session-slice.md) — reusable observation, verified virtual transactions and executed validation
-17. [docs/16-local-owner-and-mcp.md](docs/16-local-owner-and-mcp.md) — M3 owner lifecycle, local CLI/MCP, reader opt-in and validation boundary
-
-## Run the vision benchmark
-
-With `DEEPSEEK_API_KEY` in ignored `.env`, capture five disposable virtual
-Kate/Firefox fixtures and run ten bounded image-reading requests:
+Requires Python 3.13+, `uv`, KDE Wayland and the system dependencies described
+in [the platform notes](docs/03-wayland-constraints.md).
 
 ```bash
-uv run --with kwin-mcp==0.10.0 --with Pillow --with httpx python vision_benchmark.py --output run/baseline --max-calls 10
+uv sync
+uv run jev-desktop daemon --foreground --allow-app kate --allow-app firefox --allow-app kcalc
 ```
 
-App-window images are the default. See [the benchmark guide](docs/13-runnable-vision-benchmark.md)
-for capture-only mode, reusing images with MiMo or another compatible provider,
-optional crops and results. This benchmark is separate from the local owner
-surface described in [doc 16](docs/16-local-owner-and-mcp.md).
+In another terminal:
 
-## Original decisions (ADR-001…010)
-
-- A thin **Jev policy layer over `kwin-mcp`** — we do not write a driver.
-- **One instance on `cachy`**; MCP **stdio** locally, **Streamable HTTP** remotely via `tailscale serve`.
-- **Virtual KWin session by default**, live desktop opt-in per task.
-- Three autonomy modes: `supervised`, `guarded` (default), `yolo`.
-- **Remote callers have the same reach as local** (owner decision) and **tailnet ACLs are the only
-  access gate** (owner decision) — which is why the compensating controls in
-  `docs/06-remote-agents.md` are mandatory, not optional.
-- One core, two surfaces: **CLI + MCP server**.
-- The loop runs on `cachy`, with Jev choosing one step at a time (ADR-008/009).
-- TypeSafe direct is the selected Jev provider for P1 (ADR-010).
-
-Later requirements: image or interpreted-data observations (ADR-012),
-app-window scope by default (ADR-013). Screenshot-led planning and optional
-Jev acceleration remain proposed in ADR-011; see the handoff for next work.
-
-## Constraints
-
-- Target: CachyOS (Arch-based), KDE Plasma 6, Wayland, single user (messhias).
-- Prefer reuse over invention; fork or wrap rather than rewrite.
-- Model output must never become coordinates, selectors, shell commands or executable code.
-- No tracked credentials. An ignored `.env` on `cachy` holds `JEV_API_KEY` for
-  TypeSafe direct, selected for P1 after the [P0 comparison](docs/05-open-questions.md#p0-observations--2026-09-29).
-- Never expose this over `tailscale funnel` (public, no identity headers).
-
-## Narrow P2 proof
-
-`p2_kcalc.py` runs the fixed task “enter digit 1” in an isolated KCalc session, asks the
-TypeSafe direct selector to choose from observed visible buttons, validates its answer in code,
-clicks the freshly re-read `One` button through `kwin-mcp`, and verifies the editable display
-changed exactly from blank to `1`. It is a one-action proof, not the state compiler or server.
-The [executed result and limits](docs/08-p2-kcalc-proof.md) are recorded separately.
-
-Run it on the KDE host with `JEV_API_KEY` exported or present in the ignored local `.env`:
-
-```sh
-uv run --with 'kwin-mcp==0.10.0' python p2_kcalc.py
+```bash
+uv run jev-desktop capabilities
+uv run jev-desktop session start kcalc
+uv run jev-desktop observe kcalc
+uv run jev-desktop candidates kcalc
+uv run jev-desktop session stop
+uv run jev-desktop stop --all
+uv run jev-desktop shutdown
 ```
 
-The append-only audit goes to `${XDG_STATE_HOME:-~/.local/state}/jev-desktop/audit.jsonl`.
-Focused parser and policy checks run with `python -m unittest test_p2_kcalc.py`.
+For an MCP host, run `uv run jev-desktop-mcp` in this checkout. It connects to
+that same local owner. Images are returned only when explicitly requested;
+model interpretation is disabled by default. See [doc 16](docs/16-local-owner-and-mcp.md)
+for actions, reader configuration and lifecycle limits.
+
+## Benchmarks and design
+
+- [Vision benchmark](docs/13-runnable-vision-benchmark.md): saved screenshots,
+  configurable DeepSeek/MiMo readers and earlier measured results.
+- [Dynamic wait baseline](docs/17-dynamic-wait-baseline.md): loading, error,
+  animation, no-change and outside-region dialog cases.
+- [Build plan](docs/14-app-build-plan.md): milestones and deferred decisions.
+- [Architecture and ADRs](docs/04-architecture.md): decisions and proposal history.
+- [Prior art](docs/02-prior-art.md): the projects we reuse.
+
+Credentials stay in ignored `.env`; captures, results and interrupted-run
+records stay in ignored `run/`. Neither is published. Testing is paused for
+this checkpoint; resume from the handoff before running the paid probe.

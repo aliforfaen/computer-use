@@ -25,7 +25,10 @@ class ReaderConfig:
     base_url: str = "https://api.deepseek.com"
     model: str = "deepseek-flash"
     key_env: str = "DEEPSEEK_API_KEY"
+    # timeout_seconds is the HTTP connect/read inactivity limit.
     timeout_seconds: float = 60.0
+    # The parser checks this monotonic wall deadline between stream lines.
+    total_timeout_seconds: float = 180.0
     max_tokens: int = 256
     max_response_chars: int = 64 * 1024
 
@@ -36,6 +39,8 @@ class ReaderConfig:
             raise ValueError("invalid_reader_configuration")
         if not math.isfinite(self.timeout_seconds) or not 0.1 <= self.timeout_seconds <= 180:
             raise ValueError("timeout_out_of_bounds")
+        if not math.isfinite(self.total_timeout_seconds) or not 0.1 <= self.total_timeout_seconds <= 180:
+            raise ValueError("total_timeout_out_of_bounds")
         if type(self.max_tokens) is not int or not 1 <= self.max_tokens <= 256:
             raise ValueError("max_tokens_out_of_bounds")
         if type(self.max_response_chars) is not int or not 1 <= self.max_response_chars <= 256 * 1024:
@@ -107,7 +112,8 @@ def _safe_usage(value: Any, depth: int = 0) -> Any:
     return None
 
 
-def parse_stream(response: Any, on_first_content=None, *, max_response_chars: int = 256 * 1024) -> tuple[str, dict[str, Any], str, str | None]:
+def parse_stream(response: Any, on_first_content=None, *, max_response_chars: int = 256 * 1024,
+                 deadline_monotonic: float | None = None, clock=time.monotonic) -> tuple[str, dict[str, Any], str, str | None]:
     """Parse OpenAI-compatible SSE once for both reader and benchmark callers."""
     fragments: list[str] = []
     usage: dict[str, Any] = {}
@@ -118,6 +124,8 @@ def parse_stream(response: Any, on_first_content=None, *, max_response_chars: in
     try:
         lines = response.iter_lines()
         for line in lines:
+            if deadline_monotonic is not None and clock() >= deadline_monotonic:
+                raise StreamParseError("stream_total_timeout")
             if not isinstance(line, str):
                 raise StreamParseError("malformed_stream_event")
             response_chars += len(line)
@@ -287,6 +295,7 @@ class VisionReader:
         body = build_request_body(image_bytes, prompt, provider=cfg.provider, model=cfg.model, max_tokens=cfg.max_tokens)
         url = cfg.base_url.rstrip("/") + "/chat/completions"
         started = time.perf_counter()
+        started_monotonic = time.monotonic()
         usage: dict[str, Any] = {}
         served_model: str | None = None
         finish_reason: str | None = None
@@ -296,7 +305,8 @@ class VisionReader:
                     return ReaderResult("error", error=f"http_status_{response.status_code}", provider=cfg.provider, model=cfg.model,
                                         latency_ms=round((time.perf_counter() - started) * 1000, 2))
                 answer_text, usage, finish_reason, served_model = parse_stream(
-                    response, max_response_chars=cfg.max_response_chars)
+                    response, max_response_chars=cfg.max_response_chars,
+                    deadline_monotonic=started_monotonic + cfg.total_timeout_seconds)
         except StreamParseError as exc:
             return ReaderResult("error", error=exc.code, provider=cfg.provider, model=cfg.model,
                                 served_model=served_model, usage=usage,
