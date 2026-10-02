@@ -69,7 +69,7 @@ virtual sessions and paid requests bounded and explicitly scoped.
 | M2 (implemented, virtual fixtures) | Grounded action transaction + disposable harness | Authorized and validated; doc 15 | A real Kate edit and local webpage action verified after every action; stale/disabled targets refused |
 | M3 (implemented and host-validated) | Single-owner virtual service + local CLI/MCP | M2 | CLI and stdio share the owner; verified fixture effects, competing-call refusal, cancellation and child-death cleanup checked; doc 16 |
 | M4a (implemented, local baseline) | Synthetic full-app wait fixture; screenshot polling vs. local pixel-diff watcher | M1–M2; [doc 17](17-dynamic-wait-baseline.md) | Corrected seed-17 run classified 10/10 fixture states; cleanup passed. No provider, Jev, OCR, primary agent or acceleration claim. |
-| M4b (paused; first run invalid) | Bounded DeepSeek heartbeat over real fixture captures | M4a; explicit under-$1 owner authorization on 2026-10-01 | Frozen code adds idle/total/watch deadlines, fsynced progress journaling and interrupt propagation. Independently review and test after owner resumes, before the probe's one configured follow-up request; doc 17 records unknown prior usage. No tests, probes or calls during the pause. |
+| M4b (implemented, reviewed and host-tested) | Bounded DeepSeek heartbeat over real fixture captures | M4a; under-$1 owner authorization on 2026-10-01 | 2026-10-02: frozen deadlines/journal/interrupt path reviewed, undefined reserve `NameError` fixed, 97 offline tests pass; the single configured follow-up returned one structured judgment (821 prompt / 8 completion tokens, 1.41 s, cleanup passed, $0.0002559 peak-upper). Prior interrupted run's charge unknown; reserve stands. Follow-up cap consumed. |
 | M5 | Live desktop support | M3; idle/focus probes; explicit owner live task | Explicit audited per-task live request; focus restored on success/error/cancel; recent physical input blocks entry; one live task |
 | M6 | Tailnet surface + real remote client | M3; deployment approval and peer availability | Loopback HTTP, preserved Serve routes, remote virtual task, truthful caller provenance and stop controls |
 
@@ -141,15 +141,17 @@ trip before calling remote support complete. Do not deploy during planning.
 M4a's local watcher and polling baseline are implemented. See [doc 17](17-dynamic-wait-baseline.md)
 for host evidence, the corrected error-color classifier and limits. It is a
 local pixel-difference primitive comparison, not evidence of saved model calls
-or faster end-to-end agent tasks. The first authorized DeepSeek heartbeat
-probe produced no usable result and lost exact attempt/usage counts after a
-comment-keepalive SSE stream and interrupt-handling failure. Fix and review its
-absolute deadline, flushed attempt journal and interrupt cleanup before the
-owner's one allowed follow-up request. OCR+Jev and primary-agent comparisons
-remain later arms.
+or faster end-to-end agent tasks. The first authorized DeepSeek heartbeat probe
+produced no usable result and lost exact attempt/usage counts after a
+comment-keepalive SSE stream and interrupt-handling failure. Its absolute
+deadline, flushed attempt journal and interrupt cleanup were fixed and reviewed
+on 2026-10-02, and the single allowed follow-up returned one valid judgment
+(1.41 s, 829 tokens, cleanup passed); the paid cap is now consumed. OCR+Jev and
+primary-agent comparisons remain later arms.
 
-For M4b, after the owner resumes, reuse the controlled page and full-app capture
-path. The owner authorized one bounded DeepSeek heartbeat probe under $1.
+For M4b, reuse the controlled page and full-app capture path. The owner
+authorized one bounded DeepSeek heartbeat probe under $1; the single allowed
+follow-up was made on 2026-10-02 and its cap is consumed.
 Record the real image bytes, request/response status, latency, usage and cleanup; count only calls
 actually sent, stop at the approved cap or on rate limits, and do not retry.
 Keep provider call cost separate from any estimated cost. No primary-agent
@@ -180,12 +182,11 @@ preceding work produces concrete options:
 4. **Remote deployment:** need an available remote client/peer and approval
    to change Serve configuration; preserve the existing route. No additional
    provider accounts are needed for the local baseline.
-5. **Paid comparison:** the owner authorized one DeepSeek heartbeat probe under
-   $1 on 2026-10-01. Keep that probe within its explicit cap; ask before any
-   broader provider comparison, OCR+Jev arm or end-to-end paid task comparison.
-   Frozen runner changes are not reviewed or retested. Work is paused now: do
-   not run tests, probes or provider calls until the owner resumes; the single
-   follow-up request is not currently cleared.
+5. **Paid comparison:** the owner authorized a bounded DeepSeek heartbeat probe
+   under $1 on 2026-10-01. The single configured follow-up was made on
+   2026-10-02 and its one-request cap is consumed. Ask before any broader
+   provider comparison, OCR+Jev arm or end-to-end paid task comparison. The
+   prior interrupted run's charge remains unknown; the reserve stands.
 
 ## Concerns and practical limits
 
@@ -208,7 +209,8 @@ preceding work produces concrete options:
 Read HANDOFF.md for current status, doc 13 for perception measurements, doc 15
 for M1–M2 evidence, [doc 16](16-local-owner-and-mcp.md) for the M3 local
 owner/CLI/MCP lifecycle, and [doc 17](17-dynamic-wait-baseline.md) for M4a.
-M3 host integration and the corrected M4a local baseline passed. M4b is paused
-until the owner resumes; do not run tests, host probes or provider calls during
-the pause. Planner/visual grounding, live desktop and tailnet deployment remain
-separate later gates; do not infer their support from the local virtual service.
+M3 host integration and the corrected M4a local baseline passed. M4b was
+reviewed, fixed and tested on 2026-10-02; its single configured follow-up
+returned one valid heartbeat and the paid cap is consumed. Planner/visual
+grounding, live desktop and tailnet deployment remain separate later gates; do
+not infer their support from the local virtual service.

@@ -50,6 +50,15 @@ MAX_COST_PER_CALL = (MAX_INPUT_TOKENS_PER_CALL * INPUT_USD_PER_MILLION
                      + MAX_TOKENS * OUTPUT_USD_PER_MILLION) / 1_000_000
 MAX_COST_RESERVE = MAX_CALLS * MAX_COST_PER_CALL
 
+# The first heartbeat run (2026-10-01) was interrupted by a comment-only SSE
+# stream. Its exact attempt count and token usage were never recorded, so the
+# frozen worst case for all 12 configured attempts is reserved as possibly
+# charged. This is a budget reserve, not observed billing.
+PRIOR_INTERRUPTED_RUN_ATTEMPTS = 12
+PRIOR_INTERRUPTED_RUN_RESERVE_USD = PRIOR_INTERRUPTED_RUN_ATTEMPTS * MAX_COST_PER_CALL
+# This follow-up run is authorized for exactly one provider attempt.
+FOLLOWUP_MAX_CALLS = 1
+
 TRIAL_CASES: tuple[dict[str, Any], ...] = (
     {"case": "ready", "state": "ready", "delay_ms": 0, "dialog_ms": 0, "noise": 0, "expected": "ready"},
     {"case": "error", "state": "error", "delay_ms": 650, "dialog_ms": 0, "noise": 0, "expected": "error"},
@@ -76,6 +85,8 @@ def validate_probe_budget(max_calls: int = MAX_CALLS, max_case_calls: int = MAX_
     reserve = max_calls * MAX_COST_PER_CALL
     if MAX_CALLS != len(TRIAL_CASES) * MAX_CASE_CALLS or MAX_TOKENS > 128 or reserve >= MAX_COST_USD:
         raise ProbeBudgetError("configured_cost_ceiling_invalid")
+    if PRIOR_INTERRUPTED_RUN_ATTEMPTS != MAX_CALLS:
+        raise ProbeBudgetError("prior_run_reserve_out_of_sync")
     return {"max_provider_attempts": max_calls, "max_attempts_per_case": max_case_calls,
             "max_tokens": MAX_TOKENS, "minimum_request_start_gap_seconds": MIN_REQUEST_GAP_SECONDS,
             "max_input_tokens_per_call": MAX_INPUT_TOKENS_PER_CALL,
@@ -359,7 +370,7 @@ def run(output: Path = OUT, *, seed: int = 41,
         server_factory: Callable[[], Any] | None = None) -> dict[str, Any]:
     # The first interrupted invocation reserves all 12 attempts. This follow-up
     # is limited to one provider call, keeping the session ceiling at 13 calls.
-    max_calls = max_case_calls = 1
+    max_calls = max_case_calls = FOLLOWUP_MAX_CALLS
     selected_cases = (TRIAL_CASES[0],)
     deadline_seconds = 40.0
     debounce_seconds = 0.0

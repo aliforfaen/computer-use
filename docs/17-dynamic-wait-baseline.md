@@ -33,8 +33,9 @@ At the M4a local-validation checkpoint, before the later paid-probe code and
 test additions, the full suite passed 77 tests. M4a tests cover supported
 reader schema, wake debounce, serialization/coalescing, deadlines/cancellation,
 whole-app capture, fixture events, the loading/ready/error palette and
-screenshot diff threshold at fixture geometry. Paid-probe changes are pending
-the next review; do not treat 77 as their validation count.
+screenshot diff threshold at fixture geometry. The paid-probe changes were
+reviewed, fixed and tested on 2026-10-02; the suite is now **97 tests** (see
+the M4b section below).
 
 Run the local no-provider comparison with:
 
@@ -99,21 +100,69 @@ validated result.
 At peak cache-miss prices and the local conservative per-attempt ceiling of
 $0.0017664, reserve all 12 possible attempts from that run ($0.0211968) as
 potentially charged; the actual charge is unknown. This is a budget reserve,
-not an observed bill. Further provider work is blocked until elapsed-stream
-timeouts, per-attempt progress journaling and interrupt propagation are tested.
-The coordinator configured at most one additional provider request, giving
-a conservative 13-attempt total reserve of $0.0229632. Any later usage report
-must show actual returned token usage when available and keep the interrupted
-request's charge explicitly unknown. The owner paused work for the evening;
-do not run tests, host probes, code reviews or provider calls until the owner
-resumes. The frozen runner has a 5-second idle timeout, 30-second total stream
-deadline and 40-second watch limit, plus fsynced pre-attempt/lifecycle
-journaling and KeyboardInterrupt propagation. These changes are not reviewed
-or retested; they are not cleared for the one follow-up request.
+not an observed bill. The coordinator configured at most one additional
+provider request, giving a conservative 13-attempt total reserve of
+$0.0229632. Any later usage report shows actual returned token usage when
+available and keeps the interrupted request's charge explicitly unknown.
+
+## M4b review, fixes and single follow-up (2026-10-02)
+
+The owner resumed on 2026-10-02 and the frozen runner was independently
+reviewed, tested and fixed:
+
+- **Bug fixed:** `run()` referenced an undefined
+  `PRIOR_INTERRUPTED_RUN_RESERVE_USD` and raised `NameError` at the end of every
+  non-blocked run. It is now a frozen constant derived from the 12-attempt
+  ceiling, so the prior-run reserve and the follow-up cap stay consistent.
+- **Bound hardened:** the read/idle timeout is passed per request, so an injected
+  shared client cannot extend a blocked transport read past this reader's
+  configuration. Total stream runtime is bounded by
+  `total_timeout_seconds + timeout_seconds` (30 s + 5 s = 35 s), inside the
+  40-second watch limit. A stream that delivers only comment keepalives still
+  hits the absolute 30-second deadline between lines; the finite overshoot is
+  at most one idle read.
+- **Interrupt path:** the reader and case runner catch `Exception`, not
+  `BaseException`, so `KeyboardInterrupt` propagates after the case's
+  session/profile cleanup. The pre-attempt record is fsynced before the provider
+  call and survives an interrupted attempt whose usage remains unknown.
+
+Nine offline tests were added, and `uv run python -m unittest discover -v`
+passed **97 tests**. New coverage: comment-only SSE total deadline, a stalled
+loopback read bounded by the read timeout, content arriving after the total
+deadline, interrupt propagation with no second provider request, fsynced
+pre-call journaling observed during the call, interrupted-run partial
+persistence, and owned-session/profile cleanup.
+
+The single configured follow-up request then ran with `max_calls = 1` on the
+`ready` fixture on cachy (KWin 6.7.5, `kwin-mcp` 0.10.0, Firefox 157.0,
+AT-SPI 2.60.7). The judge returned `ready`, matching the independent fixture
+event.
+
+| Field | Result |
+| --- | --- |
+| Status | `completed`; `acceptance_passed` true |
+| Provider / served model | deepseek / `deepseek-flash` |
+| Latency | 1,414 ms |
+| Returned usage | 821 prompt (0 cache-hit, 821 cache-miss) + 8 completion = 829 tokens |
+| Observed upper cost (peak cache-miss) | $0.0002559 |
+| Rate limited | No |
+| Session/profile cleanup | Passed (known driver broken-pipe warning only) |
+| Primary-agent turns/tokens | null / not measured |
+
+Cost accounting: the follow-up's $0.0002559 is a peak cache-miss upper bound
+from returned usage; it is the only observed provider charge in this
+checkpoint. The earlier interrupted run's charge is still unknown, so the
+whole-session reserve remains $0.0229632 (12 prior attempts at $0.0017664 each
+plus this one at $0.0017664). The follow-up cap is now consumed; no further
+provider request may be made without fresh authorization. The single
+successful judgment validates the heartbeat/transport path; it is not an
+acceleration or primary-agent comparison.
 
 Pricing and image-size assumptions are based on the [DeepSeek Vision guide](https://api-docs.deepseek.com/guides/vision/)
 and [official Models & Pricing page](https://api-docs.deepseek.com/quick_start/pricing/).
-Prices may change; the provider's returned usage is the source for observed
-token counts. This probe remains separate from the no-provider pixel-diff
-baseline. OCR+Jev and an end-to-end primary-agent comparison remain future
-work.
+Rechecked 2026-10-02: `deepseek-flash` cache-miss peak is $0.30/M input and
+$1.20/M output, and the image upper bound is 1,024 tokens, matching the frozen
+reserve. Prices may change; the provider's returned usage is the source for
+observed token counts. This probe remains separate from the no-provider
+pixel-diff baseline. OCR+Jev and an end-to-end primary-agent comparison remain
+future work.

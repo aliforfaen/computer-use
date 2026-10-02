@@ -1,24 +1,40 @@
 from __future__ import annotations
 
 import io
+import json
+import os
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from PIL import Image
 
+import wait_benchmark
 from vision_reader import ReaderResult
 from wait_watcher import ReaderJudge, WaitFrame, WaitSpec
 from vision_wait_probe import (
     BudgetedReader,
+    FOLLOWUP_MAX_CALLS,
     MAX_CASE_CALLS,
     MAX_CALLS,
+    MAX_COST_PER_CALL,
     MAX_COST_RESERVE,
     MAX_COST_USD,
     MAX_TOKENS,
     MIN_REQUEST_GAP_SECONDS,
+    PRIOR_INTERRUPTED_RUN_ATTEMPTS,
+    PRIOR_INTERRUPTED_RUN_RESERVE_USD,
     ProbeBudgetError,
+    TRIAL_CASES,
     estimate_cost_usd,
     validate_probe_budget,
 )
+
+
+QUESTIONS = [{"field": "judgment", "type": "string",
+              "description": "Return wait, wake, error, or unexpected."}]
 
 
 class FakeClock:
@@ -48,6 +64,14 @@ class FakeReader:
             return self.results.pop(0)
         return ReaderResult("ok", data={"judgment": "wait"}, provider="deepseek", model="deepseek-flash",
                             served_model="deepseek-flash", usage={"prompt_tokens": 50, "completion_tokens": 2})
+
+
+class InterruptingReader(FakeReader):
+    """Simulates SIGINT arriving during a blocking provider read."""
+
+    def interpret(self, image_bytes, questions):
+        self.calls.append((image_bytes, questions))
+        raise KeyboardInterrupt
 
 
 def png_bytes(width=64, height=48):
@@ -168,6 +192,179 @@ class VisionWaitProbeTests(unittest.TestCase):
         reader.interpret(png_bytes(), non_ascii)
         self.assertGreater(reader.attempts[0]["prompt_ascii_chars"], len("café"))
         self.assertEqual(len(inner.calls), 1)
+
+    def test_prior_interrupted_reserve_and_followup_cap_are_accounted(self):
+        self.assertEqual(PRIOR_INTERRUPTED_RUN_ATTEMPTS, 12)
+        self.assertEqual(PRIOR_INTERRUPTED_RUN_ATTEMPTS, MAX_CALLS)
+        self.assertAlmostEqual(PRIOR_INTERRUPTED_RUN_RESERVE_USD, MAX_COST_RESERVE, places=9)
+        self.assertAlmostEqual(PRIOR_INTERRUPTED_RUN_RESERVE_USD, 0.0211968, places=7)
+        budget = validate_probe_budget(FOLLOWUP_MAX_CALLS, FOLLOWUP_MAX_CALLS)
+        whole = PRIOR_INTERRUPTED_RUN_RESERVE_USD + budget["max_total_reserved_cost_usd"]
+        self.assertAlmostEqual(whole, 0.0229632, places=7)
+        self.assertLess(whole, MAX_COST_USD)
+
+    def test_interrupt_propagates_without_an_extra_provider_request(self):
+        inner = InterruptingReader()
+        events = []
+        reader = BudgetedReader(inner, on_attempt_event=lambda event, payload: events.append(event))
+        reader.begin_case("ready")
+        with self.assertRaises(KeyboardInterrupt):
+            reader.interpret(png_bytes(), QUESTIONS)
+        self.assertEqual(len(inner.calls), 1)
+        self.assertEqual(events, ["attempt_started"])
+        self.assertEqual(len(reader.attempts), 1)
+        self.assertEqual(reader.attempts[0]["status"], "in_flight")
+
+    def test_pre_call_journal_is_durable_before_the_provider_call(self):
+        tmp = Path(tempfile.mkdtemp())
+        journal = tmp / "progress.jsonl"
+        observed = {}
+
+        def on_event(event, payload):
+            with journal.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps({"event": event, **payload}, sort_keys=True) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+
+        class WatchingReader:
+            def capabilities(self):
+                return {"images": True}
+
+            def interpret(self, image_bytes, questions):
+                observed["journal_at_call"] = journal.read_text(encoding="utf-8")
+                return ReaderResult("ok", data={"judgment": "wait"}, provider="deepseek", model="deepseek-flash")
+
+        try:
+            clock = FakeClock()
+            reader = BudgetedReader(WatchingReader(), clock=clock, sleeper=clock.sleep, on_attempt_event=on_event)
+            reader.begin_case("ready")
+            reader.interpret(png_bytes(), QUESTIONS)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertIn('"attempt_started"', observed["journal_at_call"])
+
+    def test_interrupted_case_stops_owned_session_and_removes_profile(self):
+        import kwin_mcp.core as kwin_core
+        import vision_wait_probe as probe
+
+        engines = []
+        profiles = []
+
+        class FakeEngine:
+            def __init__(self):
+                self.stop_calls = 0
+                engines.append(self)
+
+            def session_start(self, **kwargs):
+                return "Input backend: KWin EIS\nSession started"
+
+            def session_stop(self):
+                self.stop_calls += 1
+                return "Session stopped"
+
+        class FakeAdapter:
+            def __init__(self, engine, trial, allowed_apps):
+                self.trial = trial
+
+            def capture(self, app, *, title, scope):
+                return type("Ref", (), {"capture_id": "cap-1"})()
+
+            def observe(self, ref, *, mode):
+                return type("Obs", (), {"image": png_bytes()})()
+
+        class FakeServer:
+            server_port = 9
+
+            def snapshot(self, trial):
+                return []
+
+        def fake_mkdtemp(prefix):
+            path = Path(real_mkdtemp(prefix=prefix))
+            profiles.append(path)
+            return str(path)
+
+        inner = InterruptingReader()
+        events = []
+        budget_reader = BudgetedReader(inner, on_attempt_event=lambda event, payload: events.append(event))
+        scratch = Path(tempfile.mkdtemp())
+        real_mkdtemp = tempfile.mkdtemp
+        try:
+            with mock.patch.object(kwin_core, "AutomationEngine", FakeEngine), \
+                 mock.patch.object(probe, "ObservationAdapter", FakeAdapter), \
+                 mock.patch.object(wait_benchmark, "_url", lambda server, case, trial: "http://127.0.0.1/x"), \
+                 mock.patch.object(wait_benchmark, "_wait_loaded", lambda server, trial: 0.0), \
+                 mock.patch.object(wait_benchmark, "_status_tone", lambda payload: "loading"), \
+                 mock.patch.object(probe, "_post_arm", lambda port, trial: None), \
+                 mock.patch.object(probe.tempfile, "mkdtemp", fake_mkdtemp):
+                with self.assertRaises(KeyboardInterrupt):
+                    probe._run_case(FakeServer(), dict(TRIAL_CASES[0]), scratch, budget_reader,
+                                    deadline_seconds=1.0, debounce_seconds=0.0)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        self.assertEqual(engines[0].stop_calls, 1)
+        self.assertTrue(profiles and not profiles[0].exists())
+        self.assertEqual(events, ["attempt_started"])
+        self.assertEqual(len(inner.calls), 1)
+        self.assertEqual(budget_reader.attempts[0]["status"], "in_flight")
+
+    def test_interrupted_run_persists_pre_call_journal_and_does_not_retry(self):
+        import vision_wait_probe as probe
+
+        tmp = Path(tempfile.mkdtemp())
+        observed = {}
+        calls = []
+
+        class RunInterruptingReader:
+            def capabilities(self):
+                return {"images": True}
+
+            def interpret(self, image_bytes, questions):
+                calls.append("call")
+                observed["journal_at_call"] = (tmp / "progress.jsonl").read_text(encoding="utf-8")
+                raise KeyboardInterrupt
+
+            def close(self):
+                calls.append("closed")
+
+        class FakeServer:
+            server_port = 7
+
+            def start(self):
+                pass
+
+            def shutdown(self):
+                pass
+
+            def server_close(self):
+                pass
+
+            def snapshot(self, trial):
+                return []
+
+        def fake_run_case(server, case, output, budget_reader, *, deadline_seconds, debounce_seconds,
+                          on_case_event=None):
+            budget_reader.begin_case(case["case"])
+            if on_case_event is not None:
+                on_case_event("case_started", {"case": case["case"]})
+            budget_reader.interpret(png_bytes(), QUESTIONS)
+            return {}
+
+        with mock.patch.object(probe, "_run_case", fake_run_case), \
+             mock.patch.object(wait_benchmark, "_versions", lambda: {"kwin": "test"}):
+            result = probe.run(tmp, reader_factory=lambda: RunInterruptingReader(), server_factory=FakeServer)
+        journal_text = Path(result["progress_journal"]).read_text(encoding="utf-8")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(result["paid_provider_attempts"], 1)
+        self.assertEqual(calls.count("call"), 1)
+        self.assertEqual(calls.count("closed"), 1)
+        self.assertIn("attempt_started", observed["journal_at_call"])
+        self.assertIn("run_interrupted", journal_text)
+        self.assertEqual(result["attempts_with_unreported_usage"], 1)
+        self.assertFalse(result["execution_completed"])
+        self.assertAlmostEqual(result["budget"]["prior_interrupted_run_reserve_usd"],
+                               PRIOR_INTERRUPTED_RUN_RESERVE_USD, places=9)
 
 
 if __name__ == "__main__":

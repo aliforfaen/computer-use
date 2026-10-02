@@ -1,11 +1,12 @@
 # HANDOFF — start here for a fresh session
 
-**Updated 2026-10-01.** Repo: `/home/messhias/lamasync/projects/computer-use`.
-Branch: `main`. GitHub/origin:
-[aliforfaen/computer-use](https://github.com/aliforfaen/computer-use).
-This is the published evening checkpoint. Testing is paused until the owner
-resumes; the latest vision timeout/journal fixes still need review and tests.
-Read `AGENTS.md`, this file, [the virtual slice](15-virtual-session-slice.md),
+**Updated 2026-10-02.** Repo: `/home/messhias/lamasync/projects/computer-use`.
+Branch: `main`; this checkpoint commits on top of `6e23448`. GitHub/origin
+[aliforfaen/computer-use](https://github.com/aliforfaen/computer-use) is
+connected and pushed; no push or deploy is pending. Owner work resumed on
+2026-10-02. The M4b timeout/journal/interrupt changes were reviewed, fixed and
+covered by offline tests, then the probe's single configured follow-up request
+completed. Read `AGENTS.md`, this file, [the virtual slice](15-virtual-session-slice.md),
 then [the local owner surface](16-local-owner-and-mcp.md).
 
 ## Current state
@@ -40,28 +41,47 @@ trials; a grayscale threshold correction fixed the issue, and a separate
 two-arm recheck plus corrected full run passed. This is local pixel-diff only,
 not a model or primary-agent comparison. See [doc 17](17-dynamic-wait-baseline.md).
 
-**M4b paid probe status:** the first DeepSeek heartbeat run was interrupted by
-a comment-only SSE stream that exceeded four minutes. Its old runner did not
-persist attempt progress and swallowed the first interrupt; exact attempt
-count and actual usage are unknown. Cleanup of the remaining owned process and
-virtual session was confirmed. No usable paid result exists. Reserve the full
-12-attempt worst-case estimate ($0.0211968) as possibly charged. Do not make
-another provider call until the elapsed stream deadline, progress journal and
-interrupt path are independently reviewed and tested after the owner resumes.
-The frozen code now has 5-second idle, 30-second total stream and 40-second
-watch deadlines, an fsynced pre-attempt/lifecycle journal and interrupt
-propagation, but these changes have not been reviewed or retested. The probe is
-configured for at most one follow-up request. No tests, probes or paid calls
-are authorized during the current pause. See doc 17 for cost accounting and
-evidence limits.
+**M4b paid probe status:** the first DeepSeek heartbeat run (2026-10-01) was
+interrupted by a comment-only SSE stream that exceeded four minutes; its old
+runner swallowed the first interrupt and lost exact attempt/usage counts.
+Cleanup was confirmed. Reserve the full 12-attempt worst-case estimate
+($0.0211968) as possibly charged; that amount is not observed billing. On
+2026-10-02 the frozen 5-second idle, 30-second total stream and 40-second watch
+deadlines, fsynced pre-attempt/lifecycle journal and interrupt propagation were
+independently reviewed and fixed (an undefined prior-run reserve constant made
+`run()` raise `NameError`), and nine new offline tests cover comment-only SSE,
+stalled reads, late content, interrupt propagation, pre-call journaling,
+partial persistence and owned-session/profile cleanup. The one configured
+follow-up request then completed: one `deepseek-flash` judgment, returned usage
+821 prompt / 8 completion tokens, 1.41 s, no rate limit, cleanup passed, and a
+peak cache-miss upper bound of $0.0002559. The follow-up cap is now consumed;
+do not make another provider request without fresh authorization. See doc 17
+for detail and evidence limits.
 
-## First work after the owner resumes
+## Current work and next steps
 
-1. Review and test the frozen stream timeout, progress journal and interrupt path.
-2. If those pass and the owner still wants it, decide whether to use the one
-   configured follow-up provider request; otherwise preserve the no-result status.
-3. Root owns the pending documentation/code commit and push to the configured
-   empty GitHub remote.
+Completed 2026-10-02:
+
+1. Reviewed the frozen stream timeout, progress journal and interrupt path;
+   fixed the undefined prior-run reserve constant and hardened the per-request
+   read bound. The offline suite is **97 tests, all passing**.
+2. Ran the single configured DeepSeek follow-up request; it returned one valid
+   structured judgment and confirmed cleanup. The paid cap is consumed.
+3. Corrected the stale HANDOFF claim that the initial remote connection/push
+   was pending (it was already done).
+
+Next work remains gated:
+
+1. **Planner contract / action grounding:** resolve ADR-011 and visual
+   grounding before broad task execution. Current transactions support unique
+   mapped semantic AT-SPI targets, not arbitrary screenshot coordinates.
+2. **Live and tailnet (M5/M6):** idle/focus measurements, explicit live tasks,
+   cancellation/error restoration, preserved Serve routes and real remote
+   caller tests. Do not change Serve configuration without approval.
+3. **OCR+Jev and end-to-end primary-agent comparison:** later arms; they need
+   fresh authorization and must count primary turns/tokens and every backend
+   request. Do not infer acceleration from the M4a pixel-diff baseline or the
+   single M4b heartbeat.
 
 The owner-supported direction is a screenshot-driven computer-use terminal
 for local and tailnet agents, using `kwin-mcp` for sessions, capture and input.
@@ -222,12 +242,12 @@ limits.
 
 ## Recommended next work
 
-1. **M4 reader heartbeat (paused):** after the owner resumes work, independently
-   review and test the frozen stream deadline, flushed progress journal and
-   interrupt handling before its one configured follow-up request (see doc 17).
-   No tests or requests during this pause. Keep provider measurements separate
+1. **M4 reader heartbeat (done for this checkpoint):** the frozen stream
+   deadline, flushed progress journal and interrupt handling were reviewed,
+   tested and used for the single configured follow-up request, which returned
+   one valid judgment. Its cap is consumed. Keep provider measurements separate
    from the completed local pixel-diff baseline. OCR+Jev and end-to-end
-   primary-agent comparisons remain later work.
+   primary-agent comparisons remain later work and need fresh authorization.
 2. **Planner contract:** resolve ADR-011 and visual grounding before broad task
    execution. Current transactions support unique mapped semantic targets,
    not arbitrary screenshot coordinates from a model. Task-specific verifiers
@@ -239,6 +259,8 @@ limits.
    effects and recovery exits, with Jev as an optional bounded selector.
 
 M1–M3 local virtual implementation was authorized. Do not ask for that
-approval again. The M3 integration probe passed. Planner, live tasks and
-remote deployment remain later gates in doc 14; no Serve configuration was
-changed. No paid provider calls are needed for the M3 host probe.
+approval again. The M3 integration probe passed. M4b was reviewed, fixed,
+tested and its single follow-up request completed on 2026-10-02; that paid cap
+is consumed. Planner, live tasks and remote deployment remain later gates in
+doc 14; no Serve configuration was changed. No paid provider calls are needed
+for the local host probes.

@@ -4,12 +4,15 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**2026-10-01: M1–M3 are implemented and host-validated; M4a local dynamic wait
-is implemented and host-validated.** CLI/MCP share a virtual session; KCalc,
-Kate and Firefox effects and cleanup passed. The no-provider M4a baseline
-classified ten polling/watcher fixture outcomes with cleanup; it does not
-establish acceleration. There is no remote HTTP surface, live desktop mode or
-general planner. Start with `docs/HANDOFF.md`, `docs/17-dynamic-wait-baseline.md`,
+**2026-10-02: M1–M4a are implemented and host-validated; the M4b DeepSeek
+heartbeat was reviewed, fixed, tested and completed one bounded follow-up
+request.** CLI/MCP share a virtual session; KCalc, Kate and Firefox effects and
+cleanup passed. The no-provider M4a baseline classified ten polling/watcher
+fixture outcomes with cleanup; it does not establish acceleration. The M4b
+follow-up returned one `deepseek-flash` structured judgment in 1.41 s with
+reported usage, no rate limit and confirmed session/profile cleanup. There is
+no remote HTTP surface, live desktop mode or general planner. Start with
+`docs/HANDOFF.md`, `docs/17-dynamic-wait-baseline.md`,
 `docs/15-virtual-session-slice.md` and `docs/16-local-owner-and-mcp.md`.
 
 The current owner-supported direction is screenshot-driven computer use over
@@ -17,24 +20,18 @@ The current owner-supported direction is screenshot-driven computer use over
 ADR-012 requires images or interpreted data, and ADR-013 makes app capture
 the default. DeepSeek Flash is the provisional reader; MiMo is configurable.
 
-The owner explicitly authorized benchmark implementation and DeepSeek/MiMo
-tests, then approved launch of the M1–M2 observation and verified virtual-task
-slice on 2026-10-01 (doc 14). That slice may proceed without further approval.
-The owner authorized continuing with M3 local owner/CLI/MCP implementation on
-2026-10-01. That local virtual slice may proceed without further approval.
-The owner then authorized one bounded DeepSeek heartbeat probe under $1 on
-2026-10-01; keep it within its explicit attempt/cost limits and do not infer
-additional paid scope. The first run has no usable result and unknown exact
-usage; see `docs/17-dynamic-wait-baseline.md`. Frozen code now includes bounded
-idle/total/watch deadlines, fsynced pre-attempt and lifecycle journaling, and
-interrupt propagation; these changes have not been reviewed or retested. Do not
-make another provider request until they pass review and tests after the owner
-resumes work. The probe is configured for at most one follow-up request. The
-owner paused work for the evening: do not run tests, host
-probes, code reviews or provider calls until the owner resumes. General
-planning, tailnet deployment and live tasks remain later gates; do not repeat
-authorization questions for M1–M3. Remaining P0 measurements are in
-`docs/05-open-questions.md`, not the entire next-work plan.
+The owner authorized benchmark implementation, the M1–M2 observation and
+verified virtual-task slice, the M3 local owner/CLI/MCP implementation, and one
+bounded DeepSeek heartbeat probe under $1 (all 2026-10-01). Those local virtual
+slices may proceed without further approval. On 2026-10-02 the owner resumed
+work; the frozen M4b timeout/journal/interrupt changes were independently
+reviewed and covered by nine new offline tests (97 total, all passing), and the
+probe's single configured follow-up request was then made and completed. That
+follow-up cap is now consumed: do not make another provider request without a
+fresh, explicit authorization. General planning, tailnet deployment and live
+tasks remain later gates; do not repeat authorization questions for M1–M3.
+Remaining P0 measurements are in `docs/05-open-questions.md`, not the entire
+next-work plan.
 
 ## Owner context
 

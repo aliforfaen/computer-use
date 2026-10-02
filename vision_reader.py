@@ -2,6 +2,13 @@
 
 The module deliberately returns only structured, safe error codes. It never
 logs request bodies, credentials, screenshots, or extracted text.
+
+Stream runtime is bounded by ``total_timeout_seconds`` checked between stream
+lines. A transport read blocked at that deadline is bounded by
+``timeout_seconds`` (the HTTP read/idle timeout, passed per request so an
+injected client cannot extend it). Worst-case stream runtime is therefore
+``total_timeout_seconds + timeout_seconds``; the probe configures 30 s + 5 s
+inside a 40 s watch deadline.
 """
 
 from __future__ import annotations
@@ -25,9 +32,12 @@ class ReaderConfig:
     base_url: str = "https://api.deepseek.com"
     model: str = "deepseek-flash"
     key_env: str = "DEEPSEEK_API_KEY"
-    # timeout_seconds is the HTTP connect/read inactivity limit.
+    # timeout_seconds is the HTTP connect/read inactivity limit. A blocked
+    # transport read is bounded by this value.
     timeout_seconds: float = 60.0
-    # The parser checks this monotonic wall deadline between stream lines.
+    # The parser checks this monotonic wall deadline between stream lines, so
+    # worst-case bounded runtime is total_timeout_seconds + timeout_seconds
+    # (one blocked read that began just before the deadline).
     total_timeout_seconds: float = 180.0
     max_tokens: int = 256
     max_response_chars: int = 64 * 1024
@@ -267,11 +277,17 @@ class VisionReader:
             "streaming": True,
         }
 
+    def _timeout(self) -> Any:
+        # Passed per request so an injected shared client cannot silently
+        # extend the bounded read/idle wait past this reader's configuration.
+        return httpx.Timeout(self.config.timeout_seconds,
+                             connect=min(15.0, self.config.timeout_seconds))
+
     def _http_client(self) -> Any:
         if httpx is None:
             raise RuntimeError("httpx_unavailable")
         if self._client is None:
-            self._client = httpx.Client(timeout=httpx.Timeout(self.config.timeout_seconds, connect=min(15.0, self.config.timeout_seconds)))
+            self._client = httpx.Client(timeout=self._timeout())
         return self._client
 
     def close(self) -> None:
@@ -300,7 +316,8 @@ class VisionReader:
         served_model: str | None = None
         finish_reason: str | None = None
         try:
-            with self._http_client().stream("POST", url, headers={"Authorization": f"Bearer {api_key}"}, json=body) as response:
+            with self._http_client().stream("POST", url, headers={"Authorization": f"Bearer {api_key}"}, json=body,
+                                            timeout=self._timeout()) as response:
                 if response.status_code < 200 or response.status_code >= 300:
                     return ReaderResult("error", error=f"http_status_{response.status_code}", provider=cfg.provider, model=cfg.model,
                                         latency_ms=round((time.perf_counter() - started) * 1000, 2))

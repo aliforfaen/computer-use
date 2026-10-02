@@ -2,12 +2,50 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 
-from vision_reader import ReaderConfig, VisionReader, build_request_body, parse_stream
+from vision_reader import ReaderConfig, StreamParseError, VisionReader, build_request_body, parse_stream
 import vision_benchmark as vb
+
+
+class _SseTestServer:
+    """Minimal loopback SSE server used to exercise real transport timeouts."""
+
+    def __init__(self, script):
+        self._script = script
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                if length:
+                    self.rfile.read(length)
+                try:
+                    outer._script(self)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.httpd.block_on_close = False
+        self.thread = threading.Thread(target=self.httpd.serve_forever, name="sse-test-http", daemon=True)
+        self.thread.start()
+
+    @property
+    def base_url(self):
+        return f"http://127.0.0.1:{self.httpd.server_address[1]}"
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.thread.join(timeout=3)
 
 
 def sse_response(content: str, *, finish_reason="stop", done=True):
@@ -142,6 +180,93 @@ class VisionReaderTests(unittest.TestCase):
         finally:
             client.close()
         self.assertEqual(result.error, "response_too_large")
+
+    def test_comment_only_lines_with_fake_clock_exceed_total_deadline(self):
+        now = [0.0]
+
+        class CommentResponse:
+            def iter_lines(self):
+                yield ": keep-alive"
+                now[0] = 5.0
+                yield ": keep-alive"
+
+        with self.assertRaisesRegex(StreamParseError, "stream_total_timeout"):
+            parse_stream(CommentResponse(), deadline_monotonic=1.0, clock=lambda: now[0])
+
+    def _sse_reader(self, base_url, *, timeout_seconds, total_timeout_seconds):
+        # trust_env=False keeps the loopback test hermetic; the per-request
+        # timeout override makes the configured read bound authoritative.
+        client = httpx.Client(timeout=httpx.Timeout(timeout_seconds), trust_env=False)
+        reader = VisionReader(ReaderConfig(base_url=base_url, key_env="TEST_VISION_KEY",
+                                           timeout_seconds=timeout_seconds,
+                                           total_timeout_seconds=total_timeout_seconds), client=client)
+        return reader, client
+
+    def test_comment_only_keepalive_is_cut_by_total_deadline(self):
+        stop = threading.Event()
+
+        def script(handler):
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.end_headers()
+            while not stop.is_set():
+                handler.wfile.write(b": keep-alive\n\n")
+                handler.wfile.flush()
+                time.sleep(0.03)
+
+        server = _SseTestServer(script)
+        reader, client = self._sse_reader(server.base_url, timeout_seconds=1.0, total_timeout_seconds=0.4)
+        try:
+            result = reader.interpret(b"image", self.questions)
+        finally:
+            stop.set()
+            client.close()
+            server.close()
+        self.assertEqual(result.error, "stream_total_timeout")
+        # Total deadline plus at most one bounded read, with scheduling margin.
+        self.assertLess(result.latency_ms, 1800.0)
+
+    def test_stalled_transport_read_is_bounded_by_read_timeout(self):
+        def script(handler):
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.end_headers()
+            handler.wfile.write(b": keep-alive\n\n")
+            handler.wfile.flush()
+            time.sleep(2.0)
+
+        server = _SseTestServer(script)
+        reader, client = self._sse_reader(server.base_url, timeout_seconds=0.3, total_timeout_seconds=5.0)
+        try:
+            result = reader.interpret(b"image", self.questions)
+        finally:
+            client.close()
+            server.close()
+        self.assertEqual(result.error, "request_timeout")
+        # Bounded by the configured read timeout, not the stall length.
+        self.assertLess(result.latency_ms, 1500.0)
+
+    def test_content_arriving_after_total_deadline_is_rejected(self):
+        def script(handler):
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.end_headers()
+            handler.wfile.write(b": keep-alive\n\n")
+            handler.wfile.flush()
+            time.sleep(0.6)
+            handler.wfile.write(b'data: {"model":"late","choices":[{"delta":{"content":"{\\"value\\":\\"1\\"}"},"finish_reason":"stop"}]}\n\n')
+            handler.wfile.write(b"data: [DONE]\n\n")
+            handler.wfile.flush()
+
+        server = _SseTestServer(script)
+        reader, client = self._sse_reader(server.base_url, timeout_seconds=5.0, total_timeout_seconds=0.3)
+        try:
+            result = reader.interpret(b"image", self.questions)
+        finally:
+            client.close()
+            server.close()
+        self.assertEqual(result.error, "stream_total_timeout")
+        self.assertLess(result.latency_ms, 1800.0)
 
 
 if __name__ == "__main__":

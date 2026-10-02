@@ -8,16 +8,18 @@ client. Jev is an optional future accelerator.
 
 - **Working:** disposable virtual Kate, Firefox and KCalc sessions; app screenshots;
   verified actions; one shared local owner; cancellation and crash recovery.
-- **Local wait baseline:** 10/10 fixture outcomes passed, with cleanup. The full
-  suite passed 77 tests at that checkpoint. This is a local pixel-difference test,
-  not evidence of model or agent speed gains.
-- **Paused for tomorrow:** the DeepSeek heartbeat test stalled and was stopped.
-  Its charged usage is unknown; the conservative first-batch allowance was
-  about **$0.022**. Timeout, interrupt and progress-recording fixes need review.
+- **Local wait baseline (M4a):** 10/10 fixture outcomes passed with cleanup, one
+  trial per case/arm. This is a local pixel-difference test, not evidence of model
+  or agent speed gains. Full suite is now 97 tests, all passing.
+- **Vision heartbeat (M4b):** the timeout/journal/interrupt changes were reviewed,
+  fixed and tested on 2026-10-02. The single configured DeepSeek follow-up returned
+  one valid structured judgment in 1.41 s (821 prompt / 8 completion tokens,
+  cleanup passed, $0.0002559 peak-upper). The earlier interrupted run's charge is
+  still unknown; the conservative whole-session reserve is $0.0229632.
 - **Later:** general planning, live desktop operation, tailnet deployment and Jev
   acceleration. These are not implemented in this release.
 
-Start tomorrow with [the handoff](docs/HANDOFF.md). Detailed results and limits:
+Start with [the handoff](docs/HANDOFF.md). Detailed results and limits:
 [local service](docs/16-local-owner-and-mcp.md) · [wait baseline](docs/17-dynamic-wait-baseline.md).
 
 ## Local quick start
@@ -58,5 +60,6 @@ for actions, reader configuration and lifecycle limits.
 - [Prior art](docs/02-prior-art.md): the projects we reuse.
 
 Credentials stay in ignored `.env`; captures, results and interrupted-run
-records stay in ignored `run/`. Neither is published. Testing is paused for
-this checkpoint; resume from the handoff before running the paid probe.
+records stay in ignored `run/`. Neither is published. The single M4b follow-up
+request has been made and its cap is consumed; do not make further provider
+requests without fresh authorization.
