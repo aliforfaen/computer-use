@@ -4,6 +4,19 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
+**Latest local work (2026-10-02):** the owner authorized smarter session
+budgets, automatic abandoned-app cleanup, persistent Kate document handling,
+a useful Luna acceptance task with timing evidence, and a subsequent visible
+physical-desktop smoke test. The virtual acceptance passed (Firefox briefing,
+Kate draft/save/revise/save, both cleanups). Defaults are 180 s inactivity,
+1800 s total lifetime, 64 actions and 256 reads. Read doc 21 for current
+contracts and evidence; the local owner remains virtual-only. A standalone
+owner-present live probe is separately scoped; no tailnet deployment is
+included. The supported daemon currently refuses paid reader setup until it
+can reserve a reliable USD upper bound. Its $1 project-provider ceiling does
+not meter external Codex inference. No new project-provider calls were made.
+
+
 **2026-10-02: M1–M4a are implemented and host-validated; the M4b DeepSeek
 heartbeat was reviewed, fixed, tested and completed one bounded follow-up
 request.** CLI/MCP share a virtual session; KCalc, Kate and Firefox effects and

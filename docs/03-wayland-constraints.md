@@ -104,3 +104,13 @@ Canvas/games/GPU surfaces, DRM-protected content, nested/remote sessions, drag-a
 apps, file pickers that use portal dialogs, apps with no accessibility implementation at all
 (some Electron builds, custom toolkits, TUI apps pretending to be windows), multi-monitor
 HiDPI coordinate translation, and anything requiring text entry into a terminal.
+
+## Physical display probe — 2026-10-02
+
+The owner-present fixed KCalc probe passed on KWin 6.7.5 / kwin-mcp 0.10.0:
+KWin EIS fresh semantic input verified blank → `1`, exact original focus
+restored, owned app closed. App capture used the driver's Spectacle backend
+on a 2560×1440 scale-1, origin-(0,0) display; app crops were 355×554. Both
+accessibility flags were temporarily enabled and restored to their original
+false values. This is evidence for that layout/fallback, not other layouts or
+an implemented physical-input idle detector. See [doc 22](22-live-desktop-smoke.md).

@@ -50,11 +50,11 @@ def _tools() -> list[types.Tool]:
         }, ["app"]), True, False),
         ("desktop_act", "Perform one grounded click or text action and return verification evidence. Use only code-owned verifier kinds.", _obj({
             "app": app,
-            "action": _string(enum=["click", "type_text"]),
+            "action": _string(enum=["click", "type_text", "replace_document", "save_document"]),
             "target_ref": _string("Fresh candidate reference from desktop_candidates."),
-            "verification": _string(enum=["target_focused", "target_text", "fixture_state", "display_text"]),
-            "expected": {"type": "string", "maxLength": 20000},
-            "text": {"type": "string", "maxLength": 4096, "description": "Text to type into a verified accessible editor; never included in audit or reader context."},
+            "verification": _string(enum=["target_focused", "target_text", "fixture_state", "display_text", "document_saved"]),
+            "expected": {"type": "string", "maxLength": 4096},
+            "text": {"type": "string", "maxLength": 4096, "description": "Text for a verified accessible editor. replace_document is Kate-only and edits only the current focused editor in its owner-generated task document. Text is never included in audit or reader context."},
         }, ["app", "action", "target_ref", "verification"]), False, True),
         ("desktop_cancel", "Cancel current work for a session, or the current owner task.", _obj({"session_id": session}), False, False),
         ("desktop_stop_all", "Stop all active sessions and work.", _obj(), False, True),
@@ -128,9 +128,9 @@ def _build_server(socket_path: Path | None = None) -> Server:
         method_params = dict(args)
         if name == "desktop_act":
             action = method_params.get("action")
-            if action == "type_text" and not isinstance(method_params.get("text"), str):
+            if action in {"type_text", "replace_document"} and not isinstance(method_params.get("text"), str):
                 return types.CallToolResult(content=[types.TextContent(type="text", text="text_required_for_type_text")], isError=True)
-            if action == "click" and "text" in method_params:
+            if action in {"click", "save_document"} and "text" in method_params:
                 return types.CallToolResult(content=[types.TextContent(type="text", text="text_not_valid_for_click")], isError=True)
         try:
             result = await anyio.to_thread.run_sync(

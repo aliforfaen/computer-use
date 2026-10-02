@@ -14,11 +14,15 @@ class FakeBackend:
     def __init__(self):
         self.tree = []
         self.identity = "17"
+        self.app = "kate"
         self.is_active = True
         self.clicks = []
         self.typed = []
         self.on_click = None
         self.on_type = None
+        self.document_keys = []
+        self.saved_bytes = b""
+        self.on_document_key = None
         self.block_click = None
         self.release_click = threading.Event()
 
@@ -26,14 +30,18 @@ class FakeBackend:
         return [dict(row) for row in self.tree]
 
     def window_geometry(self, app):
+        window_app = {"kate": "org.kde.kate", "firefox": "org.mozilla.firefox",
+                      "kcalc": "org.kde.kcalc"}.get(self.app, self.app)
         return (
-            f'Windows (1):\n- org.kde.{app} "document"\n    id: {self.identity}\n'
+            f'Windows (1):\n- {window_app} "document"\n    id: {self.identity}\n'
             "    frame: 0, 0, 640x400\n    client: (0, 0, 640x400)"
         )
 
     def active_window(self):
         marker = " [active]" if self.is_active else ""
-        return f'Active window:\n- org.kde.kate "document"{marker}\n    id: {self.identity}'
+        window_app = {"kate": "org.kde.kate", "firefox": "org.mozilla.firefox",
+                      "kcalc": "org.kde.kcalc"}.get(self.app, self.app)
+        return f'Active window:\n- {window_app} "document"{marker}\n    id: {self.identity}'
 
     def mouse_click(self, x, y, button="left"):
         self.clicks.append((x, y, button))
@@ -47,6 +55,17 @@ class FakeBackend:
         self.typed.append(text)
         if self.on_type:
             self.on_type(text)
+
+    def document_key(self, operation):
+        self.document_keys.append(operation)
+        if self.on_document_key:
+            self.on_document_key(operation)
+        if operation == "save":
+            current = self.tree[0].get("text", "") if self.tree else ""
+            self.saved_bytes = current.encode("utf-8")
+
+    def document_bytes(self):
+        return self.saved_bytes
 
 
 def button(*, states=None, name="Apply", x=10, actions=("Press",)):
@@ -215,6 +234,86 @@ class TransactionTests(unittest.TestCase):
         records = [json.loads(line) for line in output.splitlines()]
         self.assertTrue(all(record["jev_answers"] is None for record in records))
         self.assertTrue(all("typed_text" not in record for record in records))
+
+    def test_replace_document_revises_focused_editor_and_verifies_exact_text(self):
+        content = "Project handover\nSaved through Kate."
+        self.backend.tree = [editor(text="Original handover", focused=True)]
+        snap = self.engine.observe("s-test", "kate")
+        self.backend.on_type = lambda value: setattr(
+            self.backend, "tree", [editor(text=value, focused=True)])
+        result = self.engine.act(
+            "s-test", "kate", Action("replace_document", snap.candidates[0].ref, text=content),
+            verifier=lambda after: Verification(after.candidates[0].value == content),
+        )
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(self.backend.document_keys, ["select_all"])
+        self.assertEqual(self.backend.typed, [content])
+        self.assertEqual(result.after.candidates[0].value, content)
+
+    def test_replace_document_refuses_unchanged_text_before_input(self):
+        self.backend.tree = [editor(text="existing", focused=True)]
+        snap = self.engine.observe("s-test", "kate")
+        with self.assertRaisesRegex(TransactionError, "unchanged_document_text"):
+            self.engine.act("s-test", "kate", Action("replace_document", snap.candidates[0].ref,
+                                                         text="existing"),
+                            verifier=lambda _: Verification(True))
+        self.assertEqual(self.backend.document_keys, [])
+        self.assertEqual(self.backend.typed, [])
+
+    def test_replace_document_rechecks_window_before_typing_after_select_all(self):
+        self.backend.tree = [editor(text="Original", focused=True)]
+        snap = self.engine.observe("s-test", "kate")
+        self.backend.on_document_key = lambda operation: setattr(self.backend, "is_active", False)
+        with self.assertRaisesRegex(TransactionError, "target_window_not_active"):
+            self.engine.act("s-test", "kate", Action("replace_document", snap.candidates[0].ref,
+                                                         text="Revision"),
+                            verifier=lambda _: Verification(True))
+        self.assertEqual(self.backend.document_keys, ["select_all"])
+        self.assertEqual(self.backend.typed, [])
+
+    def test_save_document_uses_fixed_save_action_and_verifies_disk_bytes(self):
+        content = "Handover: exact UTF-8 ✓\n"
+        self.backend.tree = [editor(text=content, focused=True)]
+        snap = self.engine.observe("s-test", "kate")
+        result = self.engine.act(
+            "s-test", "kate", Action("save_document", snap.candidates[0].ref),
+            verifier=lambda after: Verification(
+                self.backend.document_bytes() == after.candidates[0].value.encode("utf-8")),
+        )
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(self.backend.document_keys, ["save"])
+        self.assertEqual(self.backend.document_bytes(), content.encode("utf-8"))
+
+    def test_save_document_rejects_disk_bytes_that_differ_from_editor_text(self):
+        content = "Handover still visible in Kate."
+        self.backend.tree = [editor(text=content, focused=True)]
+        snap = self.engine.observe("s-test", "kate")
+        self.backend.document_bytes = lambda: b"stale file contents"
+        with self.assertRaisesRegex(TransactionError, "verification_failed"):
+            self.engine.act(
+                "s-test", "kate", Action("save_document", snap.candidates[0].ref),
+                verifier=lambda after: Verification(
+                    self.backend.document_bytes() == after.candidates[0].value.encode("utf-8")),
+            )
+        self.assertEqual(self.backend.document_keys, ["save"])
+
+    def test_document_actions_reject_text_that_may_have_been_truncated(self):
+        over_limit = "x" * 4097
+        self.backend.tree = [editor(text=over_limit, focused=True)]
+        snap = self.engine.observe("s-test", "kate")
+        with self.assertRaisesRegex(TransactionError, "document_text_too_large_or_truncated"):
+            self.engine.act("s-test", "kate", Action("save_document", snap.candidates[0].ref),
+                            verifier=lambda _: Verification(True))
+        self.assertEqual(self.backend.document_keys, [])
+
+    def test_document_actions_are_kate_only(self):
+        self.backend.tree = [editor(focused=True)]
+        self.backend.app = "firefox"
+        snap = self.engine.observe("s-test", "firefox")
+        with self.assertRaisesRegex(TransactionError, "unsupported_action"):
+            self.engine.act("s-test", "firefox", Action("save_document", snap.candidates[0].ref),
+                            verifier=lambda _: Verification(True))
+        self.assertEqual(self.backend.document_keys, [])
 
     def test_yolo_still_enforces_allowlist_and_caps_but_skips_approval(self):
         denied = TransactionEngine(self.backend, audit=AuditLog(self.audit_path))

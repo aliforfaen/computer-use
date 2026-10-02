@@ -65,7 +65,13 @@ Observation defaults to metadata for the app window. `--output image` and
 `--output both` explicitly request PNG data; `--output data` requests configured
 reader interpretation. `--scope full` and `--scope crop --crop '{...}'` are
 explicit. The crop JSON has integer `x`, `y`, `width` and `height` fields. The
-KCalc `display_text` example verifies the fixture's blank-to-`1` transition;
+`both` output means image plus reader interpretation: it requires an enabled
+reader and otherwise returns `reader_unavailable`. Use `image` for screenshots
+without a reader; it also returns capture metadata and the image hash.
+Issue session calls sequentially, including `observe` and `candidates`;
+concurrent stateful requests can return `session_busy`.
+
+The KCalc `display_text` example verifies the fixture's blank-to-`1` transition;
 it does not generalize to arbitrary application clicks. The capture ID, image
 hash and crop mapping stay together. Candidate
 responses omit editable contents. Typing takes `--text-file PATH` or stdin
@@ -77,9 +83,14 @@ The initial effect verifiers are fixture-specific: KCalc permits `One` from a
 blank editable display to `1`; Firefox permits `Advance state` from idle to
 complete; Kate verifies a nonempty edit against exact changed editor text.
 Focus verification only establishes focus. It does not establish task completion.
-The owner enforces a 90-second session work window, eight input attempts,
-16 explicit observations/candidate requests, and a separate transaction read
-budget. Stop/status remain available after those work caps are reached.
+The owner now defaults to a 180-second inactivity timeout, a 30-minute
+maximum session lifetime, 64 actions and 256 reads. Successful observation,
+candidate and action calls refresh activity; status polling and rejected
+calls do not. A watchdog stops the exact expired session even if its caller
+never returns. `--idle-timeout`, `--max-session-lifetime`, `--max-actions` and
+`--max-observations` configure the limits. Stop/status remain available.
+Cleanup uses the same normal stop and crash-recovery path; unconfirmed cleanup
+remains visible as broken state rather than being reported as success.
 
 The stdio server is a client, not another owner. Configure an MCP host to run
 `uv run jev-desktop-mcp` as a local stdio process. It exposes
@@ -105,30 +116,40 @@ The result reports cleanup as confirmed or unconfirmed; an unconfirmed session
 stays broken for operator recovery. Daemon shutdown waits for socket handlers
 and calls owner cleanup; cleanup failure produces a nonzero daemon exit.
 
-## Optional interpreted-data reader
+## Budget and interpreted-data reader
 
-No reader is constructed unless `--reader-provider` is selected. DeepSeek and
-MiMo defaults follow the existing local benchmark configuration; a generic
-OpenAI-compatible endpoint requires explicit base URL, model and key-variable
-name. Every enabled reader requires a positive `--max-reader-calls` cap, which
-is enforced per session before each provider attempt. Reader credentials are
-read from the named process environment variable only when `data` or `both`
-is explicitly requested. The CLI accepts the variable name, never a key
-value, and the daemon does not load `.env` itself.
+The supported owner currently makes **zero project-provider calls**. The
+owner refuses paid reader configuration until it can reserve a reliable dollar
+upper bound before each request. Capabilities expose the $1 project-provider
+budget, zero spent/reserved and this restriction. Existing standalone reader
+benchmarks remain available under their separate explicit authorization.
 
-For example, let `uv` load the ignored local `.env` into the daemon process
-without putting key values in command arguments or output:
+Codex/Luna inference happens outside this owner. Its cost is unavailable to
+MCP, so the owner cannot guarantee a $1 cap on the caller's own inference.
+A future caller integration must provide enforceable metering before claiming
+an end-to-end dollar cap. Call/read/time limits remain enforceable today.
 
-```bash
-uv run --env-file .env jev-desktop daemon --foreground --allow-app kcalc \
-  --reader-provider deepseek --max-reader-calls 3
-```
+`output: "image"` continues to return app screenshots for a vision-capable
+caller. `data`/`both` are unavailable in the supported daemon until budgeted
+reader interpretation is restored; ADR-012 remains the required direction.
 
-Use `--reader-provider mimo --max-reader-calls 3` for the configured MiMo
-defaults, or pass explicit `--reader-base-url`, `--reader-model` and
-`--reader-key-env` values. Reader construction, capabilities and metadata
-observation make no provider call. The cap bounds calls; it does not authorize
-expanding the previously scoped paid benchmark.
+## Persistent Kate documents
+
+Kate starts with an exclusively created task-owned file under `run/documents/`.
+Its path is returned in session start/status. It survives session teardown;
+temporary profiles, virtual apps and compositor resources are cleaned up.
+The caller cannot choose an arbitrary file or overwrite an existing document.
+
+Fresh focused editor candidates support `replace_document` and `save_document`.
+Replacement selects all through Kate, types the replacement and verifies exact
+fresh editor text. Save sends Ctrl+S and verifies the actual file bytes against
+fresh editor text using `document_saved`. The bounded AT-SPI wrapper reuses
+kwin-mcp's worker and expands its 200-character text cap for task documents;
+the supported text limit is 4096 characters. No model supplies key combinations.
+
+See [the useful acceptance task](21-kate-acceptance-workflow.md). Owner audit
+records include per-request duration and an ID for timing reports, without
+recording typed text.
 
 ## Pins and validation state
 

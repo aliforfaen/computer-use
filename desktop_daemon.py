@@ -177,13 +177,18 @@ def _make_service(args: argparse.Namespace) -> Any:
             config = ReaderConfig(provider=args.reader_provider, base_url=base_url, model=model, key_env=key_env)
         except ValueError as exc:
             raise RuntimeError("reader configuration is invalid") from exc
-        # The reader resolves the selected key name from the process environment
-        # only when explicit interpreted data is requested.
+        # Reader setup itself is local. The service rejects reader instances
+        # because provider-specific dollar reservation is not yet enforceable.
         reader = VisionReader(config)
-    elif args.max_reader_calls is not None or args.reader_base_url or args.reader_model or args.reader_key_env:
+        raise RuntimeError("reader disabled: this daemon cannot reliably reserve a dollar cost before provider requests")
+    if args.max_reader_calls is not None or args.reader_base_url or args.reader_model or args.reader_key_env:
         raise RuntimeError("reader options require --reader-provider")
     return DesktopService(audit_path=audit_path, allowed_apps=allowed_apps, reader=reader,
-                          max_reader_calls=args.max_reader_calls or 0)
+                          max_reader_calls=args.max_reader_calls or 0,
+                          idle_timeout=args.idle_timeout,
+                          max_session_lifetime=args.max_session_lifetime,
+                          max_actions=args.max_actions,
+                          max_observations=args.max_observations)
 
 
 def serve(*, socket_path: Path, service: Any, stop_event: threading.Event | None = None) -> None:
@@ -239,8 +244,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-dir", type=Path, default=None, help="owner audit/runtime directory (use a private local directory)")
     parser.add_argument("--audit", type=Path, default=None, help="append-only JSONL audit path")
     parser.add_argument("--allow-app", action="append", default=[], help="explicitly allow one app identity; deny by default")
+    parser.add_argument("--idle-timeout", type=float, default=180.0,
+                        help="stop an inactive virtual session after this many seconds (default: 180)")
+    parser.add_argument("--max-session-lifetime", type=float, default=1800.0,
+                        help="maximum virtual session lifetime in seconds (default: 1800)")
+    parser.add_argument("--max-actions", type=int, default=64,
+                        help="maximum verified action attempts per session (default: 64)")
+    parser.add_argument("--max-observations", type=int, default=256,
+                        help="maximum observe/candidate reads per session (default: 256)")
     parser.add_argument("--reader-provider", choices=("deepseek", "mimo", "generic"), default=None,
-                        help="enable image interpretation (off unless explicitly selected)")
+                        help="reserved; reader startup is disabled until dollar-cost reservation is enforceable")
     parser.add_argument("--reader-base-url", default=None, help="OpenAI-compatible reader endpoint base URL")
     parser.add_argument("--reader-model", default=None, help="reader model name")
     parser.add_argument("--reader-key-env", default=None, help="environment variable name holding the reader key; its value is never displayed")
@@ -258,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGINT, lambda *_: stopping.set())
         serve(socket_path=socket_path, service=service, stop_event=stopping)
         return 0
-    except (RuntimeError, OSError) as exc:
+    except (RuntimeError, OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
 

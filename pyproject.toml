@@ -26,6 +26,8 @@ py-modules = [
     "desktop_mcp",
     "desktop_service",
     "desktop_worker",
+    "jev_accessibility_worker",
+    "live_desktop_probe",
     "observation",
     "p2_kcalc",
     "transactions",

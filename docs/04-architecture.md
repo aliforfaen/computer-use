@@ -277,3 +277,17 @@ add the proposed task planner, general visual grounding, live desktop support,
 HTTP/Streamable HTTP, Tailscale Serve routing or remote access. Host integration
 validation is recorded separately from synthetic socket/MCP tests; see
 [doc 16](16-local-owner-and-mcp.md). ADR-011 remains proposed.
+
+### ADR-016 — Inactivity cleanup and persistent task documents
+**2026-10-02 · owner-approved local work.** Reuse kwin-mcp 0.10.0 and the
+existing owner teardown/recovery path. Replace the 90-second task cutoff with
+configurable inactivity and total-lifetime caps, plus action/read caps. A
+watchdog cancels and closes the exact abandoned session; agents still stop
+all sessions they open. Kate edits/saves only its exclusively created task
+file; exact editor and disk verification establish completion. Saved task
+files persist independently of app/profile cleanup.
+
+The owner exposes a $1 project-provider ceiling but currently refuses paid
+reader setup until pre-request dollar reservation is reliable. This produces
+zero service-provider spending. Caller inference is outside MCP accounting;
+do not claim that this ceiling caps Codex/Luna billing. See doc 16 and doc 21.

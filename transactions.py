@@ -38,6 +38,9 @@ class TransactionError(RuntimeError):
     """Safe public error; details are intentionally not copied from the driver."""
 
 
+MAX_DOCUMENT_TEXT_CHARS = 4096
+
+
 class AutonomyMode(str, Enum):
     SUPERVISED = "supervised"
     GUARDED = "guarded"
@@ -125,6 +128,8 @@ class Backend(Protocol):
     def active_window(self) -> str: ...
     def mouse_click(self, x: int, y: int, button: str = "left") -> Any: ...
     def keyboard_type(self, text: str) -> Any: ...
+    def document_key(self, operation: str) -> Any: ...
+    def document_bytes(self) -> bytes: ...
 
 
 class KwinMcpBackend:
@@ -173,6 +178,25 @@ class KwinMcpBackend:
         self._require_virtual()
         return self.engine.keyboard_type_unicode(text) if not text.isascii() else self.engine.keyboard_type(text)
 
+    def document_key(self, operation: str) -> Any:
+        self._require_virtual()
+        if operation not in {"select_all", "save"}:
+            raise TransactionError("unsupported_document_operation")
+        method = getattr(self.engine, "document_key", None)
+        if not callable(method):
+            raise TransactionError("document_operation_unavailable")
+        return method(operation)
+
+    def document_bytes(self) -> bytes:
+        self._require_virtual()
+        method = getattr(self.engine, "document_bytes", None)
+        if not callable(method):
+            raise TransactionError("document_unavailable")
+        data = method()
+        if not isinstance(data, bytes) or len(data) > 1_048_576:
+            raise TransactionError("document_unavailable")
+        return data
+
 
 class AuditLog:
     """Append-only JSONL audit writer with a deliberately closed field schema."""
@@ -184,7 +208,7 @@ class AuditLog:
         self._lock = threading.Lock()
 
     def write(self, *, tool: str, app: str, mode: AutonomyMode, event: str, status: str, reason: str) -> None:
-        event = event if event in {"observe", "click", "type_text", "action"} else "action"
+        event = event if event in {"observe", "click", "type_text", "replace_document", "save_document", "action"} else "action"
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "caller_node": self.caller_node,
@@ -195,8 +219,8 @@ class AuditLog:
             "event": event,
             "status": status,
             "jev_answers": None,
-            "action": event if event in {"click", "type_text"} else None,
-            "verification": status if event in {"click", "type_text"} else None,
+            "action": event if event in {"click", "type_text", "replace_document", "save_document"} else None,
+            "verification": status if event in {"click", "type_text", "replace_document", "save_document"} else None,
             "reason": reason,
         }
         encoded = (json.dumps(record, separators=(",", ":"), ensure_ascii=True) + "\n").encode("utf-8")
@@ -260,7 +284,7 @@ def _parse_candidates(tree: str, generation: str) -> tuple[Candidate, ...]:
         if role_lower == "button":
             supported = ("click",)
         elif role_lower in {"text", "text entry", "entry"} and "editable" in states:
-            supported = ("click", "type_text")
+            supported = ("click", "type_text", "replace_document", "save_document")
         else:
             continue
         value_match = _TEXT.search(match.group("tail"))
@@ -301,7 +325,7 @@ def _typed_candidates(elements: list[dict[str, Any]], generation: str) -> tuple[
         if role == "button":
             supported = ("click",)
         elif role in {"text", "text entry", "entry"} and "editable" in states:
-            supported = ("click", "type_text")
+            supported = ("click", "type_text", "replace_document", "save_document")
         else:
             continue
         value = element.get("text")
@@ -488,7 +512,9 @@ class TransactionEngine:
                 raise TransactionError("app_not_allowed")
             if session_id in self._blocked:
                 raise TransactionError("session_requires_reset")
-            if action.kind not in {"click", "type_text"}:
+            if action.kind not in {"click", "type_text", "replace_document", "save_document"}:
+                raise TransactionError("unsupported_action")
+            if action.kind in {"replace_document", "save_document"} and app != "kate":
                 raise TransactionError("unsupported_action")
             if not self.authorizer(session_id, app, action):
                 raise TransactionError("authorization_denied")
@@ -499,9 +525,11 @@ class TransactionEngine:
                 raise TransactionError("target_reference_stale")
             if action.kind not in candidate.actions:
                 raise TransactionError("action_not_supported_by_target")
-            if action.kind == "type_text":
+            if action.kind in {"type_text", "replace_document"}:
                 if not isinstance(action.text, str) or len(action.text) > self.policy.max_text_chars:
                     raise TransactionError("text_argument_invalid")
+            elif action.text is not None:
+                raise TransactionError("text_argument_invalid")
             if _cancelled(cancel):
                 raise TransactionError("cancelled")
             if mode is AutonomyMode.SUPERVISED or (
@@ -533,7 +561,9 @@ class TransactionEngine:
                 raise TransactionError("cancelled")
             active_now = self.backend.active_window()
             active_ids = _ID.findall(active_now)
-            if len(active_ids) != 1 or active_ids[0] != fresh.window_id:
+            active_rows = list(_APP.finditer(active_now))
+            if (len(active_ids) != 1 or active_ids[0] != fresh.window_id or len(active_rows) != 1
+                    or active_rows[0].group("active") is None):
                 raise TransactionError("target_window_not_active")
             if action.kind == "click":
                 self._audit(app, mode, action.kind, "pending", "input_pending")
@@ -546,17 +576,52 @@ class TransactionEngine:
                     current.bounds.y + current.bounds.height // 2,
                     button="left",
                 )
-            else:
+            elif action.kind == "type_text":
                 if "focused" not in current.states:
                     raise TransactionError("editable_target_not_focused")
-                if action.text is None:
-                    raise TransactionError("text_argument_invalid")
                 self._audit(app, mode, action.kind, "pending", "input_pending")
                 input_attempted = True
                 self._bump(session_id, action=True)
                 self._last.pop((session_id, app), None)
                 self._blocked[session_id] = "verification_pending"
                 self.backend.keyboard_type(action.text)
+            elif action.kind == "replace_document":
+                if "focused" not in current.states:
+                    raise TransactionError("editable_target_not_focused")
+                if current.value is None:
+                    raise TransactionError("document_text_unavailable")
+                if len(current.value) > MAX_DOCUMENT_TEXT_CHARS:
+                    raise TransactionError("document_text_too_large_or_truncated")
+                if current.value == action.text:
+                    raise TransactionError("unchanged_document_text")
+                self._audit(app, mode, action.kind, "pending", "input_pending")
+                input_attempted = True
+                self._bump(session_id, action=True)
+                self._last.pop((session_id, app), None)
+                self._blocked[session_id] = "verification_pending"
+                self.backend.document_key("select_all")
+                if _cancelled(cancel):
+                    raise TransactionError("cancelled_after_action")
+                active_now = self.backend.active_window()
+                active_ids = _ID.findall(active_now)
+                active_rows = list(_APP.finditer(active_now))
+                if (len(active_ids) != 1 or active_ids[0] != fresh.window_id or len(active_rows) != 1
+                        or active_rows[0].group("active") is None):
+                    raise TransactionError("target_window_not_active")
+                self.backend.keyboard_type(action.text)
+            else:  # save_document
+                if "focused" not in current.states:
+                    raise TransactionError("editable_target_not_focused")
+                if current.value is None:
+                    raise TransactionError("document_text_unavailable")
+                if len(current.value) > MAX_DOCUMENT_TEXT_CHARS:
+                    raise TransactionError("document_text_too_large_or_truncated")
+                self._audit(app, mode, action.kind, "pending", "input_pending")
+                input_attempted = True
+                self._bump(session_id, action=True)
+                self._last.pop((session_id, app), None)
+                self._blocked[session_id] = "verification_pending"
+                self.backend.document_key("save")
             if _cancelled(cancel):
                 try:
                     cancelled_snapshot = self._snapshot(session_id, app)

@@ -40,6 +40,16 @@ def _safe_error(value: str) -> dict[str, str]:
         "unsupported_verification": "The requested verification is not supported.",
         "approval_required": "This action requires explicit approval.",
         "worker_failed": "The virtual session worker failed.",
+        "worker_timeout": "The virtual session worker timed out.",
+        "worker_protocol_error": "The virtual session worker returned an invalid response.",
+        "virtual_session_unavailable": "The virtual desktop session could not be started.",
+        "atspi_setup_failed": "Accessibility setup for the virtual session failed.",
+        "document_create_failed": "The task document could not be created safely.",
+        "document_open_unconfirmed": "Kate did not confirm that the task document opened.",
+        "capture_failed": "The application screenshot could not be captured.",
+        "window_not_found": "The requested application window was not ready or could not be found.",
+        "window_ambiguous": "More than one application window matched the request.",
+        "mapping_unavailable": "Screenshot coordinate mapping was unavailable.",
         "session_broken": "The virtual session is broken and must be stopped.",
         "cancelled": "The operation was cancelled.",
     }
@@ -268,6 +278,23 @@ class DesktopWorkerClient:
     def mouse_click(self, x, y, button="left"): return self.rpc("mouse_click", x=x, y=y)
     def keyboard_type(self, text): return self.rpc("keyboard_type", text=text)
     def keyboard_type_unicode(self, text): return self.keyboard_type(text)
+    def document_key(self, operation):
+        if operation not in {"select_all", "save"}:
+            raise ValueError("invalid_document_operation")
+        return self.rpc("document_key", operation=operation)
+    def document_bytes(self):
+        result = self.rpc("document_bytes")
+        encoded = result.get("utf8_base64") if isinstance(result, dict) else None
+        if not isinstance(encoded, str) or len(encoded) > (1_048_576 * 4 // 3 + 8):
+            raise RuntimeError("worker_protocol_error")
+        try:
+            data = base64.b64decode(encoded, validate=True)
+            if len(data) > 1_048_576:
+                raise ValueError
+            data.decode("utf-8")
+            return data
+        except (ValueError, UnicodeDecodeError):
+            raise RuntimeError("worker_protocol_error") from None
     def _run_kwin_query(self, params): return self.window_query()
     def _run_atspi(self, command, **params): return self.atspi_find(params["app_name"])
     def accessibility_elements(self, app): return self.atspi_find(app)["result"]
@@ -282,24 +309,37 @@ def _readline_timeout(stream, timeout):
 
 
 class _Session:
-    def __init__(self, app, mode, worker, session_id, reader=None, audit_path=None, max_reader_calls=0):
+    def __init__(self, app, mode, worker, session_id, reader=None, audit_path=None, max_reader_calls=0,
+                 *, idle_timeout=180.0, max_session_lifetime=1800.0, max_actions=64,
+                 max_observations=256, monotonic=time.monotonic):
         self.app = app
         self.mode = mode
         self.worker = worker
         self.session_id = session_id
         self.started_at = datetime.now(timezone.utc).isoformat()
-        self.started_clock = time.monotonic()
+        self.started_clock = monotonic()
+        self.last_activity_clock = self.started_clock
+        self.last_activity_at = self.started_at
+        self.idle_timeout = idle_timeout
+        self.max_session_lifetime = max_session_lifetime
+        self.max_actions = max_actions
+        self.max_observations = max_observations
+        self.monotonic = monotonic
         self.state = "running"
         self.busy = threading.Lock()
+        self.stopping = False
         self.cancel = threading.Event()
+        self.expiring = False
+        self.document_path = None
         self.actions = 0
         self.observations = 0
         self.reader_calls = 0
         self.max_reader_calls = max_reader_calls if reader is not None else 0
         self.adapter = ObservationAdapter(worker, session_id, reader=reader, allowed_apps={app})
         self.tx = TransactionEngine(KwinMcpBackend(worker), audit=AuditLog(audit_path),
-                                    policy=Policy(allowed_apps=APPS, max_actions=8,
-                                                  max_observations=24, max_duration_seconds=90,
+                                    policy=Policy(allowed_apps=APPS, max_actions=max_actions,
+                                                  max_observations=max_observations,
+                                                  max_duration_seconds=max_session_lifetime,
                                                   max_text_chars=4096))
 
 
@@ -307,10 +347,15 @@ class DesktopService:
     """Own one active virtual session and serialize all stateful operations."""
 
     def __init__(self, audit_path: str | os.PathLike[str] | None = None, *, allowed_apps=(), worker_factory=None,
-                 reader=None, max_reader_calls: int = 0, request_timeout: float = 20.0, stop_timeout: float = 3.0):
+                 reader=None, max_reader_calls: int = 0, request_timeout: float = 20.0, stop_timeout: float = 3.0,
+                 idle_timeout: float = 180.0, max_session_lifetime: float = 1800.0,
+                 max_actions: int = 64, max_observations: int = 256,
+                 monotonic=time.monotonic, watchdog_interval: float = 1.0):
         self.audit_path = Path(audit_path or Path(__file__).parent / "run" / "desktop-service" / "actions.jsonl")
         self.worker_factory = worker_factory or (lambda: DesktopWorkerClient(timeout=request_timeout))
         self._worker = None
+        if reader is not None:
+            raise ValueError("reader disabled until a reliable per-request dollar reservation is available")
         self.reader = reader
         if type(max_reader_calls) is not int or max_reader_calls < 0:
             raise ValueError("max_reader_calls must be a non-negative integer")
@@ -319,16 +364,68 @@ class DesktopService:
         if not self.allowed_apps.issubset(APPS):
             raise ValueError("allowed_apps must be a subset of the virtual fixture registry")
         self.stop_timeout = stop_timeout
+        for name, value in (("idle_timeout", idle_timeout), ("max_session_lifetime", max_session_lifetime),
+                            ("watchdog_interval", watchdog_interval)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < float("inf"):
+                raise ValueError(f"{name} must be a finite positive number")
+        if type(max_actions) is not int or max_actions <= 0:
+            raise ValueError("max_actions must be a positive integer")
+        if type(max_observations) is not int or max_observations < 2:
+            raise ValueError("max_observations must be an integer of at least 2")
+        self.idle_timeout = float(idle_timeout)
+        self.max_session_lifetime = float(max_session_lifetime)
+        self.max_actions = max_actions
+        self.max_observations = max_observations
+        self._monotonic = monotonic
+        self._watchdog_interval = float(watchdog_interval)
+        self._watchdog_stop = threading.Event()
+        self._last_stop_reason = None
+        self._last_stop_at = None
         self._lock = threading.RLock()
         self._session: _Session | None = None
+        self._watchdog = threading.Thread(target=self._watchdog_loop, name="jev-desktop-watchdog", daemon=True)
+        self._watchdog.start()
 
-    def _audit(self, method, ctx, app="", mode="guarded", status="ok", reason="completed", verification=None):
+    def _watchdog_loop(self):
+        while not self._watchdog_stop.wait(self._watchdog_interval):
+            self._expire_if_needed()
+
+    def _expiry_reason(self, s, now=None):
+        now = self._monotonic() if now is None else now
+        if now - s.started_clock >= s.max_session_lifetime:
+            return "max_lifetime"
+        if now - s.last_activity_clock >= s.idle_timeout:
+            return "idle_timeout"
+        return None
+
+    def _expire_if_needed(self):
+        with self._lock:
+            s = self._session
+            reason = (self._expiry_reason(s) if s is not None and not s.expiring
+                      and s.state != "starting" else None)
+            if reason is not None:
+                # Claim expiry while holding the owner lock so a new task call
+                # cannot refresh activity between the deadline check and stop.
+                s.expiring = True
+        if reason is None:
+            return False
+        # stop_all owns cancellation, lock waiting, worker recovery and cleanup
+        # reporting; the watchdog never invents a separate teardown path.
+        self.dispatch("session_stop", {"session_id": s.session_id},
+                      {"transport": "watchdog", "caller_node": "local-owner",
+                       "_stop_reason": reason})
+        return True
+
+    def _audit(self, method, ctx, app="", mode="guarded", status="ok", reason="completed", verification=None,
+               duration_ms=None, request_id=None):
         record = {"timestamp": datetime.now(timezone.utc).isoformat(),
                   "caller_node": _context(ctx, "caller_node"), "transport": _context(ctx, "transport"),
                   "tool": method, "app": app if app in APPS else "", "autonomy_mode": mode,
                   "event": method, "status": status, "jev_answers": None,
                   "action": method if method == "act" else None,
-                  "verification": verification, "reason": reason}
+                  "verification": verification, "reason": reason,
+                  "request_id": request_id,
+                  "duration_ms": round(max(0.0, duration_ms), 3) if duration_ms is not None else None}
         data = (json.dumps(record, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
         self.audit_path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(self.audit_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -342,16 +439,32 @@ class DesktopService:
             s.state = "broken"
         busy = not s.busy.acquire(False)
         if not busy: s.busy.release()
+        now = self._monotonic()
+        age = max(0.0, now - s.started_clock)
+        idle = max(0.0, now - s.last_activity_clock)
         return {"session_id": s.session_id, "app": s.app, "mode": s.mode.value,
-                "state": "busy" if busy else s.state, "started_at": s.started_at,
+                "state": "stopping" if s.stopping else "busy" if busy else s.state, "started_at": s.started_at,
+                "age_seconds": round(age, 3), "last_activity_at": s.last_activity_at,
+                "idle_seconds": round(idle, 3), "idle_timeout_seconds": s.idle_timeout,
+                "max_session_lifetime_seconds": s.max_session_lifetime,
+                "remaining_idle_seconds": round(max(0.0, s.idle_timeout - idle), 3),
+                "remaining_lifetime_seconds": round(max(0.0, s.max_session_lifetime - age), 3),
                 "owner_pid": os.getpid(), "worker_pid": getattr(getattr(s.worker, "proc", None), "pid", None),
                 "active": s.state != "broken",
-                "actions": s.actions, "observations": s.observations}
+                "actions": s.actions, "action_cap": s.max_actions,
+                "observations": s.observations, "observation_cap": s.max_observations,
+                "reader_calls": s.reader_calls, "reader_call_cap": s.max_reader_calls,
+                "project_provider_budget_usd": 1.0, "project_provider_spent_usd": 0.0,
+                "project_provider_reserved_usd": 0.0, "paid_reader": "disabled_until_cost_reservation_available",
+                "external_agent_cost_usd": None,
+                "document_path": s.document_path}
 
     def _require_session(self, params):
         with self._lock: s = self._session
         if s is None: raise ValueError("session_not_found")
         if params.get("session_id") not in (None, s.session_id): raise ValueError("session_not_found")
+        if s.expiring: raise ValueError("session_expiring")
+        if s.stopping: raise ValueError("session_busy")
         proc = getattr(s.worker, "proc", None)
         if proc is not None and proc.poll() is not None:
             s.state = "broken"
@@ -360,6 +473,8 @@ class DesktopService:
         return s
 
     def dispatch(self, method: str, params: dict | None = None, context: dict | None = None) -> dict:
+        dispatch_started = self._monotonic()
+        request_id = uuid.uuid4().hex
         params = params if isinstance(params, dict) else {}
         context = context if isinstance(context, dict) else {}
         app = params.get("app", "")
@@ -369,11 +484,22 @@ class DesktopService:
             if method == "capabilities":
                 result = {"allowed_apps": sorted(self.allowed_apps), "virtual_only": True, "one_active_session": True,
                           "methods": sorted(METHODS), "driver": "kwin-mcp==0.10.0",
+                          "lifecycle": {"idle_timeout_seconds": self.idle_timeout,
+                                        "max_session_lifetime_seconds": self.max_session_lifetime,
+                                        "max_actions": self.max_actions, "max_observations": self.max_observations,
+                                        "watchdog": True},
                           "reader": {"available": self.reader is not None and self.max_reader_calls > 0,
-                                     "max_calls_per_session": self.max_reader_calls if self.reader else 0}}
+                                     "max_calls_per_session": self.max_reader_calls if self.reader else 0,
+                                     "project_provider_budget_usd": 1.0, "project_provider_spent_usd": 0.0,
+                                     "project_provider_reserved_usd": 0.0,
+                                     "paid_reader": "disabled_until_cost_reservation_available",
+                                     "external_agent_cost_usd": None}}
             elif method == "status":
+                self._expire_if_needed()
                 with self._lock: current = self._session
-                result = {"session": self._status(current)}
+                result = {"session": self._status(current), "lifecycle": {
+                    "last_stop_reason": self._last_stop_reason, "last_stop_at": self._last_stop_at,
+                    "watchdog_running": self._watchdog.is_alive()}}
             elif method == "session_start":
                 if app not in self.allowed_apps: raise ValueError("app_not_allowed")
                 mode = AutonomyMode(params.get("mode", "guarded"))
@@ -384,12 +510,25 @@ class DesktopService:
                     journal_path = self.audit_path.parent / "sessions" / f"{sid}.json"
                     if isinstance(worker, DesktopWorkerClient): worker.journal_path = journal_path
                     s = _Session(app, mode, worker, sid, reader=self.reader, audit_path=self.audit_path,
-                                 max_reader_calls=self.max_reader_calls)
+                                 max_reader_calls=self.max_reader_calls, idle_timeout=self.idle_timeout,
+                                 max_session_lifetime=self.max_session_lifetime, max_actions=self.max_actions,
+                                 max_observations=self.max_observations, monotonic=self._monotonic)
                     s.state = "starting"
+                    self._last_stop_reason = None
+                    self._last_stop_at = None
                     try:
-                        if isinstance(worker, DesktopWorkerClient): worker.start(app, str(journal_path))
-                        else: worker.start(app)
-                    except Exception:
+                        started = worker.start(app, str(journal_path)) if isinstance(worker, DesktopWorkerClient) else worker.start(app)
+                        if isinstance(started, dict):
+                            path = started.get("document_path")
+                            if isinstance(path, str): s.document_path = path
+                    except Exception as exc:
+                        safe_start_codes = {
+                            "invalid_worker_start", "session_stop_unconfirmed", "session_not_started",
+                            "app_not_allowed", "fixture_unavailable", "virtual_session_unavailable",
+                            "atspi_setup_failed", "document_create_failed", "document_open_unconfirmed",
+                            "worker_timeout", "worker_protocol_error", "worker_failed",
+                        }
+                        failure_code = str(exc) if str(exc) in safe_start_codes else "worker_failed"
                         if hasattr(worker, "terminate"): worker.terminate()
                         recovered = bool(getattr(worker, "last_cleanup_confirmed", False)
                                          or getattr(worker, "recover_cleanup", lambda: False)())
@@ -399,7 +538,7 @@ class DesktopService:
                             self._worker = worker
                             s.state = "broken"
                             self._session = s
-                        raise ValueError("worker_failed") from None
+                        raise ValueError(failure_code) from None
                     self._worker = worker
                     s.state = "running"
                     self._session = s
@@ -408,14 +547,22 @@ class DesktopService:
                 s = self._require_session(params); s.cancel.set()
                 result = {"cancelled": True, "session_id": s.session_id}
             elif method in {"session_stop", "stop_all"}:
-                with self._lock: s = self._session
-                if method == "session_stop" and s is not None and params.get("session_id") not in (None, s.session_id):
-                    raise ValueError("session_not_found")
+                with self._lock:
+                    s = self._session
+                    if method == "session_stop" and s is not None and params.get("session_id") not in (None, s.session_id):
+                        raise ValueError("session_not_found")
+                    if s is not None:
+                        if s.stopping: raise ValueError("session_busy")
+                        s.stopping = True
                 if s is None: result = {"stopped": True}
                 else:
                     s.cancel.set()
                     acquired = s.busy.acquire(timeout=self.stop_timeout)
                     cleanup = "unknown"
+                    with self._lock:
+                        if self._session is not s:
+                            if acquired: s.busy.release()
+                            raise ValueError("session_not_found")
                     if not acquired:
                         s.state = "broken"
                         if hasattr(s.worker, "terminate"): s.worker.terminate()
@@ -431,30 +578,50 @@ class DesktopService:
                                 cleanup = "confirmed" if getattr(s.worker, "recover_cleanup", lambda: False)() else "unconfirmed"
                         finally: s.busy.release()
                     with self._lock:
-                        if self._session is s and cleanup == "confirmed":
-                            self._session = None
-                            proc = getattr(s.worker, "proc", None)
-                            if (s.state == "broken" or getattr(s.worker, "_poisoned", False)
-                                    or (proc is not None and proc.poll() is not None)):
-                                # A recovered child cannot service another session.
-                                # Retain healthy workers only for normal reuse.
-                                close = getattr(s.worker, "close", None)
-                                if callable(close): close()
-                                self._worker = None
-                    if cleanup != "confirmed": s.state = "broken"
+                        if self._session is s:
+                            if cleanup == "confirmed":
+                                self._session = None
+                            requested_reason = context.get("_stop_reason")
+                            if (_context(context, "transport") == "watchdog"
+                                    and context.get("caller_node") == "local-owner"
+                                    and requested_reason in {"idle_timeout", "max_lifetime"}):
+                                self._last_stop_reason = requested_reason
+                                self._last_stop_at = datetime.now(timezone.utc).isoformat()
+                            elif cleanup == "confirmed" and self._last_stop_reason is None:
+                                self._last_stop_reason = "requested" if method == "session_stop" else "stop_all"
+                                self._last_stop_at = datetime.now(timezone.utc).isoformat()
+                            if cleanup == "confirmed":
+                                proc = getattr(s.worker, "proc", None)
+                                if (s.state == "broken" or getattr(s.worker, "_poisoned", False)
+                                        or (proc is not None and proc.poll() is not None)):
+                                    # A recovered child cannot service another session.
+                                    # Retain healthy workers only for normal reuse.
+                                    close = getattr(s.worker, "close", None)
+                                    if callable(close): close()
+                                    self._worker = None
+                    if cleanup != "confirmed":
+                        s.state = "broken"
+                        with self._lock:
+                            if self._session is s:
+                                s.stopping = False
                     result = {"stopped": cleanup == "confirmed", "cleanup": cleanup, "session_id": s.session_id}
             else:
                 s = self._require_session(params)
                 if app and app != s.app: raise ValueError("app_session_mismatch")
                 app = s.app
+                if method not in {"observe", "candidates", "act"}: raise ValueError("method_not_found")
+                if self._expiry_reason(s) is not None:
+                    self._expire_if_needed()
+                    raise ValueError("session_expiring")
                 if not s.busy.acquire(blocking=False): raise ValueError("session_busy")
                 try:
                     s.cancel.clear()
                     s.tx.audit.caller_node = _context(context, "caller_node")
                     s.tx.audit.transport = _context(context, "transport")
-                    if time.monotonic() - s.started_clock > 90: raise ValueError("task_time_budget_exceeded")
+                    if self._monotonic() - s.started_clock > s.max_session_lifetime:
+                        raise ValueError("task_time_budget_exceeded")
                     if method == "observe":
-                        if s.observations >= 16: raise ValueError("task_observation_budget_exceeded")
+                        if s.observations >= s.max_observations: raise ValueError("task_observation_budget_exceeded")
                         if s.cancel.is_set(): raise ValueError("cancelled")
                         capture_id = params.get("capture_id")
                         if capture_id is None:
@@ -477,6 +644,8 @@ class DesktopService:
                                                   "errors": list(obs.errors)}}
                         s.observations += 1
                     elif method == "candidates":
+                        if s.observations >= s.max_observations:
+                            raise ValueError("task_observation_budget_exceeded")
                         if s.cancel.is_set(): raise ValueError("cancelled")
                         snap = s.tx.observe(s.session_id, app, mode=s.mode)
                         if s.cancel.is_set(): raise ValueError("cancelled")
@@ -484,12 +653,14 @@ class DesktopService:
                                   "candidates": [_candidate(c) for c in snap.candidates]}
                         s.observations += 1
                     elif method == "act":
-                        if s.actions >= 8: raise ValueError("task_action_budget_exceeded")
+                        if s.actions >= s.max_actions: raise ValueError("task_action_budget_exceeded")
+                        if s.observations + 2 > s.max_observations:
+                            raise ValueError("task_observation_budget_exceeded")
                         kind, target, verification = params.get("action"), params.get("target_ref"), params.get("verification")
                         text = params.get("text")
-                        if kind not in {"click", "type_text"} or not isinstance(target, str): raise ValueError("invalid_params")
+                        if kind not in {"click", "type_text", "replace_document", "save_document"} or not isinstance(target, str): raise ValueError("invalid_params")
                         self._check_verifier(s, verification, params.get("expected"), target)
-                        action = Action(kind, target, text if kind == "type_text" else None)
+                        action = Action(kind, target, text if kind in {"type_text", "replace_document"} else None)
                         approval = params.get("approved") is True
                         if s.mode is AutonomyMode.SUPERVISED and not approval: raise ValueError("approval_required")
                         prior = s.tx._last.get((s.session_id, app))
@@ -499,7 +670,8 @@ class DesktopService:
                         risk = kind == "click" and any(w in candidate.label.casefold() for w in ("delete", "remove", "submit", "send", "purchase", "format"))
                         if s.mode is AutonomyMode.GUARDED and risk and not approval: raise ValueError("approval_required")
                         self._audit(method, context, app, s.mode.value, "pending",
-                                    "approved_action" if approval else "action_pending", verification)
+                                    "approved_action" if approval else "action_pending", verification,
+                                    request_id=request_id)
                         verifier = self._verifier(s, verification, params.get("expected"), candidate)
                         precondition = self._precondition(s, kind, verification, params.get("expected"), text, candidate)
                         acted = s.tx.act(s.session_id, app, action, verifier=verifier, mode=s.mode,
@@ -509,6 +681,11 @@ class DesktopService:
                                   "evidence": acted.evidence if isinstance(acted.evidence, (str, int, float, bool, dict, list, type(None))) else None}
                         s.observations += 2
                     else: raise ValueError("method_not_found")
+                    # Only completed observe/candidate/action work extends the
+                    # inactivity window. Status, cancellation and invalid
+                    # requests cannot keep an abandoned app alive.
+                    s.last_activity_clock = self._monotonic()
+                    s.last_activity_at = datetime.now(timezone.utc).isoformat()
                 except Exception as exc:
                     proc = getattr(getattr(s.worker, "proc", None), "poll", None)
                     if (isinstance(exc, (BrokenPipeError, TimeoutError)) or "worker" in str(exc)
@@ -516,27 +693,36 @@ class DesktopService:
                         s.state = "broken"
                     raise
                 finally: s.busy.release()
-            self._audit(method, context, app, s.mode.value if s else "guarded", "ok", "completed",
-                        result.get("verification") if isinstance(result, dict) else None)
+            completed_reason = self._last_stop_reason if _context(context, "transport") == "watchdog" else "completed"
+            self._audit(method, context, app, s.mode.value if s else "guarded", "ok", completed_reason,
+                        result.get("verification") if isinstance(result, dict) else None,
+                        duration_ms=(self._monotonic() - dispatch_started) * 1000, request_id=request_id)
             return {"ok": True, **result}
         except Exception as exc:
-            raw = str(exc) if isinstance(exc, (ValueError, ObservationError, TransactionError, RuntimeError)) else "operation_failed"
+            raw = (exc.code if isinstance(exc, ObservationError) else
+                   str(exc) if isinstance(exc, (ValueError, TransactionError, RuntimeError)) else
+                   "operation_failed")
             code = raw if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", raw or "") else "operation_failed"
             err = _safe_error(code)
             self._audit(method if isinstance(method, str) else "unknown", context, app,
-                        s.mode.value if s else "guarded", "failed", err["code"])
+                        s.mode.value if s else "guarded", "failed", err["code"],
+                        duration_ms=(self._monotonic() - dispatch_started) * 1000, request_id=request_id)
             return {"ok": False, "error": err}
 
     def _check_verifier(self, s, verification, expected, target):
-        allowed = {"target_focused", "target_text", "fixture_state", "display_text"}
+        allowed = {"target_focused", "target_text", "fixture_state", "display_text", "document_saved"}
         if verification not in allowed: raise ValueError("unsupported_verification")
-        if verification in {"target_text", "fixture_state", "display_text"} and (not isinstance(expected, str) or len(expected) > 256):
+        if verification == "target_text" and (not isinstance(expected, str) or len(expected) > 4096):
             raise ValueError("invalid_params")
+        if verification in {"fixture_state", "display_text"} and (not isinstance(expected, str) or len(expected) > 256):
+            raise ValueError("invalid_params")
+        if verification == "document_saved" and (s.app != "kate" or expected is not None):
+            raise ValueError("unsupported_verification")
         if verification == "fixture_state" and (s.app != "firefox" or expected not in {"State: idle", "State: complete"}):
             raise ValueError("unsupported_verification")
         if verification == "display_text" and (s.app != "kcalc" or expected != "1"):
             raise ValueError("unsupported_verification")
-        if verification == "target_text" and s.app != "kate": raise ValueError("unsupported_verification")
+        if verification in {"target_text", "document_saved"} and s.app != "kate": raise ValueError("unsupported_verification")
 
     def _check_action_policy(self, s, kind, candidate, verification, expected, text):
         if verification == "display_text":
@@ -548,8 +734,14 @@ class DesktopService:
                     and candidate.label == "Advance state" and expected == "State: complete"):
                 raise ValueError("unsupported_verification")
         elif verification == "target_text":
-            if not (s.app == "kate" and kind == "type_text" and "type_text" in candidate.actions
-                    and isinstance(text, str) and text.strip()):
+            if not (s.app == "kate" and kind in {"type_text", "replace_document"}
+                    and kind in candidate.actions and isinstance(text, str) and text.strip()):
+                raise ValueError("unsupported_verification")
+            if kind == "replace_document" and expected != text:
+                raise ValueError("unsupported_verification")
+        elif verification == "document_saved":
+            if not (s.app == "kate" and kind == "save_document" and candidate.role in {"text", "text entry", "entry"}
+                    and "save_document" in candidate.actions):
                 raise ValueError("unsupported_verification")
         elif verification == "target_focused":
             if s.app != "kate" or candidate.role not in {"text", "text entry", "entry"}:
@@ -580,6 +772,8 @@ class DesktopService:
                 return len(states) == 1 and target.role == "button" and target.label == "Advance state"
             if verification == "target_focused":
                 return kind == "click" and target.role in {"text", "text entry", "entry"}
+            if verification == "document_saved":
+                return kind == "save_document" and target.role in {"text", "text entry", "entry"}
             return False
         return check
 
@@ -591,6 +785,14 @@ class DesktopService:
             if verification == "target_text":
                 ok = len(target) == 1 and target[0].value == expected
                 return Verification(ok, {"exact_target_text": ok})
+            if verification == "document_saved":
+                ok = len(target) == 1 and isinstance(target[0].value, str)
+                if ok:
+                    try:
+                        ok = s.worker.document_bytes() == target[0].value.encode("utf-8")
+                    except (AttributeError, RuntimeError, ValueError):
+                        ok = False
+                return Verification(ok, {"exact_bytes_saved": ok})
             raw = s.worker.atspi_find(s.app)
             rows = raw.get("result") if isinstance(raw, dict) and raw.get("ok") is True else []
             if verification == "display_text":
@@ -607,6 +809,9 @@ class DesktopService:
         return verify
 
     def close(self):
+        self._watchdog_stop.set()
+        if self._watchdog is not threading.current_thread():
+            self._watchdog.join(timeout=max(1.0, self._watchdog_interval * 2))
         response = self.dispatch("stop_all", {}, {"transport": "shutdown"})
         confirmed = response.get("ok") is True and response.get("stopped") is True
         try:

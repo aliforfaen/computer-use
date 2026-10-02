@@ -6,11 +6,15 @@ client. Jev is an optional future accelerator.
 
 ## Where things stand
 
-- **Working:** disposable virtual Kate, Firefox and KCalc sessions; app screenshots;
-  verified actions; one shared local owner; cancellation and crash recovery.
+- **Working:** virtual Kate, Firefox and KCalc; app screenshots; verified
+  actions; persistent Kate task documents; a shared CLI/MCP owner with
+  inactivity cleanup and crash recovery.
+- **Real agent trial:** OpenCode completed three local MCP fixture tasks;
+  verified actions, session stops and extracted screenshots were independently
+  reviewed. See [the trial](docs/18-real-agent-trial.md).
 - **Local wait baseline (M4a):** 10/10 fixture outcomes passed with cleanup, one
   trial per case/arm. This is a local pixel-difference test, not evidence of model
-  or agent speed gains. Full suite is now 111 tests, all passing.
+  or agent speed gains. The original checkpoint had 111 passing tests; newer validation is in the handoff.
 - **Vision heartbeat (M4b):** the timeout/journal/interrupt changes were reviewed
   and tested on 2026-10-02; a follow-up review corrected the stated deadline
   guarantee (the parser now bounds time and size per response chunk, including
@@ -19,11 +23,16 @@ client. Jev is an optional future accelerator.
   (821 prompt / 8 completion tokens, cleanup passed, $0.0002559 peak-upper). The
   earlier interrupted run's charge is still unknown; the conservative
   whole-session reserve is $0.0229632.
-- **Later:** general planning, live desktop operation, tailnet deployment and Jev
-  acceleration. These are not implemented in this release.
+- **Physical display smoke test:** a fixed KCalc task passed with exact focus
+  restoration and app cleanup. [Evidence and limits](docs/22-live-desktop-smoke.md).
+- **Later:** general planning, a live MCP task service, tailnet deployment and
+  Jev acceleration. These are not implemented in this release.
 
 Start with [the handoff](docs/HANDOFF.md). Detailed results and limits:
 [local service](docs/16-local-owner-and-mcp.md) · [wait baseline](docs/17-dynamic-wait-baseline.md).
+
+For an agent: [useful Kate acceptance task](docs/21-kate-acceptance-workflow.md) ·
+[original external trial](docs/18-real-agent-trial.md).
 
 ## Local quick start
 
@@ -49,7 +58,8 @@ uv run jev-desktop shutdown
 
 For an MCP host, run `uv run jev-desktop-mcp` in this checkout. It connects to
 that same local owner. Images are returned only when explicitly requested;
-model interpretation is disabled by default. See [doc 16](docs/16-local-owner-and-mcp.md)
+paid interpretation is currently refused until pre-request dollar reservation
+is enforceable. The owner cannot meter the caller’s Codex inference. See [doc 16](docs/16-local-owner-and-mcp.md)
 for actions, reader configuration and lifecycle limits.
 
 ## Benchmarks and design

@@ -14,6 +14,8 @@ from typing import Any
 
 from desktop_daemon import MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, default_socket_path
 
+MAX_DESKTOP_TEXT_CHARS = 4096
+
 
 def ipc_call(method: str, params: dict[str, Any] | None = None, *, transport: str = "local-cli",
              socket_path: Path | None = None, timeout: float = 180.0) -> dict[str, Any]:
@@ -55,9 +57,10 @@ def ipc_call(method: str, params: dict[str, Any] | None = None, *, transport: st
 def _read_text_file(path: str | None) -> str:
     if path is None:
         raise ValueError("--text-file is required for type_text")
-    if path == "-":
-        return sys.stdin.read()
-    return Path(path).read_text(encoding="utf-8")
+    value = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
+    if len(value) > MAX_DESKTOP_TEXT_CHARS:
+        raise ValueError("text_argument_too_long")
+    return value
 
 
 def _add_socket(parser: argparse.ArgumentParser) -> None:
@@ -85,6 +88,14 @@ def _build_parser() -> argparse.ArgumentParser:
     daemon.add_argument("--reader-model", default=None)
     daemon.add_argument("--reader-key-env", default=None, help="environment variable name, never a key value")
     daemon.add_argument("--max-reader-calls", type=int, default=None)
+    daemon.add_argument("--idle-timeout", type=float, default=180.0,
+                        help="stop the session after this many inactive seconds")
+    daemon.add_argument("--max-session-lifetime", type=float, default=1800.0,
+                        help="maximum session age in seconds")
+    daemon.add_argument("--max-actions", type=int, default=64,
+                        help="maximum input actions per session")
+    daemon.add_argument("--max-observations", type=int, default=256,
+                        help="maximum observations and candidate reads per session")
     for name, help_text in (("capabilities", "show owner capabilities"), ("status", "show owner/session status")):
         sub = commands.add_parser(name, help=help_text)
         _add_socket(sub)
@@ -117,10 +128,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_socket(observe)
     act = commands.add_parser("act", help="execute and verify one grounded action")
     act.add_argument("app")
-    act.add_argument("action", choices=("click", "type_text"))
+    act.add_argument("action", choices=("click", "type_text", "replace_document", "save_document"))
     act.add_argument("target_ref")
     act.add_argument("--approved", action="store_true", help="record approval for supervised or guarded actions")
-    act.add_argument("--verification", choices=("target_focused", "target_text", "fixture_state", "display_text"), required=True)
+    act.add_argument("--verification", choices=("target_focused", "target_text", "fixture_state", "display_text", "document_saved"), required=True)
     act.add_argument("--expected", help="exact expected visible text (kept as a string)")
     act.add_argument("--text-file", help="read typing payload from this file; '-' reads stdin")
     _add_socket(act)
@@ -164,6 +175,10 @@ def main(argv: list[str] | None = None) -> int:
             daemon_args += ["--reader-key-env", args.reader_key_env]
         if args.max_reader_calls is not None:
             daemon_args += ["--max-reader-calls", str(args.max_reader_calls)]
+        daemon_args += ["--idle-timeout", str(args.idle_timeout),
+                        "--max-session-lifetime", str(args.max_session_lifetime),
+                        "--max-actions", str(args.max_actions),
+                        "--max-observations", str(args.max_observations)]
         if args.run_dir is None:
             daemon_args = ["--foreground"] + (["--socket", str(args.socket)] if args.socket else [])
             if args.audit:
@@ -180,6 +195,10 @@ def main(argv: list[str] | None = None) -> int:
                 daemon_args += ["--reader-key-env", args.reader_key_env]
             if args.max_reader_calls is not None:
                 daemon_args += ["--max-reader-calls", str(args.max_reader_calls)]
+            daemon_args += ["--idle-timeout", str(args.idle_timeout),
+                            "--max-session-lifetime", str(args.max_session_lifetime),
+                            "--max-actions", str(args.max_actions),
+                            "--max-observations", str(args.max_observations)]
         return daemon_main(daemon_args)
     method_params: dict[str, Any]
     method = args.command
@@ -208,6 +227,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("--questions-json must be a list of question objects")
             method_params["questions"] = questions
     elif method == "act":
+        if args.expected is not None and len(args.expected) > MAX_DESKTOP_TEXT_CHARS:
+            raise ValueError("expected_text_too_long")
         method_params = {"app": args.app, "action": args.action, "target_ref": args.target_ref,
                          "approved": args.approved,
                          "verification": args.verification}
@@ -215,8 +236,10 @@ def main(argv: list[str] | None = None) -> int:
             method_params["expected"] = args.expected
         if args.action == "type_text":
             method_params["text"] = _read_text_file(args.text_file)
+        elif args.action == "replace_document":
+            method_params["text"] = _read_text_file(args.text_file)
         elif args.text_file is not None:
-            raise ValueError("--text-file applies only to type_text")
+            raise ValueError("--text-file applies only to type_text or replace_document")
     elif method == "cancel":
         method_params = {"session_id": args.session_id} if args.session_id else {}
     elif method in {"stop", "stop-all", "shutdown"}:

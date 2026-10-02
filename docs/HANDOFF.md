@@ -1,13 +1,59 @@
 # HANDOFF — start here for a fresh session
 
 **Updated 2026-10-02.** Repo: `/home/messhias/lamasync/projects/computer-use`.
-Branch: `main`; this checkpoint commits on top of `6e23448`. GitHub/origin
+Branch: `main`. GitHub/origin
 [aliforfaen/computer-use](https://github.com/aliforfaen/computer-use) is
-connected and pushed; no push or deploy is pending. Owner work resumed on
+connected; earlier checkpoints were pushed. The current workflow checkpoint
+is local; no deployment was made. Owner work resumed on
 2026-10-02. The M4b timeout/journal/interrupt changes were reviewed, fixed and
 covered by offline tests, then the probe's single configured follow-up request
 completed. Read `AGENTS.md`, this file, [the virtual slice](15-virtual-session-slice.md),
 then [the local owner surface](16-local-owner-and-mcp.md).
+
+## Latest local workflow checkpoint
+
+Owner-authorized session lifecycle and Kate document work is implemented.
+Read [doc 21](21-kate-acceptance-workflow.md), then
+[doc 22](22-live-desktop-smoke.md) for the separately scoped visible probe.
+The owner MCP remains virtual-only; tailnet and general live task support are
+not deployed. No project-provider requests were made in this session.
+
+- Defaults: 180 s idle, 1800 s lifetime, 64 actions, 256 reads. Only successful
+  work refreshes idle time. Watchdog and agent stops share teardown/recovery;
+  expiry and concurrent stops are pinned to the correct session.
+- Kate opens a new exclusive file in `run/documents/`. Fresh semantic actions
+  replace and save text; exact editor/file verifiers cover up to 4096 chars.
+  Task files survive app cleanup. Failed-start empty files are cleaned up.
+- Useful Luna acceptance passed: Firefox screenshot briefing → verified fixture
+  action → Kate draft/save/revise/save. Both sessions cleaned up. Final note:
+  `run/documents/handover-e9b2eb534363a1beb04ed290.txt` (594 saved characters).
+  Report/screenshots/timeline: `run/kate-acceptance-corrected/`.
+- Baseline owner-call span: 264.557 s, 21 calls, 47.480 s of owner work.
+  Gaps include agent work and SDK-client setup, not isolated vision latency.
+- Subsequent bulk input check: 1447 chars replaced in 2.066 s and saved in
+  1.864 s; exact bytes persisted after cleanup. `run/kate-bulk-owner/report.json`.
+- Actual no-call KCalc watchdog cleanup passed with a 5 s idle cap; no owned
+  app/session group, journal or temporary home remained afterward. Evidence:
+  `run/host-watchdog-probe/kcalc-final-20261002T141210Z/summary.json`.
+- Paid interpretation in the supported daemon is temporarily refused until
+  pre-request USD reservation is enforceable. Its $1 provider ceiling does
+  not meter Codex caller inference. Images remain available to vision agents.
+- Codex MCP config sets an explicit runtime socket. New action enums require
+  host schema refresh/relaunch. This acceptance used `mcp_trial_client.py`, a
+  fresh official SDK client against the same MCP owner, exporting images for
+  Luna to inspect. No direct driver shortcut completed the acceptance.
+
+The fixed visible live KCalc probe also passed: one fresh semantic click,
+blank → `1`, two mapped app captures via Spectacle on the 2560×1440 scale-1
+display, exact focus restoration, owned process/window cleanup and original
+accessibility flags restored. Duration 8.547 s includes 5 s of deliberate
+viewing holds. Evidence is linked in doc 22. This is a standalone local smoke
+test, not a live MCP task service. Coordinator verified host postconditions.
+
+Final validation: **144 offline tests pass**, wheel build passes. All test
+owners were shut down. Relaunch Codex to refresh the expanded MCP action schema.
+
+Historical M1–M4 validation below describes the earlier checkpoints.
 
 ## Current state
 
@@ -273,3 +319,12 @@ tested and its single follow-up request completed on 2026-10-02; that paid cap
 is consumed. Planner, live tasks and remote deployment remain later gates in
 doc 14; no Serve configuration was changed. No paid provider calls are needed
 for the local host probes.
+
+## Codex MCP workflow checkpoint — 2026-10-02
+
+Luna High completed the installed Codex MCP Firefox→Kate workflow: three
+verified actions, screenshot inspection, exact 144-character handover, both
+cleanups confirmed. See [doc 20](20-codex-luna-workflow.md) for the reusable
+assignment, evidence and explicit socket configuration. No project-provider
+calls. The coordinator shut down its test daemon; start the allowlisted
+owner before another task. Earlier OpenCode trials are in docs 18–19.

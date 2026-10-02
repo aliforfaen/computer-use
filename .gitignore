@@ -27,6 +27,10 @@ node_modules/
 dist/
 build/
 
+# local opencode / MCP client config
+/opencode.json
+/opencode.jsonc
+
 # editor / os
 .DS_Store
 .idea/

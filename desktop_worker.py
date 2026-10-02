@@ -2,18 +2,47 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shlex
 import shutil
+import stat
+import subprocess
 import sys
 import tempfile
+import time
+from types import MethodType
 from pathlib import Path
 from urllib.parse import quote
 
 
 ROOT = Path(__file__).resolve().parent
 FIXTURE = ROOT / "benchmark_fixtures" / "action.html"
+DOCUMENTS = ROOT / "run" / "documents"
+
+
+def _ensure_bounded_atspi_worker(engine):
+    """Use the pinned driver's reuse lifecycle with our local text-cap shim."""
+    env = engine._session_env()
+    bus = env.get("DBUS_SESSION_BUS_ADDRESS", "")
+    a11y = engine._a11y_bus_address(env)
+    proc = engine._atspi_proc
+    if proc is not None and (proc.poll() is not None or bus != engine._atspi_bus or a11y != engine._atspi_a11y):
+        engine._teardown_atspi_worker()
+        proc = None
+    if proc is None:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "jev_accessibility_worker", "--serve"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            env=env,
+        )
+        engine._atspi_proc = proc
+        engine._atspi_bus = bus
+        engine._atspi_a11y = a11y
+        engine._atspi_buffer = b""
+    return proc
 
 
 def _profile() -> Path:
@@ -39,6 +68,8 @@ class Worker:
         self.engine = None
         self.paths: list[Path] = []
         self.journal_path: Path | None = None
+        self.app: str | None = None
+        self.document_path: Path | None = None
 
     @staticmethod
     def _start_ticks(pid: int | None):
@@ -133,6 +164,9 @@ class Worker:
             raise ValueError("session_cleanup_unconfirmed")
         if self.journal_path is not None:
             self.journal_path.unlink(missing_ok=True)
+        self.app = None
+        self.document_path = None
+        self.journal_path = None
         return {"stopped": True, "cleanup_paths": []}
 
     def start(self, app: str, journal_path: str | None = None) -> dict:
@@ -141,15 +175,14 @@ class Worker:
         if not isinstance(journal_path, str) or not journal_path:
             raise ValueError("invalid_worker_start")
         self.journal_path = Path(journal_path)
+        self.app = app
         from kwin_mcp.core import AutomationEngine
 
         env = {"QT_ACCESSIBILITY": "1", "GTK_MODULES": "gail:atk-bridge"}
         if app == "kate":
-            fd, raw = tempfile.mkstemp(prefix="jev-desktop-draft-", suffix=".txt")
-            os.close(fd)
-            draft = Path(raw)
-            self.paths.append(draft)
-            command = f"kate {shlex.quote(str(draft))}"
+            document = self._new_document()
+            self.document_path = document
+            command = f"kate {shlex.quote(str(document))}"
         elif app == "firefox":
             if not FIXTURE.is_file():
                 raise ValueError("fixture_unavailable")
@@ -161,6 +194,12 @@ class Worker:
         else:
             command = "kcalc"
         self.engine = AutomationEngine()
+        # kwin-mcp 0.10.0 launches its accessibility reader in a child process.
+        # Kate needs complete text for owned-document verification, so reuse
+        # its bus identity, retry, timeout and teardown machinery with our
+        # bounded text cap only for Kate sessions.
+        if app == "kate":
+            self.engine._ensure_atspi_worker = MethodType(_ensure_bounded_atspi_worker, self.engine)
         try:
             start = self.engine.session_start(app_command=command, screen_width=1280, screen_height=800,
                                               isolate_home=True, keep_home=False, keep_screenshots=False, env=env)
@@ -171,10 +210,25 @@ class Worker:
             flags = _enable_virtual_atspi(self.engine)
             if not all(flags.values()):
                 raise ValueError("atspi_setup_failed")
+            if self.document_path is not None:
+                deadline = time.monotonic() + 8.0
+                opened = False
+                while time.monotonic() < deadline:
+                    geometry = self.engine.window_geometry(app_name="kate")
+                    if self.document_path.name in geometry:
+                        opened = True
+                        break
+                    time.sleep(0.2)
+                if not opened:
+                    raise ValueError("document_open_unconfirmed")
             self._write_journal()
-            return {"started": True, "atspi": flags, "cleanup_paths": [str(p) for p in self.paths]}
+            return {"started": True, "atspi": flags, "cleanup_paths": [str(p) for p in self.paths],
+                    **({"document_path": str(self.document_path)} if self.document_path else {})}
         except Exception:
+            failed_document = self.document_path
             self.stop()
+            if failed_document is not None:
+                self._remove_empty_failed_document(failed_document)
             raise
 
     def call(self, method: str, params: dict):
@@ -207,8 +261,107 @@ class Worker:
             return self.engine.mouse_click(params["x"], params["y"], button="left")
         if method == "keyboard_type":
             value = params["text"]
+            # Long ASCII notes are slow when sent character-by-character through
+            # EIS. Kate's document workflow can use the driver's bounded paste
+            # path, which snapshots and restores the clipboard. Keep other app
+            # fixture typing behavior unchanged.
+            if self.app == "kate":
+                return self.engine.keyboard_type_unicode(value)
             return self.engine.keyboard_type_unicode(value) if not value.isascii() else self.engine.keyboard_type(value)
+        if method == "document_key":
+            if self.app != "kate" or self.document_path is None:
+                raise ValueError("document_unavailable")
+            # Keep the input surface closed: callers cannot supply key names or
+            # combinations. Transactions select only these two app operations.
+            keys = {"select_all": "ctrl+a", "save": "ctrl+s"}
+            operation = params.get("operation")
+            if operation not in keys:
+                raise ValueError("document_operation_not_allowed")
+            return self.engine.keyboard_key(keys[operation])
+        if method == "document_bytes":
+            path = self._owned_document()
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise ValueError("document_unavailable")
+                with os.fdopen(fd, "rb", closefd=False) as stream:
+                    data = stream.read(1_048_577)
+            finally:
+                os.close(fd)
+            if len(data) > 1_048_576:
+                raise ValueError("document_too_large")
+            return {"utf8_base64": base64.b64encode(data).decode("ascii")}
         raise ValueError("worker_method_not_allowed")
+
+    @staticmethod
+    def _new_document() -> Path:
+        root = ROOT.resolve(strict=True)
+        run_dir = ROOT / "run"
+        if run_dir.is_symlink():
+            raise ValueError("document_create_failed")
+        run_dir.mkdir(mode=0o700, exist_ok=True)
+        run_resolved = run_dir.resolve(strict=True)
+        if run_resolved.parent != root or DOCUMENTS.is_symlink():
+            raise ValueError("document_create_failed")
+        DOCUMENTS.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if DOCUMENTS.resolve(strict=True).parent != run_resolved:
+            raise ValueError("document_create_failed")
+        try:
+            DOCUMENTS.chmod(0o700)
+        except OSError:
+            pass
+        # O_EXCL is the no-overwrite guarantee, including across concurrent
+        # owners. The random token is task-owned metadata, not caller input.
+        for _ in range(8):
+            path = DOCUMENTS / f"handover-{os.urandom(12).hex()}.txt"
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                continue
+            else:
+                os.close(fd)
+                return path
+        raise ValueError("document_create_failed")
+
+    def _owned_document(self) -> Path:
+        path = self.document_path
+        if self.app != "kate" or path is None:
+            raise ValueError("document_unavailable")
+        try:
+            root = ROOT.resolve(strict=True)
+            run_dir = ROOT / "run"
+            if run_dir.is_symlink() or DOCUMENTS.is_symlink():
+                raise ValueError("document_unavailable")
+            run_resolved = run_dir.resolve(strict=True)
+            resolved = path.resolve(strict=True)
+            parent = DOCUMENTS.resolve(strict=True)
+            if run_resolved.parent != root or parent.parent != run_resolved:
+                raise ValueError("document_unavailable")
+            if resolved.parent != parent or path.is_symlink() or not resolved.is_file():
+                raise ValueError("document_unavailable")
+            if resolved.stat().st_size > 1_048_576:
+                raise ValueError("document_too_large")
+            return resolved
+        except OSError:
+            raise ValueError("document_unavailable") from None
+
+    @staticmethod
+    def _remove_empty_failed_document(path: Path) -> None:
+        """Remove only the just-created empty file after confirmed session stop."""
+        try:
+            root = ROOT.resolve(strict=True)
+            run_dir = ROOT / "run"
+            if run_dir.is_symlink() or DOCUMENTS.is_symlink() or path.is_symlink():
+                return
+            run_resolved = run_dir.resolve(strict=True)
+            parent = DOCUMENTS.resolve(strict=True)
+            if (run_resolved.parent != root or parent.parent != run_resolved
+                    or path.parent != DOCUMENTS or not stat.S_ISREG(path.lstat().st_mode)
+                    or path.stat().st_size != 0):
+                return
+            path.unlink()
+        except OSError:
+            return
 
     def cleanup(self):
         for path in self.paths:
@@ -231,7 +384,8 @@ def main() -> int:
             safe = str(exc)
             allowed = {"invalid_request", "invalid_worker_start", "session_stop_unconfirmed", "session_not_started",
                        "app_not_allowed", "fixture_unavailable", "virtual_session_unavailable", "atspi_setup_failed",
-                       "worker_method_not_allowed"}
+                       "worker_method_not_allowed", "document_unavailable", "document_operation_not_allowed",
+                       "document_create_failed", "document_too_large", "document_open_unconfirmed"}
             code = safe if safe in allowed else type(exc).__name__
             response = {"id": request.get("id") if isinstance(request, dict) else None,
                         "error": {"code": code, "cleanup_paths": [str(p) for p in worker.paths],

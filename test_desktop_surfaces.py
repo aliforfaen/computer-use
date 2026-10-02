@@ -17,7 +17,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-from desktop_cli import _build_parser, ipc_call, main as cli_main
+from desktop_cli import MAX_DESKTOP_TEXT_CHARS, _build_parser, _read_text_file, ipc_call, main as cli_main
 from desktop_daemon import OwnerLock, RequestHandler, DesktopSocketServer
 
 
@@ -86,6 +86,37 @@ class DesktopSurfaceTests(unittest.TestCase):
         for argv in (["--socket", "/tmp/a.sock", "status"], ["status", "--socket", "/tmp/b.sock"]):
             args = _build_parser().parse_args(argv)
             self.assertEqual(str(args.socket), "/tmp/a.sock" if argv[0] == "--socket" else "/tmp/b.sock")
+
+    def test_cli_exposes_lifecycle_caps_and_kate_document_actions(self):
+        daemon = _build_parser().parse_args(["daemon", "--foreground", "--allow-app", "kate"])
+        self.assertEqual(daemon.idle_timeout, 180.0)
+        self.assertEqual(daemon.max_session_lifetime, 1800.0)
+        self.assertEqual(daemon.max_actions, 64)
+        self.assertEqual(daemon.max_observations, 256)
+        replacement = _build_parser().parse_args([
+            "act", "kate", "replace_document", "ref-1", "--verification", "target_text", "--text-file", "-"
+        ])
+        self.assertEqual(replacement.action, "replace_document")
+        saved = _build_parser().parse_args([
+            "act", "kate", "save_document", "ref-1", "--verification", "document_saved"
+        ])
+        self.assertEqual(saved.verification, "document_saved")
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as text_file:
+            text_file.write("x" * (MAX_DESKTOP_TEXT_CHARS + 1))
+            text_file.flush()
+            with self.assertRaisesRegex(ValueError, "text_argument_too_long"):
+                _read_text_file(text_file.name)
+
+    def test_mcp_schema_advertises_document_actions_and_saved_verifier(self):
+        from desktop_mcp import _tools
+
+        by_name = {tool.name: tool for tool in _tools()}
+        action = by_name["desktop_act"].input_schema["properties"]
+        self.assertIn("replace_document", action["action"]["enum"])
+        self.assertIn("save_document", action["action"]["enum"])
+        self.assertIn("document_saved", action["verification"]["enum"])
+        self.assertEqual(action["text"]["maxLength"], 4096)
+        self.assertEqual(action["expected"]["maxLength"], 4096)
 
     def test_ipc_dispatch_carries_local_provenance_and_expected_shape(self):
         with tempfile.TemporaryDirectory() as folder:
