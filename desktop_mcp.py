@@ -48,13 +48,21 @@ def _tools() -> list[types.Tool]:
             "capture_id": _string("Reuse an unexpired capture ID from the same session."),
             "questions": {"type": "array", "items": _obj({"field": {"type": "string", "maxLength": 80}, "type": _string(enum=["string", "number", "integer", "boolean", "array", "object"]), "description": {"type": "string", "maxLength": 500}, "nullable": {"type": "boolean"}}, ["field", "type", "description"]), "maxItems": 8},
         }, ["app"]), True, False),
-        ("desktop_act", "Perform one grounded click or text action and return verification evidence. Use only code-owned verifier kinds.", _obj({
+        ("desktop_wait", "Wait for a bounded screenshot condition using the configured reader. Returns a fresh final app image; this never performs an action.", _obj({
             "app": app,
-            "action": _string(enum=["click", "type_text", "replace_document", "save_document"]),
+            "expected": {"type": "string", "minLength": 1, "maxLength": 500,
+                "description": "Caller-authored visual condition. The reader can only return wait, wake, error or unexpected; it cannot act."},
+            "timeout_seconds": {"type": "number", "minimum": 0.1, "maximum": 120},
+        }, ["app", "expected"]), True, False),
+        ("desktop_act", "Perform one fresh semantic click, text, web navigation, or measurable scroll action and verify its requested effect.", _obj({
+            "app": app,
+            "action": _string(enum=["click", "type_text", "replace_document", "save_document", "navigate_url", "scroll"]),
             "target_ref": _string("Fresh candidate reference from desktop_candidates."),
-            "verification": _string(enum=["target_focused", "target_text", "fixture_state", "display_text", "document_saved"]),
-            "expected": {"type": "string", "maxLength": 4096},
+            "verification": _string(enum=["target_focused", "target_text", "fixture_state", "display_text", "document_saved", "navigation_url", "window_title", "visible_text", "scroll_changed"]),
+            "expected": {"type": "string", "maxLength": 4096, "description": "Exact postcondition. navigation_url checks the submitted HTTP(S) host and path in Firefox's address bar (Firefox may hide the scheme); it does not prove page readiness. For window_title or visible_text, use the expected resulting text."},
             "text": {"type": "string", "maxLength": 4096, "description": "Text for a verified accessible editor. replace_document is Kate-only and edits only the current focused editor in its owner-generated task document. Text is never included in audit or reader context."},
+            "direction": _string(enum=["up", "down"]),
+            "steps": {"type": "integer", "minimum": 1, "maximum": 8},
         }, ["app", "action", "target_ref", "verification"]), False, True),
         ("desktop_cancel", "Cancel current work for a session, or the current owner task.", _obj({"session_id": session}), False, False),
         ("desktop_stop_all", "Stop all active sessions and work.", _obj(), False, True),
@@ -74,6 +82,7 @@ METHODS = {
     "desktop_session_stop": "session_stop",
     "desktop_candidates": "candidates",
     "desktop_observe": "observe",
+    "desktop_wait": "wait",
     "desktop_act": "act",
     "desktop_cancel": "cancel",
     "desktop_stop_all": "stop_all",
@@ -128,10 +137,15 @@ def _build_server(socket_path: Path | None = None) -> Server:
         method_params = dict(args)
         if name == "desktop_act":
             action = method_params.get("action")
-            if action in {"type_text", "replace_document"} and not isinstance(method_params.get("text"), str):
+            if action in {"type_text", "replace_document", "navigate_url"} and not isinstance(method_params.get("text"), str):
                 return types.CallToolResult(content=[types.TextContent(type="text", text="text_required_for_type_text")], isError=True)
-            if action in {"click", "save_document"} and "text" in method_params:
+            if action in {"click", "save_document", "scroll"} and "text" in method_params:
                 return types.CallToolResult(content=[types.TextContent(type="text", text="text_not_valid_for_click")], isError=True)
+            if action == "scroll" and (method_params.get("direction") not in {"up", "down"}
+                                       or type(method_params.get("steps")) is not int):
+                return types.CallToolResult(content=[types.TextContent(type="text", text="scroll_direction_and_steps_required")], isError=True)
+            if action != "scroll" and any(key in method_params for key in ("direction", "steps")):
+                return types.CallToolResult(content=[types.TextContent(type="text", text="scroll_args_only_valid_for_scroll")], isError=True)
         try:
             result = await anyio.to_thread.run_sync(
                 lambda: ipc_call(METHODS[name], method_params, transport="local-mcp", socket_path=socket_path),
@@ -151,7 +165,7 @@ def _build_server(socket_path: Path | None = None) -> Server:
                                     structuredContent=output, isError=False)
 
     return Server("jev-desktop", version="0.1.0",
-                  instructions="This server is a local client of one desktop owner. App access is explicitly allowlisted. Read fresh candidates before acting; act accepts only code-owned verification kinds. An observation image is returned only when output=image or output=both is explicitly requested.",
+                  instructions="This server is a local client of one desktop owner. App access is explicitly allowlisted. Read fresh candidates before acting; act accepts only code-owned verification kinds. An observation image is returned only when output=image or output=both is explicitly requested. desktop_wait is a bounded visual readiness observation; inspect its returned final image before deciding whether to act.",
                   on_list_tools=list_tools, on_call_tool=call_tool)
 
 

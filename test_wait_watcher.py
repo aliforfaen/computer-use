@@ -114,6 +114,14 @@ class WaitWatcherTests(unittest.TestCase):
         self.assertEqual((capture_error.status, capture_error.error_code), ("error", "capture_failed"))
         self.assertEqual(capture_error.capture_errors, 1)
 
+        class BudgetError(Exception):
+            code = "task_observation_budget_exceeded"
+
+        budget = WaitWatcher(lambda: (_ for _ in ()).throw(BudgetError()), lambda *_: "wait",
+                             interval_seconds=0.01, debounce_seconds=0).wait(
+                                 WaitSpec("ready"), deadline_seconds=0.2)
+        self.assertEqual((budget.status, budget.error_code), ("error", "task_observation_budget_exceeded"))
+
         invalid = WaitWatcher(lambda: WaitFrame(b"frame"), lambda *_: "coordinates",
                               interval_seconds=0.01).wait(WaitSpec("ready"), deadline_seconds=0.2)
         self.assertEqual((invalid.status, invalid.error_code), ("error", "invalid_judgment"))
@@ -172,7 +180,7 @@ class WaitWatcherTests(unittest.TestCase):
         broken_reader = FakeReader(ReaderResult("error", error="http_status_429", provider="fake", model="test"))
         failed = WaitWatcher(lambda: WaitFrame(b"frame"), ReaderJudge(broken_reader), interval_seconds=0.01,
                              debounce_seconds=0).wait(WaitSpec("ready"), deadline_seconds=0.2)
-        self.assertEqual((failed.status, failed.error_code), ("error", "reader_error"))
+        self.assertEqual((failed.status, failed.error_code), ("error", "http_status_429"))
 
         malformed_reader = FakeReader(ReaderResult("ok", data={"judgment": "coordinates"}, provider="fake", model="test"))
         malformed = WaitWatcher(lambda: WaitFrame(b"frame"), ReaderJudge(malformed_reader), interval_seconds=0.01,

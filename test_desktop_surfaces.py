@@ -82,6 +82,13 @@ class DesktopSurfaceTests(unittest.TestCase):
                 self.assertEqual(cli_main(["status"]), 0)
             call.assert_called_once_with("status", {}, socket_path=None)
 
+    def test_cli_wait_forwards_a_bounded_visual_condition(self):
+        with patch("desktop_cli.ipc_call", return_value={"ok": True, "wait": {"status": "ready"}}) as call:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(cli_main(["wait", "firefox", "--expected", "heading visible", "--timeout", "12"]), 0)
+            call.assert_called_once_with("wait", {"app": "firefox", "expected": "heading visible",
+                                                   "timeout_seconds": 12.0}, socket_path=None)
+
     def test_cli_socket_argument_survives_both_supported_positions(self):
         for argv in (["--socket", "/tmp/a.sock", "status"], ["status", "--socket", "/tmp/b.sock"]):
             args = _build_parser().parse_args(argv)
@@ -101,6 +108,14 @@ class DesktopSurfaceTests(unittest.TestCase):
             "act", "kate", "save_document", "ref-1", "--verification", "document_saved"
         ])
         self.assertEqual(saved.verification, "document_saved")
+        navigation = _build_parser().parse_args([
+            "act", "firefox", "navigate_url", "ref-1", "--verification", "navigation_url", "--text-file", "-"
+        ])
+        self.assertEqual(navigation.action, "navigate_url")
+        scroll = _build_parser().parse_args([
+            "act", "firefox", "scroll", "ref-2", "--verification", "scroll_changed", "--direction", "down", "--steps", "2"
+        ])
+        self.assertEqual((scroll.direction, scroll.steps), ("down", 2))
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as text_file:
             text_file.write("x" * (MAX_DESKTOP_TEXT_CHARS + 1))
             text_file.flush()
@@ -115,6 +130,9 @@ class DesktopSurfaceTests(unittest.TestCase):
         self.assertIn("replace_document", action["action"]["enum"])
         self.assertIn("save_document", action["action"]["enum"])
         self.assertIn("document_saved", action["verification"]["enum"])
+        self.assertIn("navigate_url", action["action"]["enum"])
+        self.assertIn("scroll", action["action"]["enum"])
+        self.assertIn("scroll_changed", action["verification"]["enum"])
         self.assertEqual(action["text"]["maxLength"], 4096)
         self.assertEqual(action["expected"]["maxLength"], 4096)
 

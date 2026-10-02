@@ -10,7 +10,30 @@ covered by offline tests, then the probe's single configured follow-up request
 completed. Read `AGENTS.md`, this file, [the virtual slice](15-virtual-session-slice.md),
 then [the local owner surface](16-local-owner-and-mcp.md).
 
-## Latest local workflow checkpoint
+## Latest checkpoint — broader actions and useful agent work
+
+- Virtual navigation, link clicks and text entry passed real Firefox checks.
+  Scrolling remains unresolved: its latest bounded effect verifier failed.
+- Luna read Python.org, recovered from a `.invalid` navigation, drafted/revised/
+  saved a Kate note and closed both sessions. Coordinator confirmed exact
+  866-byte final file: `run/documents/handover-54b05810723ab10aff229f0c.txt`.
+  [Assignment and evidence](23-public-browser-kate-agent-task.md).
+- Reader setup is enabled explicitly with call caps, usage and latency reporting,
+  durable attempt accounting and a cancellable subprocess deadline covering
+  headers/body. The old dollar-reservation refusal and paid-probe restriction
+  below are historical; owner authorized these new small provider tests.
+- Four primary-agent trials: both screenshot-polling tasks completed; both
+  DeepSeek wait tasks failed closed with `invalid_judgment`. Keep heartbeat
+  waiting opt-in; no acceleration claim. [Results](24-primary-agent-wait-comparison.md).
+- Last full offline run: 172 tests passed; wheel build passed. Fixture signal
+  handling was checked separately afterward. No larger matrix was run after
+  the owner requested lighter testing. Use targeted checks going forward.
+- Live MCP support still needs implementation. [Next phases](25-next-phases.md)
+  put owner-watched input last; no live input or Serve changes in this work.
+
+## Earlier checkpoint notes (historical)
+
+### Prior local workflow checkpoint
 
 Owner-authorized session lifecycle and Kate document work is implemented.
 Read [doc 21](21-kate-acceptance-workflow.md), then

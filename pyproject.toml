@@ -21,6 +21,7 @@ jev-desktop-mcp = "desktop_mcp:main"
 [tool.setuptools]
 py-modules = [
     "benchmark_capture",
+    "agent_wait_trial_fixture",
     "desktop_cli",
     "desktop_daemon",
     "desktop_mcp",
@@ -29,11 +30,13 @@ py-modules = [
     "jev_accessibility_worker",
     "live_desktop_probe",
     "observation",
+    "owner_wait",
     "p2_kcalc",
     "transactions",
     "virtual_tasks",
     "vision_benchmark",
     "vision_reader",
+    "vision_reader_worker",
     "wait_benchmark",
     "wait_watcher",
 ]

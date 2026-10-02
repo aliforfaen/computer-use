@@ -10,6 +10,7 @@ from pathlib import Path
 
 from desktop_service import DesktopService, DesktopWorkerClient
 from observation import ObservationError
+from vision_reader import ReaderResult
 
 
 class _Alive:
@@ -35,24 +36,50 @@ class FakeWorker:
         self.stopped = 0
         self.fail_start = False
         self.saved_bytes = b""
+        self.app = "kate"
+        self.keys = []
+        self.scroll_calls = []
+        self.delayed_scroll_reads = 0
+        self.pending_scroll_delta = 0
 
     def start(self, app):
         if self.fail_start: raise RuntimeError("start_failed")
+        self.app = app
         return {"started": True}
     def stop(self): self.stopped += 1; return {"stopped": True}
     def window_query(self):
-        return {"ok": True, "result": [{"id": "window-1", "app": "org.kde.kate", "caption": "private caption",
+        app_id = {"kate": "org.kde.kate", "firefox": "org.mozilla.firefox", "kcalc": "org.kde.kcalc"}[self.app]
+        return {"ok": True, "result": [{"id": "window-1", "app": app_id, "caption": "private caption",
                                          "frame": {"x": 0, "y": 0, "width": 640, "height": 400}}]}
     def atspi_find(self, app):
         if self.block:
             self.entered.set(); self.release.wait(2)
+        if self.pending_scroll_delta:
+            self.delayed_scroll_reads -= 1
+            if self.delayed_scroll_reads <= 0:
+                for row in self.rows:
+                    if row.get("role") == "scroll bar": row["value"] = row.get("value", 0) + self.pending_scroll_delta * 120
+                    elif row.get("role") == "link": row["y"] -= self.pending_scroll_delta * 120
+                self.pending_scroll_delta = 0
         return {"ok": True, "result": [dict(row) for row in self.rows]}
     def window_geometry(self, app=None, *, app_name=None):
-        return ('Windows (1):\n- org.kde.kate "private caption"\n    id: window-1\n'
+        app_id = {"kate": "org.kde.kate", "firefox": "org.mozilla.firefox", "kcalc": "org.kde.kcalc"}[self.app]
+        return (f'Windows (1):\n- {app_id} "private caption"\n    id: window-1\n'
                 '    frame: 0, 0, 640x400\n    client: (0, 0, 640x400)')
-    def active_window(self): return 'Active window:\n- org.kde.kate "private caption" [active]\n    id: window-1'
+    def active_window(self):
+        app_id = {"kate": "org.kde.kate", "firefox": "org.mozilla.firefox", "kcalc": "org.kde.kcalc"}[self.app]
+        return f'Active window:\n- {app_id} "private caption" [active]\n    id: window-1'
     def mouse_click(self, x, y, button="left"): pass
-    def keyboard_type(self, text): self.rows[0]["text"] += text
+    def mouse_scroll(self, x, y, delta, *, discrete=False, steps=1):
+        self.scroll_calls.append((x, y, delta, steps))
+        if self.delayed_scroll_reads:
+            self.pending_scroll_delta = delta
+            return
+        for row in self.rows:
+            if row.get("role") == "scroll bar": row["value"] = row.get("value", 0) + delta * 120
+            elif row.get("role") == "link": row["y"] -= delta * 120
+    def keyboard_type(self, text): self.rows[0]["text"] = text
+    def keyboard_key(self, key): self.keys.append(key)
     def document_key(self, operation):
         if operation == "select_all": self.rows[0]["text"] = ""
         elif operation == "save": self.saved_bytes = self.rows[0]["text"].encode("utf-8")
@@ -78,25 +105,86 @@ class DesktopServiceTests(unittest.TestCase):
         self.service.close()
         self.tmp.cleanup()
 
-    def start(self):
-        response = self.service.dispatch("session_start", {"app": "kate"}, self.ctx)
+    def start(self, app="kate"):
+        response = self.service.dispatch("session_start", {"app": app}, self.ctx)
         self.assertTrue(response["ok"], response)
         return response["session"]["session_id"]
+
+    def start_firefox(self):
+        self.service.close()
+        self.worker = FakeWorker()
+        self.service = DesktopService(Path(self.tmp.name) / "firefox-audit.jsonl", allowed_apps={"firefox"},
+                                      worker_factory=lambda: self.worker, stop_timeout=0.05)
+        return self.start("firefox")
 
     def test_allowlist_single_owner_and_status_does_not_hold_lock(self):
         capabilities = self.service.dispatch("capabilities")
         self.assertEqual(capabilities["allowed_apps"], ["kate"])
-        self.assertEqual(capabilities["reader"]["project_provider_budget_usd"], 1.0)
-        self.assertEqual(capabilities["reader"]["paid_reader"], "disabled_until_cost_reservation_available")
+        self.assertFalse(capabilities["reader"]["available"])
+        self.assertNotIn("project_provider_spent_usd", capabilities["reader"])
         denied = self.service.dispatch("session_start", {"app": "kcalc"})
         self.assertEqual(denied["error"]["code"], "app_not_allowed")
         self.start()
         duplicate = self.service.dispatch("session_start", {"app": "kate"})
         self.assertEqual(duplicate["error"]["code"], "session_exists")
         self.assertEqual(self.service.dispatch("status")["session"]["state"], "running")
-        self.assertEqual(self.service.dispatch("status")["session"]["project_provider_reserved_usd"], 0.0)
+        self.assertEqual(self.service.dispatch("status")["session"]["reader"]["calls_used"], 0)
         candidates = self.service.dispatch("candidates", {"app": "kate"})
         self.assertTrue(candidates["ok"], candidates)
+
+    def test_reader_call_cap_and_reported_usage_are_per_session(self):
+        class FakeReader:
+            def __init__(self, audit_path): self.calls = 0; self.audit_path = audit_path; self.pending_seen_before_request = False
+            def capabilities(self): return {"provider": "test", "model": "test-model", "images": True}
+            def interpret(self, image, questions):
+                self.calls += 1
+                rows = [json.loads(line) for line in self.audit_path.read_text().splitlines()]
+                self.pending_seen_before_request = any(row.get("event") == "reader_call_started" and row.get("status") == "pending" for row in rows)
+                return ReaderResult("ok", data={"text": "visible"}, provider="test", model="test-model",
+                                    usage={"prompt_tokens": 8, "completion_tokens": 2}, latency_ms=12.5)
+            def close(self): pass
+
+        audit_path = Path(self.tmp.name) / "reader-audit.jsonl"
+        reader = FakeReader(audit_path)
+        service = DesktopService(audit_path, allowed_apps={"kate"},
+                                 worker_factory=lambda: FakeWorker(), reader=reader, max_reader_calls=1)
+        try:
+            started = service.dispatch("session_start", {"app": "kate"}, self.ctx)
+            self.assertTrue(started["ok"], started)
+            session = service._session
+            from observation import CaptureRef
+            import hashlib
+            image = b"same capture"
+            capture_id = "reader-cap"
+            ref = CaptureRef(capture_id, "now", session.session_id, "window-1", "org.kde.kate", "private",
+                             1, 1, 1, 1, hashlib.sha256(image).hexdigest(), "source", "app", {})
+            session.adapter.store.put(ref, image)
+            first = service.dispatch("observe", {"app": "kate", "capture_id": capture_id, "output": "both",
+                "questions": [{"field": "text", "type": "string", "description": "visible text"}]}, self.ctx)
+            self.assertTrue(first["ok"], first)
+            self.assertEqual(first["observation"]["data"], {"text": "visible"})
+            self.assertIn("image_base64", first["observation"])
+            second = service.dispatch("observe", {"app": "kate", "capture_id": capture_id, "output": "data",
+                "questions": [{"field": "text", "type": "string", "description": "visible text"}]}, self.ctx)
+            self.assertTrue(second["ok"], second)
+            self.assertEqual(second["observation"]["errors"][0]["code"], "reader_call_budget_exceeded")
+            self.assertEqual(reader.calls, 1)
+            self.assertTrue(reader.pending_seen_before_request)
+            state = service.dispatch("status")["session"]["reader"]
+            self.assertEqual((state["calls_used"], state["max_calls"], state["successful_calls"]), (1, 1, 1))
+            self.assertEqual(state["reported_usage"], {"prompt_tokens": 8, "completion_tokens": 2})
+            self.assertEqual(state["latency_total_ms"], 12.5)
+            audit_lines = [json.loads(line) for line in (Path(self.tmp.name) / "reader-audit.jsonl").read_text().splitlines()]
+            self.assertEqual((audit_path.stat().st_mode & 0o777), 0o600)
+            reader_events = [row for row in audit_lines if row.get("event", "").startswith("reader_call_")]
+            self.assertEqual([row["event"] for row in reader_events], ["reader_call_started", "reader_call_completed"])
+            self.assertEqual([row["status"] for row in reader_events], ["pending", "ok"])
+            self.assertEqual(reader_events[-1]["reported_usage"], {"prompt_tokens": 8, "completion_tokens": 2})
+            self.assertNotIn("image", json.dumps(reader_events))
+            self.assertNotIn("questions", json.dumps(reader_events))
+            self.assertNotIn("visible", json.dumps(reader_events))
+        finally:
+            service.close()
 
     def test_exact_text_action_and_audit_never_contains_typed_text(self):
         self.start()
@@ -126,6 +214,89 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertEqual(saved["evidence"], {"exact_bytes_saved": True})
         audit = (Path(self.tmp.name) / "audit.jsonl").read_text()
         self.assertNotIn(content, audit)
+
+    def test_firefox_navigation_uses_fresh_address_candidate_and_exact_url_check(self):
+        self.start_firefox()
+        self.worker.rows = [{"role": "combo box", "name": "Address and search bar",
+                             "states": ["editable", "enabled", "sensitive", "showing", "visible", "focused"],
+                             "actions": ["SetFocus"], "x": 10, "y": 10, "width": 500, "height": 24,
+                             "mapped": True, "text": "https://old.example/"}]
+        candidates = self.service.dispatch("candidates", {"app": "firefox"})
+        self.assertTrue(candidates["ok"], candidates)
+        candidate = candidates["candidates"][0]
+        self.assertIn("navigate_url", candidate["actions"])
+        url = "https://www.python.org/about/"
+        result = self.service.dispatch("act", {"app": "firefox", "action": "navigate_url",
+            "target_ref": candidate["ref"], "verification": "navigation_url", "expected": url, "text": url}, self.ctx)
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["evidence"]["address_bar_destination_verified"])
+        self.assertEqual(result["evidence"]["submitted_scheme"], "https")
+        self.assertEqual(self.worker.keys, ["ctrl+a", "Return"])
+
+    def test_firefox_omnibox_scheme_elision_is_normalized_without_changing_path(self):
+        from desktop_service import _same_address_destination
+        self.assertTrue(_same_address_destination("www.python.org/about/", "https://www.python.org/about/"))
+        self.assertFalse(_same_address_destination("www.python.org/downloads/", "https://www.python.org/about/"))
+
+    def test_firefox_scroll_verification_requires_one_position_and_requested_direction(self):
+        self.start_firefox()
+        self.worker.rows = [
+            {"role": "document frame", "name": "Page", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": [], "x": 10, "y": 40, "width": 500, "height": 300, "mapped": True, "text": ""},
+            {"role": "scroll bar", "name": "Page scroll", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": [], "x": 510, "y": 40, "width": 12, "height": 300, "mapped": True,
+             "text": "", "value": 0.0, "value_max": 100.0},
+        ]
+        candidates = self.service.dispatch("candidates", {"app": "firefox"})["candidates"]
+        page = next(candidate for candidate in candidates if candidate["role"] == "document frame")
+        result = self.service.dispatch("act", {"app": "firefox", "action": "scroll", "target_ref": page["ref"],
+            "verification": "scroll_changed", "direction": "down", "steps": 1}, self.ctx)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["evidence"], {"scroll_position_changed_in_requested_direction": True,
+                                               "measurement": "accessibility_scroll_value",
+                                               "verification_reads": 1})
+        self.assertEqual(self.worker.scroll_calls, [(260, 190, 1, 1)])
+
+    def test_firefox_scroll_uses_fresh_link_bounds_when_scrollbar_value_is_missing(self):
+        self.start_firefox()
+        self.worker.rows = [
+            {"role": "scroll pane", "name": "", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": [], "x": 0, "y": 40, "width": 640, "height": 360, "mapped": True, "text": ""},
+            {"role": "link", "name": "Next section", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": ["Jump"], "x": 30, "y": 180, "width": 100, "height": 24, "mapped": True, "text": ""},
+            {"role": "link", "name": "Previous section", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": ["Jump"], "x": 30, "y": 220, "width": 110, "height": 24, "mapped": True, "text": ""},
+            {"role": "button", "name": "Fixed toolbar", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": ["Click"], "x": 300, "y": 240, "width": 110, "height": 24, "mapped": True, "text": ""},
+        ]
+        candidates = self.service.dispatch("candidates", {"app": "firefox"})["candidates"]
+        pane = next(candidate for candidate in candidates if candidate["role"] == "scroll pane")
+        result = self.service.dispatch("act", {"app": "firefox", "action": "scroll", "target_ref": pane["ref"],
+            "verification": "scroll_changed", "direction": "down", "steps": 1}, self.ctx)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["evidence"], {"scroll_position_changed_in_requested_direction": True,
+                                               "measurement": "semantic_content_bounds",
+                                               "verification_reads": 1})
+
+    def test_firefox_scroll_waits_for_delayed_semantic_movement_within_bound(self):
+        self.start_firefox()
+        self.worker.rows = [
+            {"role": "scroll pane", "name": "", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": [], "x": 0, "y": 40, "width": 640, "height": 360, "mapped": True, "text": ""},
+            {"role": "link", "name": "First", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": ["Jump"], "x": 30, "y": 180, "width": 100, "height": 24, "mapped": True, "text": ""},
+            {"role": "link", "name": "Second", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": ["Jump"], "x": 30, "y": 220, "width": 100, "height": 24, "mapped": True, "text": ""},
+        ]
+        self.worker.delayed_scroll_reads = 2
+        candidates = self.service.dispatch("candidates", {"app": "firefox"})["candidates"]
+        pane = next(candidate for candidate in candidates if candidate["role"] == "scroll pane")
+        result = self.service.dispatch("act", {"app": "firefox", "action": "scroll", "target_ref": pane["ref"],
+            "verification": "scroll_changed", "direction": "down", "steps": 1}, self.ctx)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["evidence"], {"scroll_position_changed_in_requested_direction": True,
+                                               "measurement": "semantic_content_bounds",
+                                               "verification_reads": 2})
 
     def test_competing_call_is_denied_and_cancel_is_available(self):
         self.start()

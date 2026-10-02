@@ -158,7 +158,7 @@ def _make_service(args: argparse.Namespace) -> Any:
     if args.reader_provider:
         if args.max_reader_calls is None or args.max_reader_calls <= 0:
             raise RuntimeError("--reader-provider requires a positive --max-reader-calls opt-in cap")
-        from vision_reader import ReaderConfig, VisionReader
+        from vision_reader import IsolatedVisionReader, ReaderConfig
 
         defaults = {
             "deepseek": ("https://api.deepseek.com", "deepseek-flash", "DEEPSEEK_API_KEY"),
@@ -174,14 +174,17 @@ def _make_service(args: argparse.Namespace) -> Any:
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", key_env):
             raise RuntimeError("--reader-key-env must be an environment variable name")
         try:
-            config = ReaderConfig(provider=args.reader_provider, base_url=base_url, model=model, key_env=key_env)
+            config = ReaderConfig(provider=args.reader_provider, base_url=base_url, model=model, key_env=key_env,
+                                  timeout_seconds=args.reader_timeout,
+                                  total_timeout_seconds=args.reader_total_timeout)
         except ValueError as exc:
             raise RuntimeError("reader configuration is invalid") from exc
-        # Reader setup itself is local. The service rejects reader instances
-        # because provider-specific dollar reservation is not yet enforceable.
-        reader = VisionReader(config)
-        raise RuntimeError("reader disabled: this daemon cannot reliably reserve a dollar cost before provider requests")
-    if args.max_reader_calls is not None or args.reader_base_url or args.reader_model or args.reader_key_env:
+        if not os.environ.get(key_env):
+            _load_dotenv_key(args.dotenv, key_env)
+        if not os.environ.get(key_env):
+            raise RuntimeError("reader API key is not available in the environment or configured dotenv file")
+        reader = IsolatedVisionReader(config)
+    if not args.reader_provider and (args.max_reader_calls is not None or args.reader_base_url or args.reader_model or args.reader_key_env):
         raise RuntimeError("reader options require --reader-provider")
     return DesktopService(audit_path=audit_path, allowed_apps=allowed_apps, reader=reader,
                           max_reader_calls=args.max_reader_calls or 0,
@@ -189,6 +192,24 @@ def _make_service(args: argparse.Namespace) -> Any:
                           max_session_lifetime=args.max_session_lifetime,
                           max_actions=args.max_actions,
                           max_observations=args.max_observations)
+
+
+def _load_dotenv_key(path: Path | None, key_name: str) -> None:
+    """Load only the configured API key from a simple dotenv file, without printing it."""
+    if path is None:
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        if name.strip() == key_name and key_name not in os.environ:
+            os.environ[key_name] = value.strip().strip("\"'")
+            return
 
 
 def serve(*, socket_path: Path, service: Any, stop_event: threading.Event | None = None) -> None:
@@ -253,10 +274,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-observations", type=int, default=256,
                         help="maximum observe/candidate reads per session (default: 256)")
     parser.add_argument("--reader-provider", choices=("deepseek", "mimo", "generic"), default=None,
-                        help="reserved; reader startup is disabled until dollar-cost reservation is enforceable")
+                        help="enable structured interpretation of the same app capture returned to the caller")
     parser.add_argument("--reader-base-url", default=None, help="OpenAI-compatible reader endpoint base URL")
     parser.add_argument("--reader-model", default=None, help="reader model name")
     parser.add_argument("--reader-key-env", default=None, help="environment variable name holding the reader key; its value is never displayed")
+    parser.add_argument("--dotenv", type=Path, default=Path(".env"), help="optional dotenv file for the configured reader key; key values are never displayed")
+    parser.add_argument("--reader-timeout", type=float, default=10.0,
+                        help="HTTP connect/read idle timeout in seconds (default: 10)")
+    parser.add_argument("--reader-total-timeout", type=float, default=15.0,
+                        help="absolute response-body deadline in seconds (default: 15; header trickle is bounded per idle gap only)")
     parser.add_argument("--max-reader-calls", type=int, default=None,
                         help="positive per-session provider call cap; required to enable a reader")
     args = parser.parse_args(argv)

@@ -1,9 +1,9 @@
 """Small, fail-closed AT-SPI action transactions over kwin-mcp.
 
-This module deliberately supports only semantic buttons and editable text
-fields. kwin-mcp 0.10.0 exposes AT-SPI as formatted text and coordinate input;
-it does not expose an AT-SPI Action invocation method. Bounds are therefore
-used only after a fresh identity/state check against one active KWin window.
+This module exposes a small set of fresh semantic controls. kwin-mcp 0.10.0
+exposes AT-SPI elements and coordinate input; it does not expose an AT-SPI
+Action invocation method. Bounds are therefore used only after a fresh
+identity/state check against one active KWin window.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Protocol
+from urllib.parse import urlsplit
 
 
 _TREE_LINE = re.compile(
@@ -32,6 +33,7 @@ _TEXT = re.compile(r"\btext='((?:[^'\\]|\\.)*)'")
 _ID = re.compile(r'^\s*id:\s*(?P<id>\S+)\s*$', re.MULTILINE)
 _APP = re.compile(r'^- (?P<app>\S+) "(?P<title>(?:[^"\\]|\\.)*)"(?P<active> \[active\])?$', re.MULTILINE)
 _CLIENT_RECT = re.compile(r'^\s*client:\s*\((?P<x>-?\d+), (?P<y>-?\d+), (?P<w>\d+)x(?P<h>\d+)\)\s*$', re.MULTILINE)
+_BROWSER_ADDRESS = re.compile(r"(address|location|search.*(web|address)|web.*search)", re.IGNORECASE)
 
 
 class TransactionError(RuntimeError):
@@ -64,6 +66,9 @@ class Candidate:
     actions: tuple[str, ...]
     bounds: Bounds
     value: str | None = field(default=None, repr=False)
+    value_number: float | None = None
+    value_max: float | None = None
+    unavailable_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,7 @@ class Snapshot:
     generation: str
     window_id: str
     window_app: str
+    window_title: str
     window_bounds: Bounds
     active: bool
     candidates: tuple[Candidate, ...]
@@ -87,6 +93,8 @@ class Action:
     kind: str
     target_ref: str
     text: str | None = field(default=None, repr=False)
+    direction: str | None = None
+    steps: int = 1
 
 
 @dataclass(frozen=True)
@@ -127,7 +135,9 @@ class Backend(Protocol):
     def window_geometry(self, app: str) -> str: ...
     def active_window(self) -> str: ...
     def mouse_click(self, x: int, y: int, button: str = "left") -> Any: ...
+    def mouse_scroll(self, x: int, y: int, delta: int, *, steps: int = 1) -> Any: ...
     def keyboard_type(self, text: str) -> Any: ...
+    def keyboard_key(self, key: str) -> Any: ...
     def document_key(self, operation: str) -> Any: ...
     def document_bytes(self) -> bytes: ...
 
@@ -174,9 +184,19 @@ class KwinMcpBackend:
         self._require_virtual()
         return self.engine.mouse_click(x, y, button=button)
 
+    def mouse_scroll(self, x: int, y: int, delta: int, *, steps: int = 1) -> Any:
+        self._require_virtual()
+        return self.engine.mouse_scroll(x, y, delta, discrete=True, steps=steps)
+
     def keyboard_type(self, text: str) -> Any:
         self._require_virtual()
         return self.engine.keyboard_type_unicode(text) if not text.isascii() else self.engine.keyboard_type(text)
+
+    def keyboard_key(self, key: str) -> Any:
+        self._require_virtual()
+        if key not in {"Return", "ctrl+a"}:
+            raise TransactionError("unsupported_key")
+        return self.engine.keyboard_key(key)
 
     def document_key(self, operation: str) -> Any:
         self._require_virtual()
@@ -208,7 +228,8 @@ class AuditLog:
         self._lock = threading.Lock()
 
     def write(self, *, tool: str, app: str, mode: AutonomyMode, event: str, status: str, reason: str) -> None:
-        event = event if event in {"observe", "click", "type_text", "replace_document", "save_document", "action"} else "action"
+        event = event if event in {"observe", "click", "type_text", "replace_document", "save_document",
+                                   "navigate_url", "scroll", "action"} else "action"
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "caller_node": self.caller_node,
@@ -219,8 +240,8 @@ class AuditLog:
             "event": event,
             "status": status,
             "jev_answers": None,
-            "action": event if event in {"click", "type_text", "replace_document", "save_document"} else None,
-            "verification": status if event in {"click", "type_text", "replace_document", "save_document"} else None,
+            "action": event if event in {"click", "type_text", "replace_document", "save_document", "navigate_url", "scroll"} else None,
+            "verification": status if event in {"click", "type_text", "replace_document", "save_document", "navigate_url", "scroll"} else None,
             "reason": reason,
         }
         encoded = (json.dumps(record, separators=(",", ":"), ensure_ascii=True) + "\n").encode("utf-8")
@@ -244,7 +265,7 @@ def _decode(value: str) -> str:
         return value
 
 
-def _parse_window_identity(geometry: str, active: str) -> tuple[str, str, bool]:
+def _parse_window_identity(geometry: str, active: str) -> tuple[str, str, str, bool, Bounds]:
     ids = _ID.findall(geometry)
     app_rows = list(_APP.finditer(geometry))
     active_ids = _ID.findall(active)
@@ -260,10 +281,11 @@ def _parse_window_identity(geometry: str, active: str) -> tuple[str, str, bool]:
     if client is None:
         raise TransactionError("window_identity_ambiguous")
     rect = Bounds(*(int(client.group(key)) for key in ("x", "y", "w", "h")))
-    return ids[0], window_app, active_ok, rect
+    title = _decode(app_rows[0].group("title"))
+    return ids[0], window_app, title, active_ok, rect
 
 
-def _parse_candidates(tree: str, generation: str) -> tuple[Candidate, ...]:
+def _parse_candidates(tree: str, generation: str, app: str) -> tuple[Candidate, ...]:
     parsed: list[tuple[str, str, frozenset[str], tuple[str, ...], Bounds, str | None]] = []
     for line in tree.splitlines():
         match = _TREE_LINE.match(line)
@@ -281,10 +303,15 @@ def _parse_candidates(tree: str, generation: str) -> tuple[Candidate, ...]:
             part.strip() for part in actions_match.group("actions").split(",") if part.strip()
         ) if actions_match else ()
         role_lower = role.lower()
-        if role_lower == "button":
+        if role_lower in {"button", "link"}:
             supported = ("click",)
-        elif role_lower in {"text", "text entry", "entry"} and "editable" in states:
-            supported = ("click", "type_text", "replace_document", "save_document")
+        elif role_lower in {"text", "text entry", "entry", "combo box"} and "editable" in states:
+            is_kate_editor = app == "kate" and role_lower in {"text", "text entry", "entry"}
+            is_browser_address = app == "firefox" and bool(_BROWSER_ADDRESS.search(label))
+            supported = ("click", "type_text", *(('replace_document', 'save_document') if is_kate_editor else ()),
+                         *(('navigate_url',) if is_browser_address else ()))
+        elif role_lower in {"document frame", "scroll pane", "web area", "scroll bar", "scrollbar"}:
+            supported = ("scroll",)
         else:
             continue
         value_match = _TEXT.search(match.group("tail"))
@@ -293,22 +320,25 @@ def _parse_candidates(tree: str, generation: str) -> tuple[Candidate, ...]:
 
     # Duplicate accessible identities do not get addressable references.
     identities: dict[tuple[str, str], int] = {}
-    for role, label, *_ in parsed:
+    for role, label, states, *_ in parsed:
+        if not _usable_states(states):
+            continue
         key = (role, label)
         identities[key] = identities.get(key, 0) + 1
     result = []
     for role, label, states, supported, bounds, value in parsed:
-        if identities[(role, label)] != 1:
-            continue
+        ambiguous = _usable_states(states) and identities.get((role, label), 0) != 1
         result.append(Candidate(
             ref=f"cand_{generation}_{uuid.uuid4().hex}", role=role, label=label,
-            states=states, actions=supported, bounds=bounds, value=value,
+            states=states, actions=() if ambiguous else supported, bounds=bounds, value=value,
+            unavailable_reason=("target_ambiguous" if ambiguous else
+                                "target_disabled_or_hidden" if not _usable_states(states) else None),
         ))
     return tuple(result)
 
 
-def _typed_candidates(elements: list[dict[str, Any]], generation: str) -> tuple[Candidate, ...]:
-    parsed: list[tuple[str, str, frozenset[str], tuple[str, ...], Bounds, str | None]] = []
+def _typed_candidates(elements: list[dict[str, Any]], generation: str, app: str) -> tuple[Candidate, ...]:
+    parsed: list[tuple[str, str, frozenset[str], tuple[str, ...], Bounds, str | None, float | None, float | None]] = []
     for element in elements:
         role = str(element.get("role", "")).lower()
         label = str(element.get("name", ""))
@@ -322,33 +352,46 @@ def _typed_candidates(elements: list[dict[str, Any]], generation: str) -> tuple[
             continue
         if bounds.width <= 0 or bounds.height <= 0:
             continue
-        if role == "button":
+        if role in {"button", "link"}:
             supported = ("click",)
-        elif role in {"text", "text entry", "entry"} and "editable" in states:
-            supported = ("click", "type_text", "replace_document", "save_document")
+        elif role in {"text", "text entry", "entry", "combo box"} and "editable" in states:
+            is_kate_editor = app == "kate"
+            is_browser_address = app == "firefox" and bool(_BROWSER_ADDRESS.search(label))
+            supported = ("click", "type_text", *(('replace_document', 'save_document') if is_kate_editor else ()),
+                         *(('navigate_url',) if is_browser_address else ()))
+        elif role in {"document frame", "scroll pane", "web area", "scroll bar", "scrollbar"}:
+            supported = ("scroll",)
         else:
             continue
         value = element.get("text")
         if value is not None and not isinstance(value, str):
             value = None
-        parsed.append((role, label, states, supported, bounds, value))
+        number, maximum = element.get("value"), element.get("value_max")
+        number = float(number) if isinstance(number, (int, float)) and math.isfinite(number) else None
+        maximum = float(maximum) if isinstance(maximum, (int, float)) and math.isfinite(maximum) else None
+        parsed.append((role, label, states, supported, bounds, value, number, maximum))
 
     identities: dict[tuple[str, str], int] = {}
-    for role, label, *_ in parsed:
+    for role, label, states, *_ in parsed:
+        if not _usable_states(states):
+            continue
         key = (role, label)
         identities[key] = identities.get(key, 0) + 1
     return tuple(
         Candidate(
             ref=f"cand_{generation}_{uuid.uuid4().hex}", role=role, label=label,
-            states=states, actions=supported, bounds=bounds, value=value,
+            states=states, actions=() if _usable_states(states) and identities.get((role, label), 0) != 1 else supported,
+            bounds=bounds, value=value, value_number=number, value_max=maximum,
+            unavailable_reason=("target_ambiguous" if _usable_states(states) and identities.get((role, label), 0) != 1
+                                else "target_disabled_or_hidden" if not _usable_states(states) else None),
         )
-        for role, label, states, supported, bounds, value in parsed
-        if identities[(role, label)] == 1
+        for role, label, states, supported, bounds, value, number, maximum in parsed
     )
 
 
 def _fingerprint(candidate: Candidate) -> tuple[Any, ...]:
-    return (candidate.role, candidate.label, candidate.states, candidate.actions, candidate.bounds, candidate.value)
+    return (candidate.role, candidate.label, candidate.states, candidate.actions, candidate.bounds,
+            candidate.value, candidate.value_number, candidate.value_max, candidate.unavailable_reason)
 
 
 _SESSION_LOCKS: dict[str, threading.Lock] = {}
@@ -429,7 +472,7 @@ class TransactionEngine:
         self._check_budget(session_id)
         geometry = self.backend.window_geometry(app)
         active = self.backend.active_window()
-        window_id, window_app, is_active, window_bounds = _parse_window_identity(geometry, active)
+        window_id, window_app, window_title, is_active, window_bounds = _parse_window_identity(geometry, active)
         expected_apps = {
             "kate": {"kate", "org.kde.kate"},
             "firefox": {"firefox", "org.mozilla.firefox"},
@@ -442,8 +485,8 @@ class TransactionEngine:
         tree = None if elements is not None else self.backend.accessibility_tree(app)
         generation = uuid.uuid4().hex
         candidates = (
-            _typed_candidates(elements, generation)
-            if elements is not None else _parse_candidates(tree or "", generation)
+            _typed_candidates(elements, generation, app)
+            if elements is not None else _parse_candidates(tree or "", generation, app)
         )
         candidates = tuple(
             candidate for candidate in candidates
@@ -454,7 +497,7 @@ class TransactionEngine:
         )
         snapshot = Snapshot(
             session_id=session_id, app=app, generation=generation, window_id=window_id,
-            window_app=window_app, window_bounds=window_bounds, active=is_active,
+            window_app=window_app, window_title=window_title, window_bounds=window_bounds, active=is_active,
             candidates=candidates, observed_at=time.time(),
         )
         self._bump(session_id)
@@ -512,9 +555,11 @@ class TransactionEngine:
                 raise TransactionError("app_not_allowed")
             if session_id in self._blocked:
                 raise TransactionError("session_requires_reset")
-            if action.kind not in {"click", "type_text", "replace_document", "save_document"}:
+            if action.kind not in {"click", "type_text", "replace_document", "save_document", "navigate_url", "scroll"}:
                 raise TransactionError("unsupported_action")
             if action.kind in {"replace_document", "save_document"} and app != "kate":
+                raise TransactionError("unsupported_action")
+            if action.kind == "navigate_url" and app != "firefox":
                 raise TransactionError("unsupported_action")
             if not self.authorizer(session_id, app, action):
                 raise TransactionError("authorization_denied")
@@ -523,11 +568,18 @@ class TransactionEngine:
             candidate = prior.candidate(action.target_ref) if prior else None
             if candidate is None:
                 raise TransactionError("target_reference_stale")
+            if candidate.unavailable_reason:
+                raise TransactionError(candidate.unavailable_reason)
             if action.kind not in candidate.actions:
                 raise TransactionError("action_not_supported_by_target")
-            if action.kind in {"type_text", "replace_document"}:
+            if action.kind in {"type_text", "replace_document", "navigate_url"}:
                 if not isinstance(action.text, str) or len(action.text) > self.policy.max_text_chars:
                     raise TransactionError("text_argument_invalid")
+                if action.kind == "navigate_url" and not _valid_web_url(action.text):
+                    raise TransactionError("navigation_url_not_allowed")
+            elif action.kind == "scroll":
+                if action.text is not None or action.direction not in {"up", "down"} or type(action.steps) is not int or not 1 <= action.steps <= 8:
+                    raise TransactionError("scroll_argument_invalid")
             elif action.text is not None:
                 raise TransactionError("text_argument_invalid")
             if _cancelled(cancel):
@@ -585,6 +637,41 @@ class TransactionEngine:
                 self._last.pop((session_id, app), None)
                 self._blocked[session_id] = "verification_pending"
                 self.backend.keyboard_type(action.text)
+            elif action.kind == "navigate_url":
+                if "focused" not in current.states:
+                    raise TransactionError("editable_target_not_focused")
+                if "navigate_url" not in current.actions:
+                    raise TransactionError("action_not_supported_by_target")
+                self._audit(app, mode, action.kind, "pending", "input_pending")
+                input_attempted = True
+                self._bump(session_id, action=True)
+                self._last.pop((session_id, app), None)
+                self._blocked[session_id] = "verification_pending"
+                self.backend.keyboard_key("ctrl+a")
+                if _cancelled(cancel):
+                    raise TransactionError("cancelled_after_action")
+                self.backend.keyboard_type(action.text)
+                self.backend.keyboard_key("Return")
+            elif action.kind == "scroll":
+                scrollbars = [item for item in fresh.candidates
+                              if item.role in {"scroll bar", "scrollbar"} and item.value_number is not None]
+                if len(scrollbars) != 1 and not _scroll_witnesses(fresh, current):
+                    raise TransactionError("scroll_position_unavailable")
+                scroll_backend = getattr(self.backend, "mouse_scroll", None)
+                if not callable(scroll_backend):
+                    raise TransactionError("scroll_unsupported")
+                self._audit(app, mode, action.kind, "pending", "input_pending")
+                input_attempted = True
+                self._bump(session_id, action=True)
+                self._last.pop((session_id, app), None)
+                self._blocked[session_id] = "verification_pending"
+                # kwin-mcp's discrete=True convention uses whole detents:
+                # positive moves down, negative moves up.  The driver expands
+                # these detents into the bounded step sequence.
+                delta = action.steps if action.direction == "down" else -action.steps
+                scroll_backend(current.bounds.x + current.bounds.width // 2,
+                               current.bounds.y + current.bounds.height // 2,
+                               delta, steps=action.steps)
             elif action.kind == "replace_document":
                 if "focused" not in current.states:
                     raise TransactionError("editable_target_not_focused")
@@ -687,13 +774,51 @@ def _cancelled(cancel: threading.Event | Callable[[], bool] | None) -> bool:
 
 
 def _usable(candidate: Candidate) -> bool:
-    return {"enabled", "sensitive", "showing", "visible"}.issubset(candidate.states)
+    return _usable_states(candidate.states)
+
+
+def _usable_states(states: frozenset[str]) -> bool:
+    return {"enabled", "sensitive", "showing", "visible"}.issubset(states)
+
+
+def _valid_web_url(value: str) -> bool:
+    if len(value) > 2048 or any(ord(char) < 0x20 or char.isspace() for char in value):
+        return False
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+    except ValueError:
+        return False
+    return (parsed.scheme.lower() in {"http", "https"} and bool(parsed.hostname)
+            and parsed.username is None and parsed.password is None)
+
+
+def _scroll_witnesses(snapshot: Snapshot, viewport: Candidate) -> dict[tuple[str, str], Bounds]:
+    counts: dict[tuple[str, str], int] = {}
+    for candidate in snapshot.candidates:
+        if candidate.role not in {"link", "button"}:
+            continue
+        if not (candidate.bounds.x >= viewport.bounds.x
+                and candidate.bounds.x + candidate.bounds.width <= viewport.bounds.x + viewport.bounds.width
+                and candidate.bounds.y >= viewport.bounds.y
+                and candidate.bounds.y + candidate.bounds.height <= viewport.bounds.y + viewport.bounds.height):
+            continue
+        key = (candidate.role, candidate.label)
+        counts[key] = counts.get(key, 0) + 1
+    return {(candidate.role, candidate.label): candidate.bounds for candidate in snapshot.candidates
+            if candidate.role in {"link", "button"}
+            and counts.get((candidate.role, candidate.label)) == 1
+            and candidate.bounds.x >= viewport.bounds.x
+            and candidate.bounds.x + candidate.bounds.width <= viewport.bounds.x + viewport.bounds.width
+            and candidate.bounds.y >= viewport.bounds.y
+            and candidate.bounds.y + candidate.bounds.height <= viewport.bounds.y + viewport.bounds.height}
 
 
 def _unique_matching(prior: Snapshot, candidate: Candidate, fresh: Snapshot) -> Candidate | None:
     if prior.generation not in candidate.ref:
         return None
-    matches = [item for item in fresh.candidates if (item.role, item.label) == (candidate.role, candidate.label)]
+    matches = [item for item in fresh.candidates if (item.role, item.label) == (candidate.role, candidate.label)
+               and _usable(item)]
     if len(matches) != 1 or _fingerprint(matches[0]) != _fingerprint(candidate):
         return None
     return matches[0]
@@ -715,7 +840,9 @@ _AUDIT_REASONS = frozenset({
     "window_identity_changed", "window_app_mismatch", "window_identity_ambiguous",
     "target_window_not_active", "editable_target_not_focused", "input_pending", "cancelled_after_action",
     "verification_failed", "verifier_contract_invalid", "backend_or_verifier_error", "action_failed",
-    "verified", "action_precondition_failed",
+    "verified", "action_precondition_failed", "navigation_url_not_allowed",
+    "scroll_argument_invalid", "scroll_position_unavailable", "scroll_unsupported",
+    "target_ambiguous", "unsupported_key",
 })
 
 

@@ -77,8 +77,9 @@ hash and crop mapping stay together. Candidate
 responses omit editable contents. Typing takes `--text-file PATH` or stdin
 with `--text-file -`; the CLI does not place typed text in shell arguments.
 Actions require a fresh candidate reference and a supported code-owned
-verification (`target_focused`, `target_text`, `fixture_state` or
-`display_text`). There is no arbitrary coordinate or verifier callback input.
+verification (`target_focused`, `target_text`, `fixture_state`, `display_text`,
+`document_saved`, `navigation_url`, `window_title`, `visible_text` or
+`scroll_changed`). There is no arbitrary coordinate or verifier callback input.
 The initial effect verifiers are fixture-specific: KCalc permits `One` from a
 blank editable display to `1`; Firefox permits `Advance state` from idle to
 complete; Kate verifies a nonempty edit against exact changed editor text.
@@ -96,12 +97,34 @@ The stdio server is a client, not another owner. Configure an MCP host to run
 `uv run jev-desktop-mcp` as a local stdio process. It exposes
 `desktop_capabilities`, `desktop_status`, `desktop_session_start`,
 `desktop_session_stop`, `desktop_candidates`, `desktop_observe`, `desktop_act`,
-`desktop_cancel` and `desktop_stop_all`. Images become MCP image content only
+`desktop_wait`, `desktop_cancel` and `desktop_stop_all`. Images become MCP image content only
 when `desktop_observe` explicitly uses `output: "image"` or `"both"`; the
 payload is the same PNG represented by the observation hash. MCP tool errors
 preserve the owner's `isError` result. Client disconnect does not implicitly
 cancel an owner operation; use `desktop_cancel`, `desktop_session_stop` or
 `desktop_stop_all` explicitly.
+
+`desktop_wait` is a bounded read-only screenshot heartbeat. It takes a
+caller-authored visual condition and a deadline up to 120 seconds. The owner
+captures the complete app window with at least a 500 ms interval, coalesces
+while one reader judgment is in flight, and requires the same positive
+judgment on two fresh frames before it wakes. It returns the final image with
+the exact capture ID, metadata and hash used for that frame. The configured
+reader can return only
+`wait`, `wake`, `error` or `unexpected`; it cannot choose targets or perform
+actions. The primary agent must inspect the returned image and verify state.
+
+Internal wait captures debit the same session observation cap as ordinary
+reads. DeepSeek interpretations debit the same per-session reader cap as
+`desktop_observe(data|both)`. Attempts, numeric usage, provider-reported
+latency and reader subprocess wall time appear separately in the wait result
+and session status. Attempts are not retried, and rate limiting latches the
+reader closed for the rest of the session. Provider usage is not a billing
+receipt. Each reader call runs in a reaped subprocess under a hard wall
+deadline that includes response headers and body; stream parsing also keeps
+the response-body size limit. The wait is shortened to the remaining session
+lifetime. Cancellation and session teardown stop the reader process, wait and
+capture producer.
 
 ## Cancellation and cleanup limits
 
@@ -118,20 +141,45 @@ and calls owner cleanup; cleanup failure produces a nonzero daemon exit.
 
 ## Budget and interpreted-data reader
 
-The supported owner currently makes **zero project-provider calls**. The
-owner refuses paid reader configuration until it can reserve a reliable dollar
-upper bound before each request. Capabilities expose the $1 project-provider
-budget, zero spent/reserved and this restriction. Existing standalone reader
-benchmarks remain available under their separate explicit authorization.
+The local daemon can opt into DeepSeek, MiMo or a compatible reader by setting
+a provider and a positive per-session request cap. For the local `.env` key,
+for example:
+
+```bash
+uv run jev-desktop daemon --foreground --allow-app firefox --allow-app kate \
+  --reader-provider deepseek --reader-key-env DEEPSEEK_API_KEY \
+  --max-reader-calls 8 --reader-timeout 10 --reader-total-timeout 15 --dotenv .env
+```
+
+The dotenv loader reads only the named key into the daemon environment and
+never prints its value. `--reader-timeout` bounds connect/idle reads;
+`--reader-total-timeout` bounds response-body parsing by time and size, inside
+an outer killable subprocess deadline that also covers slow response headers.
+Every attempted request is fsynced to the append-only audit before network I/O
+and completed requests record provider/model, provider latency, subprocess
+wall time, numeric returned usage and outcome. Requests are not retried; HTTP
+429 latches the per-session reader closed. These usage fields are provider
+reports, not billing data or a hard dollar cap.
+
+The wait command needs a running Firefox session and an enabled reader; do not
+mix it into the KCalc session above. For example, with the reader-configured
+daemon running:
+
+```bash
+uv run jev-desktop session start firefox --mode yolo
+uv run jev-desktop wait firefox --expected 'Forecast ready is visible, or page shows a forecast loading error' --timeout 20
+uv run jev-desktop session stop
+```
 
 Codex/Luna inference happens outside this owner. Its cost is unavailable to
-MCP, so the owner cannot guarantee a $1 cap on the caller's own inference.
-A future caller integration must provide enforceable metering before claiming
-an end-to-end dollar cap. Call/read/time limits remain enforceable today.
+MCP, so session reader call limits do not cap the caller's own inference.
+Caller turns, tokens and cost can be reported only if the model host exposes
+them.
 
-`output: "image"` continues to return app screenshots for a vision-capable
-caller. `data`/`both` are unavailable in the supported daemon until budgeted
-reader interpretation is restored; ADR-012 remains the required direction.
+`output: "image"` returns screenshots for vision-capable callers; `data` and
+`both` request the configured reader, with the image and interpretation tied
+to the same capture. Reader output is observed text/data, not executable
+targets. ADR-012 remains the grounding requirement.
 
 ## Persistent Kate documents
 

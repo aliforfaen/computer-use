@@ -18,6 +18,8 @@ class FakeBackend:
         self.is_active = True
         self.clicks = []
         self.typed = []
+        self.keys = []
+        self.scrolls = []
         self.on_click = None
         self.on_type = None
         self.document_keys = []
@@ -33,7 +35,7 @@ class FakeBackend:
         window_app = {"kate": "org.kde.kate", "firefox": "org.mozilla.firefox",
                       "kcalc": "org.kde.kcalc"}.get(self.app, self.app)
         return (
-            f'Windows (1):\n- {window_app} "document"\n    id: {self.identity}\n'
+            f'Windows (1):\n- {window_app} "{getattr(self, "title", "document")}"\n    id: {self.identity}\n'
             "    frame: 0, 0, 640x400\n    client: (0, 0, 640x400)"
         )
 
@@ -41,7 +43,7 @@ class FakeBackend:
         marker = " [active]" if self.is_active else ""
         window_app = {"kate": "org.kde.kate", "firefox": "org.mozilla.firefox",
                       "kcalc": "org.kde.kcalc"}.get(self.app, self.app)
-        return f'Active window:\n- {window_app} "document"{marker}\n    id: {self.identity}'
+        return f'Active window:\n- {window_app} "{getattr(self, "title", "document")}"{marker}\n    id: {self.identity}'
 
     def mouse_click(self, x, y, button="left"):
         self.clicks.append((x, y, button))
@@ -53,8 +55,19 @@ class FakeBackend:
 
     def keyboard_type(self, text):
         self.typed.append(text)
+        if self.tree and self.tree[0].get("role") in {"text", "text entry", "entry", "combo box"}:
+            self.tree[0]["text"] = text
         if self.on_type:
             self.on_type(text)
+
+    def keyboard_key(self, key):
+        self.keys.append(key)
+
+    def mouse_scroll(self, x, y, delta, *, steps=1):
+        self.scrolls.append((x, y, delta, steps))
+        for row in self.tree:
+            if row.get("role") in {"scroll bar", "scrollbar"}:
+                row["value"] = row.get("value", 0) + delta * steps
 
     def document_key(self, operation):
         self.document_keys.append(operation)
@@ -118,6 +131,75 @@ class TransactionTests(unittest.TestCase):
         self.assertNotEqual(first.candidates[0].ref, second.candidates[0].ref)
         self.assertEqual(self.backend.clicks, [])
 
+    def test_firefox_links_are_fresh_click_targets(self):
+        self.backend.app = "firefox"
+        self.backend.tree = [{"role": "link", "name": "About", "states": ["enabled", "sensitive", "showing", "visible"],
+                              "actions": ["Jump"], "x": 20, "y": 20, "width": 70, "height": 24,
+                              "mapped": True, "text": ""}]
+        snap = self.engine.observe("s-firefox", "firefox")
+        self.assertEqual(snap.candidates[0].label, "About")
+        self.assertEqual(snap.candidates[0].actions, ("click",))
+
+    def test_firefox_address_navigation_replaces_url_and_restricts_scheme(self):
+        self.backend.app = "firefox"
+        self.backend.tree = [{"role": "combo box", "name": "Search with Google or enter address",
+                              "states": ["editable", "enabled", "sensitive", "showing", "visible", "focused"],
+                              "actions": ["SetFocus"], "x": 20, "y": 20, "width": 400, "height": 28,
+                              "mapped": True, "text": "https://old.example/"}]
+        snap = self.engine.observe("s-firefox", "firefox")
+        candidate = snap.candidates[0]
+        self.assertIn("navigate_url", candidate.actions)
+        url = "https://www.python.org/about/"
+        result = self.engine.act("s-firefox", "firefox", Action("navigate_url", candidate.ref, text=url),
+                                verifier=lambda after: Verification(after.candidates[0].value == url))
+        self.assertEqual(result.verification, "passed")
+        self.assertEqual(self.backend.keys, ["ctrl+a", "Return"])
+        self.assertEqual(self.backend.typed, [url])
+
+    def test_firefox_address_rejects_non_web_navigation_before_input(self):
+        self.backend.app = "firefox"
+        self.backend.tree = [{"role": "combo box", "name": "Address bar",
+                              "states": ["editable", "enabled", "sensitive", "showing", "visible", "focused"],
+                              "actions": ["SetFocus"], "x": 20, "y": 20, "width": 400, "height": 28,
+                              "mapped": True, "text": ""}]
+        snap = self.engine.observe("s-firefox", "firefox")
+        with self.assertRaisesRegex(TransactionError, "navigation_url_not_allowed"):
+            self.engine.act("s-firefox", "firefox", Action("navigate_url", snap.candidates[0].ref,
+                                                               text="file:///etc/passwd"),
+                            verifier=lambda _after: Verification(True))
+        self.assertEqual(self.backend.typed, [])
+        self.assertEqual(self.backend.keys, [])
+
+    def test_scroll_requires_and_measures_accessible_position_change(self):
+        self.backend.app = "firefox"
+        self.backend.tree = [
+            {"role": "document frame", "name": "Page", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": [], "x": 20, "y": 80, "width": 500, "height": 300, "mapped": True, "text": ""},
+            {"role": "scroll bar", "name": "Vertical", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": [], "x": 510, "y": 80, "width": 12, "height": 300, "mapped": True,
+             "text": "", "value": 0.0, "value_max": 100.0},
+        ]
+        snap = self.engine.observe("s-firefox", "firefox")
+        page = next(c for c in snap.candidates if c.role == "document frame")
+        before_value = next(c.value_number for c in snap.candidates if c.role == "scroll bar")
+        result = self.engine.act("s-firefox", "firefox", Action("scroll", page.ref, direction="down", steps=2),
+                                verifier=lambda after: Verification(any(c.role == "scroll bar" and c.value_number != before_value
+                                                                          for c in after.candidates)))
+        self.assertEqual(result.verification, "passed")
+        self.assertEqual(self.backend.scrolls, [(270, 230, 2, 2)])
+
+    def test_scroll_without_atspi_scroll_position_is_not_attempted(self):
+        self.backend.app = "firefox"
+        self.backend.tree = [{"role": "document frame", "name": "Page", "states": ["enabled", "sensitive", "showing", "visible"],
+                              "actions": [], "x": 20, "y": 80, "width": 500, "height": 300,
+                              "mapped": True, "text": ""}]
+        snap = self.engine.observe("s-firefox", "firefox")
+        with self.assertRaisesRegex(TransactionError, "scroll_position_unavailable"):
+            self.engine.act("s-firefox", "firefox", Action("scroll", snap.candidates[0].ref,
+                                                               direction="down", steps=1),
+                            verifier=lambda _after: Verification(True))
+        self.assertEqual(self.backend.scrolls, [])
+
     def test_rejects_changed_target_before_input(self):
         first = self._snapshot_button()
         self.backend.tree = [button(x=120)]
@@ -159,7 +241,9 @@ class TransactionTests(unittest.TestCase):
 
         self.backend.tree = [button(), button(x=130)]
         duplicate = self.engine.observe("s-test", "kate")
-        self.assertEqual(duplicate.candidates, ())
+        self.assertEqual(len(duplicate.candidates), 2)
+        self.assertTrue(all(c.unavailable_reason == "target_ambiguous" and not c.actions
+                            for c in duplicate.candidates))
 
         self.backend.tree = [button()]
         inactive = self.engine.observe("s-test", "kate")

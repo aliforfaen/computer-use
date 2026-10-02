@@ -291,3 +291,16 @@ The owner exposes a $1 project-provider ceiling but currently refuses paid
 reader setup until pre-request dollar reservation is reliable. This produces
 zero service-provider spending. Caller inference is outside MCP accounting;
 do not claim that this ceiling caps Codex/Luna billing. See doc 16 and doc 21.
+
+
+### ADR-017 — Explicit readers and experimental owner waits
+**2026-10-02 · owner-authorized local continuation.** Supersede ADR-016's
+paid-reader refusal: configure a provider and positive per-session call cap,
+report returned usage and latency without claiming billing measurement, and
+journal attempts. Reuse the existing reader transport inside a one-request
+subprocess so owner cancellation and an outer deadline cover headers and body.
+The MCP/CLI wait primitive shares session read/reader limits and returns the
+same judged capture's image and identity. It is observation, not planning or
+proof of task completion. Two real wait trials returned invalid judgments;
+keep it experimental. Navigation verifies address entry separately from page
+readiness. Host scroll verification remains unresolved. See docs 23–25.

@@ -27,6 +27,10 @@ class FakeEngine:
         self.unicode_typed.append(text)
         return "typed-unicode"
 
+    def mouse_scroll(self, x, y, delta, *, discrete=False, steps=1):
+        self.scrolls = (x, y, delta, discrete, steps)
+        return "scrolled"
+
     def session_stop(self):
         return "Session stopped"
 
@@ -53,6 +57,57 @@ class AtspiEngineStub:
 
 
 class DesktopWorkerDocumentTests(unittest.TestCase):
+    def test_window_readiness_waits_for_exact_mapped_app_window(self):
+        class DelayedWindowEngine:
+            def __init__(self):
+                self.queries = 0
+
+            def _run_kwin_query(self, _params):
+                self.queries += 1
+                if self.queries < 3:
+                    return {"ok": True, "result": [{
+                        "id": "unrelated", "app": "org.kde.kate", "caption": "Kate",
+                        "frame": {"x": 0, "y": 0, "width": 800, "height": 600},
+                    }]}
+                return {"ok": True, "result": [{
+                    "id": "kcalc-1", "app": "org.kde.kcalc", "caption": "KCalc",
+                    "frame": {"x": 0, "y": 0, "width": 600, "height": 400},
+                }]}
+
+        now = [10.0]
+        worker = Worker()
+        engine = DelayedWindowEngine()
+        worker.engine = engine
+
+        def advance(seconds):
+            now[0] += seconds
+
+        with patch("desktop_worker.time.monotonic", side_effect=lambda: now[0]), \
+             patch("desktop_worker.time.sleep", side_effect=advance):
+            worker._wait_for_app_window("kcalc", timeout_seconds=1.0, poll_seconds=0.1)
+
+        self.assertEqual(engine.queries, 3)
+
+    def test_window_readiness_times_out_when_only_wrong_app_is_mapped(self):
+        class WrongWindowEngine:
+            def _run_kwin_query(self, _params):
+                return {"ok": True, "result": [{
+                    "id": "kate-1", "app": "org.kde.kate", "caption": "Kate",
+                    "frame": {"x": 0, "y": 0, "width": 800, "height": 600},
+                }]}
+
+        now = [20.0]
+        worker = Worker()
+        worker.engine = WrongWindowEngine()
+
+        def advance(seconds):
+            now[0] += seconds
+
+        with patch("desktop_worker.time.monotonic", side_effect=lambda: now[0]), \
+             patch("desktop_worker.time.sleep", side_effect=advance):
+            with self.assertRaisesRegex(ValueError, "app_window_open_unconfirmed"):
+                worker._wait_for_app_window("kcalc", timeout_seconds=0.25, poll_seconds=0.1)
+
     def test_generated_paths_are_exclusive_and_0600(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -152,6 +207,18 @@ class DesktopWorkerDocumentTests(unittest.TestCase):
         self.assertEqual(worker.call("keyboard_type", {"text": "Advance"}), "typed-eis")
         self.assertEqual(engine.typed, ["Advance"])
         self.assertEqual(engine.unicode_typed, [])
+
+    def test_scroll_uses_bounded_discrete_detents_and_preserves_direction(self):
+        worker = Worker()
+        worker.app = "firefox"
+        engine = FakeEngine()
+        worker.engine = engine
+        self.assertEqual(worker.call("mouse_scroll", {"x": 40, "y": 50, "delta": 2, "steps": 2}), "scrolled")
+        self.assertEqual(engine.scrolls, (40, 50, 2, True, 2))
+        self.assertEqual(worker.call("mouse_scroll", {"x": 40, "y": 50, "delta": -1, "steps": 1}), "scrolled")
+        self.assertEqual(engine.scrolls, (40, 50, -1, True, 1))
+        with self.assertRaisesRegex(ValueError, "scroll_argument_invalid"):
+            worker.call("mouse_scroll", {"x": 40, "y": 50, "delta": 120, "steps": 1})
 
 
 if __name__ == "__main__":

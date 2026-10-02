@@ -9,7 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 
-from vision_reader import ReaderConfig, StreamParseError, VisionReader, build_request_body, parse_stream
+from vision_reader import (BoundedReader, IsolatedVisionReader, ReaderConfig, ReaderResult,
+                           StreamParseError, VisionReader, build_request_body, parse_stream)
 import vision_benchmark as vb
 
 
@@ -156,6 +157,161 @@ class VisionReaderTests(unittest.TestCase):
         self.assertNotIn("max_tokens", mimo)
         self.assertNotIn("thinking", generic)
         self.assertEqual(deepseek["messages"][0]["content"][1], mimo["messages"][0]["content"][1])
+
+    def test_bounded_reader_stops_at_call_cap_and_sums_reported_usage(self):
+        class Fake:
+            def __init__(self): self.calls = 0
+            def capabilities(self): return {"provider": "deepseek", "model": "deepseek-flash"}
+            def interpret(self, _image, _questions):
+                self.calls += 1
+                return ReaderResult("ok", data={"value": "x"}, provider="deepseek", model="deepseek-flash",
+                                    usage={"prompt_tokens": 7, "completion_tokens": 2}, latency_ms=11.0,
+                                    owner_elapsed_ms=13.5)
+
+        fake = Fake()
+        reader = BoundedReader(fake, 1)
+        self.assertEqual(reader.interpret(b"image", self.questions).status, "ok")
+        denied = reader.interpret(b"image", self.questions)
+        self.assertEqual((denied.status, denied.error), ("error", "reader_call_budget_exceeded"))
+        self.assertEqual(fake.calls, 1)
+        self.assertEqual(reader.summary()["reported_usage"], {"prompt_tokens": 7, "completion_tokens": 2})
+        self.assertEqual(reader.summary()["latency_total_ms"], 11.0)
+        self.assertEqual(reader.summary()["provider_latency_total_ms"], 11.0)
+        self.assertEqual(reader.summary()["owner_elapsed_total_ms"], 13.5)
+
+    def test_bounded_reader_latches_429_without_retrying_or_spending_more_calls(self):
+        class Fake:
+            def __init__(self): self.calls = 0
+            def capabilities(self): return {"provider": "deepseek", "model": "deepseek-flash"}
+            def interpret(self, _image, _questions):
+                self.calls += 1
+                return ReaderResult("error", error="http_status_429", provider="deepseek", model="deepseek-flash",
+                                    latency_ms=3.0)
+
+        fake = Fake()
+        reader = BoundedReader(fake, 5)
+        first = reader.interpret(b"image", self.questions)
+        second = reader.interpret(b"image", self.questions)
+        self.assertEqual(first.error, "http_status_429")
+        self.assertEqual(second.error, "provider_rate_limited")
+        self.assertEqual(fake.calls, 1)
+        self.assertEqual(reader.summary()["calls_used"], 1)
+        self.assertTrue(reader.summary()["rate_limited"])
+
+    def test_isolated_reader_completes_normal_local_response_and_reaps_worker(self):
+        server = _SseTestServer(lambda handler: (handler.send_response(200),
+            handler.send_header("Content-Type", "text/event-stream"), handler.end_headers(),
+            handler.wfile.write(sse_response('{"value":"ready"}').content), handler.wfile.flush()))
+        reader = IsolatedVisionReader(ReaderConfig(base_url=server.base_url, key_env="TEST_VISION_KEY",
+            timeout_seconds=0.5, total_timeout_seconds=0.5), hard_timeout_seconds=2.0)
+        try:
+            result = reader.interpret(b"image", self.questions)
+        finally:
+            server.close()
+        self.assertEqual((result.status, result.data), ("ok", {"value": "ready"}))
+        self.assertIsNotNone(reader.last_child_pid)
+        self.assertEqual(reader.last_child_exitcode, 0)
+        self.assertIsNotNone(result.owner_elapsed_ms)
+        self.assertGreaterEqual(result.owner_elapsed_ms, result.latency_ms)
+
+    def test_isolated_reader_hard_deadline_covers_slow_dripped_headers(self):
+        stop = threading.Event()
+
+        def script(handler):
+            handler.wfile.write(b"HTTP/1.1 200 OK\r\n")
+            handler.wfile.flush()
+            for byte in b"Content-Type: text/event-stream\r\nContent-Length: 100\r\n\r\n":
+                if stop.is_set():
+                    return
+                handler.wfile.write(bytes([byte]))
+                handler.wfile.flush()
+                time.sleep(0.03)
+
+        server = _SseTestServer(script)
+        reader = IsolatedVisionReader(ReaderConfig(base_url=server.base_url, key_env="TEST_VISION_KEY",
+            timeout_seconds=0.5, total_timeout_seconds=0.5), hard_timeout_seconds=0.35, poll_seconds=0.02)
+        started = time.monotonic()
+        try:
+            result = reader.interpret(b"image", self.questions)
+        finally:
+            stop.set()
+            server.close()
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.error, "request_deadline_exceeded")
+        self.assertLess(elapsed, 1.5)
+        self.assertIsNotNone(result.owner_elapsed_ms)
+        self.assertIsNotNone(reader.last_child_pid)
+        self.assertIsNotNone(reader.last_child_exitcode)
+
+    def test_isolated_reader_cancellation_kills_and_joins_in_flight_request(self):
+        entered = threading.Event()
+        stop = threading.Event()
+
+        def script(handler):
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.end_headers()
+            entered.set()
+            while not stop.is_set():
+                handler.wfile.write(b": keep-alive\n\n")
+                handler.wfile.flush()
+                time.sleep(0.03)
+
+        server = _SseTestServer(script)
+        cancel = threading.Event()
+        isolated = IsolatedVisionReader(ReaderConfig(base_url=server.base_url, key_env="TEST_VISION_KEY",
+            timeout_seconds=1.0, total_timeout_seconds=10.0))
+        reader = BoundedReader(isolated, 1, cancel_event=cancel)
+        result_box = []
+        thread = threading.Thread(target=lambda: result_box.append(reader.interpret(b"image", self.questions)))
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(2.0))
+            cancel.set()
+            thread.join(2.0)
+        finally:
+            stop.set()
+            server.close()
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result_box[0].error, "cancelled")
+        self.assertIsNotNone(isolated.last_child_pid)
+        self.assertIsNotNone(isolated.last_child_exitcode)
+        self.assertEqual(reader.summary()["calls_used"], 1)
+
+    def test_concurrent_interpretation_waits_for_429_latch_before_any_second_request(self):
+        entered = threading.Event()
+        second_started = threading.Event()
+        release = threading.Event()
+
+        class Fake:
+            def __init__(self): self.calls = 0
+            def capabilities(self): return {"provider": "deepseek", "model": "deepseek-flash"}
+            def interpret(self, _image, _questions):
+                self.calls += 1
+                entered.set()
+                release.wait(1)
+                return ReaderResult("error", error="http_status_429", provider="deepseek", model="deepseek-flash")
+
+        fake = Fake()
+        reader = BoundedReader(fake, 5)
+        results = []
+        first = threading.Thread(target=lambda: results.append(reader.interpret(b"image", self.questions)))
+        def call_second():
+            second_started.set()
+            results.append(reader.interpret(b"image", self.questions))
+        second = threading.Thread(target=call_second)
+        first.start()
+        self.assertTrue(entered.wait(0.5))
+        second.start()
+        self.assertTrue(second_started.wait(0.5))
+        time.sleep(0.02)
+        release.set()
+        first.join(1)
+        second.join(1)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(fake.calls, 1)
+        self.assertCountEqual([result.error for result in results], ["http_status_429", "provider_rate_limited"])
 
     def test_benchmark_wrapper_and_reader_share_sse_parser(self):
         lines = [

@@ -4,18 +4,25 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**Latest local work (2026-10-02):** the owner authorized smarter session
-budgets, automatic abandoned-app cleanup, persistent Kate document handling,
-a useful Luna acceptance task with timing evidence, and a subsequent visible
-physical-desktop smoke test. The virtual acceptance passed (Firefox briefing,
-Kate draft/save/revise/save, both cleanups). Defaults are 180 s inactivity,
-1800 s total lifetime, 64 actions and 256 reads. Read doc 21 for current
-contracts and evidence; the local owner remains virtual-only. A standalone
-owner-present live probe is separately scoped; no tailnet deployment is
-included. The supported daemon currently refuses paid reader setup until it
-can reserve a reliable USD upper bound. Its $1 project-provider ceiling does
-not meter external Codex inference. No new project-provider calls were made.
+**Latest checkpoint (2026-10-02):** owner authorized broader virtual actions,
+DeepSeek interpretation and a small primary-agent wait comparison. Navigation,
+links and text entry passed host checks; Luna completed public webpage → Kate
+save/revise/save with exact file verification and cleanup (doc 23). Scrolling
+still fails host effect verification; do not claim it is host-validated. The
+supported owner now permits explicit readers with per-session call limits,
+numeric usage accounting and killable request processes. This authorization
+supersedes the older consumed paid-probe cap and dollar-reservation refusal.
+The four-trial comparison (doc 24) found polling completed both tasks while
+both wait trials returned `invalid_judgment`; keep heartbeat waiting experimental.
+No general live MCP support or tailnet deployment was added. See doc 25 for
+remaining work and the owner-watched phase last.
 
+**Testing preference:** this is the owner's small personal tool. Use targeted
+checks for changed behavior and small useful host probes. Avoid repeated full
+suites and large matrices unless a concrete failure or broad change requires
+one. The owner reduced this session's comparison from eight to four trials.
+
+Historical checkpoint below:
 
 **2026-10-02: M1–M4a are implemented and host-validated; the M4b DeepSeek
 heartbeat was reviewed, fixed, tested and completed one bounded follow-up
@@ -44,8 +51,8 @@ is claimed across header reception). Fourteen new offline tests cover these
 paths (111 total, all passing), and the probe refuses to overwrite existing
 evidence. The probe's single configured follow-up request was then made and
 completed. That
-follow-up cap is now consumed: do not make another provider request without a
-fresh, explicit authorization. General planning, tailnet deployment and live
+historical follow-up cap was consumed; the newer explicit owner authorization
+above permits the current bounded reader/comparison work. General planning, tailnet deployment and live
 tasks remain later gates; do not repeat authorization questions for M1–M3.
 Remaining P0 measurements are in `docs/05-open-questions.md`, not the entire
 next-work plan.

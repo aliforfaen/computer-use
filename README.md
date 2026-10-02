@@ -6,33 +6,20 @@ client. Jev is an optional future accelerator.
 
 ## Where things stand
 
-- **Working:** virtual Kate, Firefox and KCalc; app screenshots; verified
-  actions; persistent Kate task documents; a shared CLI/MCP owner with
-  inactivity cleanup and crash recovery.
-- **Real agent trial:** OpenCode completed three local MCP fixture tasks;
-  verified actions, session stops and extracted screenshots were independently
-  reviewed. See [the trial](docs/18-real-agent-trial.md).
-- **Local wait baseline (M4a):** 10/10 fixture outcomes passed with cleanup, one
-  trial per case/arm. This is a local pixel-difference test, not evidence of model
-  or agent speed gains. The original checkpoint had 111 passing tests; newer validation is in the handoff.
-- **Vision heartbeat (M4b):** the timeout/journal/interrupt changes were reviewed
-  and tested on 2026-10-02; a follow-up review corrected the stated deadline
-  guarantee (the parser now bounds time and size per response chunk, including
-  partial lines, and does not claim a bound across header reception). The single
-  configured DeepSeek follow-up returned one valid structured judgment in 1.41 s
-  (821 prompt / 8 completion tokens, cleanup passed, $0.0002559 peak-upper). The
-  earlier interrupted run's charge is still unknown; the conservative
-  whole-session reserve is $0.0229632.
-- **Physical display smoke test:** a fixed KCalc task passed with exact focus
-  restoration and app cleanup. [Evidence and limits](docs/22-live-desktop-smoke.md).
-- **Later:** general planning, a live MCP task service, tailnet deployment and
-  Jev acceleration. These are not implemented in this release.
+- **Working:** virtual Firefox/Kate/KCalc, app screenshots, grounded navigation,
+  links and text entry, saved Kate documents, automatic cleanup, CLI and MCP.
+- **Useful Luna task passed:** read Python.org, recover from a failed navigation,
+  draft/revise/save a sourced Kate note. [Workflow](docs/23-public-browser-kate-agent-task.md).
+- **DeepSeek:** explicit image interpretation is enabled with call limits and
+  cancellable requests. The heartbeat is experimental: both wait trials returned
+  invalid judgments; ordinary screenshot polling completed both tasks.
+  [Comparison](docs/24-primary-agent-wait-comparison.md).
+- **Unresolved:** scrolling still fails host effect verification. General live
+  MCP tasks, tailnet deployment and Jev replay remain later phases.
 
-Start with [the handoff](docs/HANDOFF.md). Detailed results and limits:
-[local service](docs/16-local-owner-and-mcp.md) · [wait baseline](docs/17-dynamic-wait-baseline.md).
-
-For an agent: [useful Kate acceptance task](docs/21-kate-acceptance-workflow.md) ·
-[original external trial](docs/18-real-agent-trial.md).
+Start with [the handoff](docs/HANDOFF.md). [Local commands](docs/16-local-owner-and-mcp.md)
+· [next phases](docs/25-next-phases.md). A fixed physical KCalc smoke test passed
+previously; [its scope](docs/22-live-desktop-smoke.md) remains separate from live MCP support.
 
 ## Local quick start
 
@@ -58,8 +45,9 @@ uv run jev-desktop shutdown
 
 For an MCP host, run `uv run jev-desktop-mcp` in this checkout. It connects to
 that same local owner. Images are returned only when explicitly requested;
-paid interpretation is currently refused until pre-request dollar reservation
-is enforceable. The owner cannot meter the caller’s Codex inference. See [doc 16](docs/16-local-owner-and-mcp.md)
+reader interpretation requires explicit provider configuration and a positive
+per-session call limit. Use `image` for screenshots; `data` or `both` also
+requires reader questions. Provider usage and caller inference billing are distinct. See [doc 16](docs/16-local-owner-and-mcp.md)
 for actions, reader configuration and lifecycle limits.
 
 ## Benchmarks and design

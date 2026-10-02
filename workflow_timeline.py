@@ -10,7 +10,7 @@ import html
 import json
 from pathlib import Path
 
-PUBLIC = {'capabilities', 'status', 'session_start', 'session_stop', 'observe', 'candidates', 'act', 'cancel', 'stop_all'}
+PUBLIC = {'capabilities', 'status', 'session_start', 'session_stop', 'observe', 'wait', 'candidates', 'act', 'cancel', 'stop_all'}
 
 def timeline(audit: Path, output: Path):
     records = [json.loads(line) for line in audit.read_text().splitlines() if line.strip()]

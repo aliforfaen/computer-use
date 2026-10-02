@@ -210,17 +210,7 @@ class Worker:
             flags = _enable_virtual_atspi(self.engine)
             if not all(flags.values()):
                 raise ValueError("atspi_setup_failed")
-            if self.document_path is not None:
-                deadline = time.monotonic() + 8.0
-                opened = False
-                while time.monotonic() < deadline:
-                    geometry = self.engine.window_geometry(app_name="kate")
-                    if self.document_path.name in geometry:
-                        opened = True
-                        break
-                    time.sleep(0.2)
-                if not opened:
-                    raise ValueError("document_open_unconfirmed")
+            self._wait_for_app_window(app, document_path=self.document_path, timeout_seconds=8.0)
             self._write_journal()
             return {"started": True, "atspi": flags, "cleanup_paths": [str(p) for p in self.paths],
                     **({"document_path": str(self.document_path)} if self.document_path else {})}
@@ -230,6 +220,42 @@ class Worker:
             if failed_document is not None:
                 self._remove_empty_failed_document(failed_document)
             raise
+
+    def _wait_for_app_window(self, app: str, *, document_path: Path | None = None,
+                             timeout_seconds: float = 8.0, poll_seconds: float = 0.1) -> None:
+        """Wait for one fresh, mapped window of the app launched in this virtual session."""
+        app_ids = {
+            "kate": {"kate", "org.kde.kate"},
+            "firefox": {"firefox", "org.mozilla.firefox"},
+            "kcalc": {"kcalc", "org.kde.kcalc"},
+        }.get(app)
+        if app_ids is None:
+            raise ValueError("invalid_worker_start")
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            try:
+                response = self.engine._run_kwin_query({})
+                windows = response.get("result", []) if isinstance(response, dict) and response.get("ok") is True else []
+                ready = []
+                for window in windows:
+                    if not isinstance(window, dict) or str(window.get("app", "")).casefold() not in app_ids:
+                        continue
+                    frame = window.get("frame")
+                    mapped = (isinstance(window.get("id"), str) and isinstance(frame, dict)
+                              and all(type(frame.get(key)) is int for key in ("x", "y", "width", "height"))
+                              and frame["width"] > 0 and frame["height"] > 0)
+                    title_ready = document_path is None or (
+                        isinstance(window.get("caption"), str) and document_path.name in window["caption"])
+                    if mapped and title_ready:
+                        ready.append(window)
+                if len(ready) == 1:
+                    return
+            except Exception:
+                # Session startup races include KWin becoming queryable after
+                # the app process; keep polling only within this bounded gate.
+                pass
+            time.sleep(poll_seconds)
+        raise ValueError("document_open_unconfirmed" if document_path is not None else "app_window_open_unconfirmed")
 
     def call(self, method: str, params: dict):
         if method == "start":
@@ -259,6 +285,18 @@ class Worker:
             return self.engine.screenshot(include_cursor=False)
         if method == "mouse_click":
             return self.engine.mouse_click(params["x"], params["y"], button="left")
+        if method == "mouse_scroll":
+            delta, steps = params.get("delta"), params.get("steps")
+            if (type(delta) is not int or not 1 <= abs(delta) <= 8
+                    or type(steps) is not int or not 1 <= steps <= 8):
+                raise ValueError("scroll_argument_invalid")
+            return self.engine.mouse_scroll(params["x"], params["y"], delta,
+                                            discrete=True, steps=steps)
+        if method == "keyboard_key":
+            key = params.get("key")
+            if key not in {"Return", "ctrl+a"}:
+                raise ValueError("unsupported_key")
+            return self.engine.keyboard_key(key)
         if method == "keyboard_type":
             value = params["text"]
             # Long ASCII notes are slow when sent character-by-character through

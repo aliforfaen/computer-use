@@ -14,19 +14,22 @@ import threading
 import tempfile
 import time
 import uuid
+from urllib.parse import urlsplit
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from observation import ObservationAdapter, ObservationError
+from owner_wait import run_owner_wait
+from vision_reader import BoundedReader, ReaderResult, _usage_totals
 from transactions import (Action, AuditLog, AutonomyMode, Candidate, KwinMcpBackend,
-                          Policy, TransactionEngine, TransactionError, Verification)
+                          Policy, TransactionEngine, TransactionError, Verification, _scroll_witnesses)
 
 
 APPS = frozenset({"kate", "firefox", "kcalc"})
 METHODS = frozenset({"capabilities", "status", "session_start", "session_stop", "observe",
-                     "candidates", "act", "cancel", "stop_all"})
+                     "wait", "candidates", "act", "cancel", "stop_all"})
 
 
 def _safe_error(value: str) -> dict[str, str]:
@@ -46,6 +49,11 @@ def _safe_error(value: str) -> dict[str, str]:
         "atspi_setup_failed": "Accessibility setup for the virtual session failed.",
         "document_create_failed": "The task document could not be created safely.",
         "document_open_unconfirmed": "Kate did not confirm that the task document opened.",
+        "navigation_url_not_allowed": "Browser navigation accepts only an HTTP or HTTPS URL without embedded credentials.",
+        "target_ambiguous": "This accessible control is ambiguous; choose a uniquely named fresh target.",
+        "scroll_position_unavailable": "The app does not expose a measurable scroll position, so scrolling was not attempted.",
+        "scroll_unsupported": "The current driver does not support this scroll action.",
+        "scroll_argument_invalid": "Scroll direction or step count is invalid.",
         "capture_failed": "The application screenshot could not be captured.",
         "window_not_found": "The requested application window was not ready or could not be found.",
         "window_ambiguous": "More than one application window matched the request.",
@@ -59,6 +67,21 @@ def _safe_error(value: str) -> dict[str, str]:
 def _context(value: Any, key: str) -> str:
     raw = value.get(key) if isinstance(value, dict) else None
     return raw if isinstance(raw, str) and re.fullmatch(r"[A-Za-z0-9_.:@/-]{1,128}", raw) else "unknown"
+
+
+def _same_address_destination(observed: Any, requested: str) -> bool:
+    """Compare Firefox's omnibox text, which commonly hides the HTTPS scheme."""
+    if not isinstance(observed, str) or not observed:
+        return False
+    expected = urlsplit(requested)
+    actual = urlsplit(observed if "://" in observed else f"{expected.scheme}://{observed}")
+    try:
+        return (actual.hostname is not None and actual.hostname.casefold() == (expected.hostname or "").casefold()
+                and actual.port == expected.port and (actual.path.rstrip("/") or "/") == (expected.path.rstrip("/") or "/")
+                and actual.query == expected.query and actual.fragment == expected.fragment
+                and actual.username is None and actual.password is None)
+    except ValueError:
+        return False
 
 
 class DesktopWorkerClient:
@@ -276,8 +299,17 @@ class DesktopWorkerClient:
     def active_window(self): return self.rpc("active_window")
     def screenshot(self, include_cursor=False): return self.rpc("screenshot")
     def mouse_click(self, x, y, button="left"): return self.rpc("mouse_click", x=x, y=y)
+    def mouse_scroll(self, x, y, delta, *, horizontal=False, discrete=True, steps=1):
+        if (horizontal or not discrete or type(steps) is not int or not 1 <= steps <= 8
+                or type(delta) is not int or delta not in {-8, -7, -6, -5, -4, -3, -2, -1,
+                                                            1, 2, 3, 4, 5, 6, 7, 8}):
+            raise ValueError("scroll_argument_invalid")
+        return self.rpc("mouse_scroll", x=x, y=y, delta=delta, steps=steps)
     def keyboard_type(self, text): return self.rpc("keyboard_type", text=text)
     def keyboard_type_unicode(self, text): return self.keyboard_type(text)
+    def keyboard_key(self, key):
+        if key not in {"Return", "ctrl+a"}: raise ValueError("unsupported_key")
+        return self.rpc("keyboard_key", key=key)
     def document_key(self, operation):
         if operation not in {"select_all", "save"}:
             raise ValueError("invalid_document_operation")
@@ -316,6 +348,7 @@ class _Session:
         self.mode = mode
         self.worker = worker
         self.session_id = session_id
+        self.audit_path = Path(audit_path) if audit_path is not None else Path(__file__).parent / "run" / "desktop-service" / "actions.jsonl"
         self.started_at = datetime.now(timezone.utc).isoformat()
         self.started_clock = monotonic()
         self.last_activity_clock = self.started_clock
@@ -333,14 +366,54 @@ class _Session:
         self.document_path = None
         self.actions = 0
         self.observations = 0
-        self.reader_calls = 0
-        self.max_reader_calls = max_reader_calls if reader is not None else 0
-        self.adapter = ObservationAdapter(worker, session_id, reader=reader, allowed_apps={app})
+        self.reader_budget = (BoundedReader(reader, max_reader_calls, on_attempt_event=self._reader_attempt_event,
+                                            cancel_event=self.cancel)
+                              if reader is not None and max_reader_calls > 0 else None)
+        self.max_reader_calls = self.reader_budget.max_calls if self.reader_budget else 0
+        self.adapter = ObservationAdapter(worker, session_id, reader=self.reader_budget, allowed_apps={app})
         self.tx = TransactionEngine(KwinMcpBackend(worker), audit=AuditLog(audit_path),
                                     policy=Policy(allowed_apps=APPS, max_actions=max_actions,
                                                   max_observations=max_observations,
                                                   max_duration_seconds=max_session_lifetime,
                                                   max_text_chars=4096))
+
+    @property
+    def reader_calls(self):
+        return self.reader_budget.summary()["calls_used"] if self.reader_budget else 0
+
+    def _reader_attempt_event(self, event: str, ordinal: int, result: ReaderResult | None) -> None:
+        context = getattr(getattr(self, "tx", None), "audit", None)
+        payload: dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "reader_call_started" if event == "started" else "reader_call_completed",
+            "session_id": self.session_id,
+            "caller_node": getattr(context, "caller_node", "unknown"),
+            "transport": getattr(context, "transport", "unknown"),
+            "provider": self.reader_budget.provider if self.reader_budget else "",
+            "model": self.reader_budget.model if self.reader_budget else "",
+            "call_ordinal": ordinal,
+            "status": "pending" if result is None else (result.status if result.status in {"ok", "uncertain", "error", "invalid_response"} else "error"),
+        }
+        if result is not None:
+            payload["error"] = result.error if isinstance(result.error, str) and re.fullmatch(r"[a-zA-Z0-9_]{1,80}", result.error) else None
+            payload["served_model"] = result.served_model if isinstance(result.served_model, str) else None
+            payload["latency_ms"] = (round(result.latency_ms, 2) if isinstance(result.latency_ms, (int, float))
+                                     and not isinstance(result.latency_ms, bool) and 0 <= result.latency_ms < 1e9 else None)
+            payload["owner_elapsed_ms"] = (round(result.owner_elapsed_ms, 2) if isinstance(result.owner_elapsed_ms, (int, float))
+                                           and not isinstance(result.owner_elapsed_ms, bool) and 0 <= result.owner_elapsed_ms < 1e9 else None)
+            payload["reported_usage"] = _usage_totals(result.usage)
+        data = (json.dumps(payload, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
+        self.audit_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(self.audit_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            remaining = memoryview(data)
+            while remaining:
+                written = os.write(fd, remaining)
+                remaining = remaining[written:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 class DesktopService:
@@ -354,8 +427,10 @@ class DesktopService:
         self.audit_path = Path(audit_path or Path(__file__).parent / "run" / "desktop-service" / "actions.jsonl")
         self.worker_factory = worker_factory or (lambda: DesktopWorkerClient(timeout=request_timeout))
         self._worker = None
-        if reader is not None:
-            raise ValueError("reader disabled until a reliable per-request dollar reservation is available")
+        if reader is not None and (type(max_reader_calls) is not int or max_reader_calls <= 0):
+            raise ValueError("configured_reader_requires_positive_call_cap")
+        if reader is None and max_reader_calls not in (0, None):
+            raise ValueError("reader_call_cap_requires_configured_reader")
         self.reader = reader
         if type(max_reader_calls) is not int or max_reader_calls < 0:
             raise ValueError("max_reader_calls must be a non-negative integer")
@@ -453,10 +528,10 @@ class DesktopService:
                 "active": s.state != "broken",
                 "actions": s.actions, "action_cap": s.max_actions,
                 "observations": s.observations, "observation_cap": s.max_observations,
-                "reader_calls": s.reader_calls, "reader_call_cap": s.max_reader_calls,
-                "project_provider_budget_usd": 1.0, "project_provider_spent_usd": 0.0,
-                "project_provider_reserved_usd": 0.0, "paid_reader": "disabled_until_cost_reservation_available",
-                "external_agent_cost_usd": None,
+                "reader": s.reader_budget.summary() if s.reader_budget else {
+                    "calls_used": 0, "max_calls": 0, "successful_calls": 0, "failed_calls": 0,
+                    "rate_limited": False, "latency_total_ms": 0.0, "provider_latency_total_ms": 0.0,
+                    "owner_elapsed_total_ms": 0.0, "reported_usage": {}},
                 "document_path": s.document_path}
 
     def _require_session(self, params):
@@ -490,10 +565,8 @@ class DesktopService:
                                         "watchdog": True},
                           "reader": {"available": self.reader is not None and self.max_reader_calls > 0,
                                      "max_calls_per_session": self.max_reader_calls if self.reader else 0,
-                                     "project_provider_budget_usd": 1.0, "project_provider_spent_usd": 0.0,
-                                     "project_provider_reserved_usd": 0.0,
-                                     "paid_reader": "disabled_until_cost_reservation_available",
-                                     "external_agent_cost_usd": None}}
+                                     "configuration": self.reader.capabilities() if self.reader else None,
+                                     "accounting": "reported_usage_and_latency_only; provider billing is not measured"}}
             elif method == "status":
                 self._expire_if_needed()
                 with self._lock: current = self._session
@@ -525,7 +598,7 @@ class DesktopService:
                         safe_start_codes = {
                             "invalid_worker_start", "session_stop_unconfirmed", "session_not_started",
                             "app_not_allowed", "fixture_unavailable", "virtual_session_unavailable",
-                            "atspi_setup_failed", "document_create_failed", "document_open_unconfirmed",
+                            "atspi_setup_failed", "app_window_open_unconfirmed", "document_create_failed", "document_open_unconfirmed",
                             "worker_timeout", "worker_protocol_error", "worker_failed",
                         }
                         failure_code = str(exc) if str(exc) in safe_start_codes else "worker_failed"
@@ -609,7 +682,7 @@ class DesktopService:
                 s = self._require_session(params)
                 if app and app != s.app: raise ValueError("app_session_mismatch")
                 app = s.app
-                if method not in {"observe", "candidates", "act"}: raise ValueError("method_not_found")
+                if method not in {"observe", "wait", "candidates", "act"}: raise ValueError("method_not_found")
                 if self._expiry_reason(s) is not None:
                     self._expire_if_needed()
                     raise ValueError("session_expiring")
@@ -632,10 +705,8 @@ class DesktopService:
                         if output not in {"metadata", "image", "data", "both"}: raise ValueError("invalid_params")
                         if output in {"data", "both"}:
                             if s.adapter.reader is None: raise ValueError("reader_unavailable")
-                            if s.reader_calls >= s.max_reader_calls: raise ValueError("reader_call_budget_exceeded")
                             if not isinstance(params.get("questions"), list) or not params["questions"]:
                                 raise ValueError("invalid_params")
-                            s.reader_calls += 1
                         obs = s.adapter.observe(capture_id, mode=output, questions=params.get("questions"))
                         if s.cancel.is_set(): raise ValueError("cancelled")
                         result = {"observation": {"capture": obs.metadata,
@@ -643,6 +714,10 @@ class DesktopService:
                                                   **({"data": obs.data, "reader": asdict(obs.reader)} if obs.reader is not None else {}),
                                                   "errors": list(obs.errors)}}
                         s.observations += 1
+                    elif method == "wait":
+                        if not isinstance(params.get("expected"), str):
+                            raise ValueError("invalid_params")
+                        result = run_owner_wait(s, params["expected"], params.get("timeout_seconds", 30.0))
                     elif method == "candidates":
                         if s.observations >= s.max_observations:
                             raise ValueError("task_observation_budget_exceeded")
@@ -658,9 +733,13 @@ class DesktopService:
                             raise ValueError("task_observation_budget_exceeded")
                         kind, target, verification = params.get("action"), params.get("target_ref"), params.get("verification")
                         text = params.get("text")
-                        if kind not in {"click", "type_text", "replace_document", "save_document"} or not isinstance(target, str): raise ValueError("invalid_params")
+                        if kind not in {"click", "type_text", "replace_document", "save_document", "navigate_url", "scroll"} or not isinstance(target, str): raise ValueError("invalid_params")
                         self._check_verifier(s, verification, params.get("expected"), target)
-                        action = Action(kind, target, text if kind in {"type_text", "replace_document"} else None)
+                        direction, steps = params.get("direction"), params.get("steps", 1)
+                        action = Action(kind, target,
+                                        text if kind in {"type_text", "replace_document", "navigate_url"} else None,
+                                        direction=direction if kind == "scroll" else None,
+                                        steps=steps if kind == "scroll" else 1)
                         approval = params.get("approved") is True
                         if s.mode is AutonomyMode.SUPERVISED and not approval: raise ValueError("approval_required")
                         prior = s.tx._last.get((s.session_id, app))
@@ -672,7 +751,9 @@ class DesktopService:
                         self._audit(method, context, app, s.mode.value, "pending",
                                     "approved_action" if approval else "action_pending", verification,
                                     request_id=request_id)
-                        verifier = self._verifier(s, verification, params.get("expected"), candidate)
+                        before_snapshot = s.tx._last.get((s.session_id, app))
+                        verifier = self._verifier(s, verification, params.get("expected"), candidate,
+                                                  before_snapshot, direction=direction)
                         precondition = self._precondition(s, kind, verification, params.get("expected"), text, candidate)
                         acted = s.tx.act(s.session_id, app, action, verifier=verifier, mode=s.mode,
                                          approve=(lambda *_: approval), cancel=s.cancel, precondition=precondition)
@@ -681,7 +762,7 @@ class DesktopService:
                                   "evidence": acted.evidence if isinstance(acted.evidence, (str, int, float, bool, dict, list, type(None))) else None}
                         s.observations += 2
                     else: raise ValueError("method_not_found")
-                    # Only completed observe/candidate/action work extends the
+                    # Only completed observe/wait/candidate/action work extends the
                     # inactivity window. Status, cancellation and invalid
                     # requests cannot keep an abandoned app alive.
                     s.last_activity_clock = self._monotonic()
@@ -694,8 +775,13 @@ class DesktopService:
                     raise
                 finally: s.busy.release()
             completed_reason = self._last_stop_reason if _context(context, "transport") == "watchdog" else "completed"
+            verification = result.get("verification") if isinstance(result, dict) else None
+            if method == "wait" and isinstance(result, dict):
+                waiting = result.get("wait", {})
+                verification = {key: waiting.get(key) for key in
+                                ("status", "captures", "judgments", "coalesced_frames", "error_code")}
             self._audit(method, context, app, s.mode.value if s else "guarded", "ok", completed_reason,
-                        result.get("verification") if isinstance(result, dict) else None,
+                        verification,
                         duration_ms=(self._monotonic() - dispatch_started) * 1000, request_id=request_id)
             return {"ok": True, **result}
         except Exception as exc:
@@ -710,9 +796,10 @@ class DesktopService:
             return {"ok": False, "error": err}
 
     def _check_verifier(self, s, verification, expected, target):
-        allowed = {"target_focused", "target_text", "fixture_state", "display_text", "document_saved"}
+        allowed = {"target_focused", "target_text", "fixture_state", "display_text", "document_saved",
+                   "navigation_url", "window_title", "visible_text", "scroll_changed"}
         if verification not in allowed: raise ValueError("unsupported_verification")
-        if verification == "target_text" and (not isinstance(expected, str) or len(expected) > 4096):
+        if verification in {"target_text", "navigation_url", "window_title", "visible_text"} and (not isinstance(expected, str) or len(expected) > 4096):
             raise ValueError("invalid_params")
         if verification in {"fixture_state", "display_text"} and (not isinstance(expected, str) or len(expected) > 256):
             raise ValueError("invalid_params")
@@ -722,7 +809,9 @@ class DesktopService:
             raise ValueError("unsupported_verification")
         if verification == "display_text" and (s.app != "kcalc" or expected != "1"):
             raise ValueError("unsupported_verification")
-        if verification in {"target_text", "document_saved"} and s.app != "kate": raise ValueError("unsupported_verification")
+        if verification == "document_saved" and s.app != "kate": raise ValueError("unsupported_verification")
+        if verification in {"navigation_url", "window_title", "visible_text", "scroll_changed"} and s.app != "firefox":
+            raise ValueError("unsupported_verification")
 
     def _check_action_policy(self, s, kind, candidate, verification, expected, text):
         if verification == "display_text":
@@ -734,23 +823,41 @@ class DesktopService:
                     and candidate.label == "Advance state" and expected == "State: complete"):
                 raise ValueError("unsupported_verification")
         elif verification == "target_text":
-            if not (s.app == "kate" and kind in {"type_text", "replace_document"}
+            if not (kind in {"type_text", "replace_document"}
                     and kind in candidate.actions and isinstance(text, str) and text.strip()):
                 raise ValueError("unsupported_verification")
-            if kind == "replace_document" and expected != text:
+            if kind == "replace_document" and (s.app != "kate" or expected != text):
                 raise ValueError("unsupported_verification")
         elif verification == "document_saved":
             if not (s.app == "kate" and kind == "save_document" and candidate.role in {"text", "text entry", "entry"}
                     and "save_document" in candidate.actions):
                 raise ValueError("unsupported_verification")
         elif verification == "target_focused":
-            if s.app != "kate" or candidate.role not in {"text", "text entry", "entry"}:
+            if candidate.role not in {"text", "text entry", "entry", "combo box"}:
+                raise ValueError("unsupported_verification")
+        elif verification == "navigation_url":
+            from transactions import _valid_web_url
+            if not (s.app == "firefox" and kind == "navigate_url" and "navigate_url" in candidate.actions
+                    and isinstance(text, str) and text == expected and _valid_web_url(text)):
+                raise ValueError("unsupported_verification")
+        elif verification == "window_title":
+            if not (s.app == "firefox" and kind == "click" and candidate.role == "link" and expected.strip()):
+                raise ValueError("unsupported_verification")
+        elif verification == "visible_text":
+            if not (s.app == "firefox" and kind in {"click", "type_text"}
+                    and kind in candidate.actions and expected.strip()):
+                raise ValueError("unsupported_verification")
+        elif verification == "scroll_changed":
+            if not (s.app == "firefox" and kind == "scroll" and candidate.role in {"document frame", "scroll pane", "web area", "scroll bar", "scrollbar"}):
+                raise ValueError("unsupported_verification")
+            if expected is not None:
                 raise ValueError("unsupported_verification")
 
     def _precondition(self, s, kind, verification, expected, text, prior_candidate):
         def check(snapshot):
             current = [c for c in snapshot.candidates
-                       if (c.role, c.label) == (prior_candidate.role, prior_candidate.label)]
+                       if (c.role, c.label) == (prior_candidate.role, prior_candidate.label)
+                       and {"enabled", "sensitive", "showing", "visible"}.issubset(c.states)]
             if len(current) != 1: return False
             target = current[0]
             if verification == "target_text":
@@ -771,13 +878,32 @@ class DesktopService:
                           and {str(state).casefold() for state in row.get("states", [])} & {"showing", "visible"}]
                 return len(states) == 1 and target.role == "button" and target.label == "Advance state"
             if verification == "target_focused":
-                return kind == "click" and target.role in {"text", "text entry", "entry"}
+                return kind == "click" and target.role in {"text", "text entry", "entry", "combo box"}
             if verification == "document_saved":
                 return kind == "save_document" and target.role in {"text", "text entry", "entry"}
+            if verification == "navigation_url":
+                return kind == "navigate_url" and "focused" in target.states
+            if verification == "scroll_changed":
+                bars = [c for c in snapshot.candidates if c.role in {"scroll bar", "scrollbar"}
+                        and c.value_number is not None]
+                return kind == "scroll" and (len(bars) == 1 or bool(_scroll_witnesses(snapshot, target)))
+            if verification == "window_title":
+                return kind == "click" and target.role == "link" and snapshot.window_title != expected
+            if verification == "visible_text":
+                if kind == "click" and "click" not in target.actions: return False
+                try:
+                    raw = s.worker.atspi_find(s.app)
+                    rows = raw.get("result") if isinstance(raw, dict) and raw.get("ok") is True else []
+                    return not any(isinstance(row, dict)
+                                   and {str(state).casefold() for state in row.get("states", [])} & {"showing", "visible"}
+                                   and (row.get("text") == expected or row.get("name") == expected)
+                                   for row in rows)
+                except Exception:
+                    return False
             return False
         return check
 
-    def _verifier(self, s, verification, expected, candidate):
+    def _verifier(self, s, verification, expected, candidate, before_snapshot=None, *, direction=None):
         def verify(snapshot):
             target = [c for c in snapshot.candidates if (c.role, c.label) == (candidate.role, candidate.label)]
             if verification == "target_focused":
@@ -785,6 +911,156 @@ class DesktopService:
             if verification == "target_text":
                 ok = len(target) == 1 and target[0].value == expected
                 return Verification(ok, {"exact_target_text": ok})
+            if verification == "navigation_url":
+                started = s.monotonic()
+                deadline = started + min(10.0, max(0.0, s.max_session_lifetime -
+                                                    (started - s.started_clock)))
+                attempts = 0
+                while True:
+                    if s.cancel.is_set():
+                        return Verification(False, {"address_bar_destination_verified": False,
+                                                    "reason": "cancelled"})
+                    if s.observations + 3 > s.max_observations:
+                        break
+                    try:
+                        s.tx._check_budget(s.session_id)
+                    except TransactionError:
+                        break
+                    s.tx._bump(s.session_id)
+                    s.observations += 1
+                    attempts += 1
+                    try:
+                        raw = s.worker.atspi_find(s.app)
+                        rows = raw.get("result") if isinstance(raw, dict) and raw.get("ok") is True else []
+                        addresses = [row for row in rows if isinstance(row, dict)
+                                     and row.get("mapped") is True
+                                     and row.get("role") == "combo box"
+                                     and re.search(r"(address|location|search.*(web|address)|web.*search)",
+                                                    str(row.get("name", "")), re.IGNORECASE)
+                                     and {str(state).casefold() for state in row.get("states", [])}
+                                     >= {"editable", "showing", "visible"}]
+                        if len(addresses) == 1 and _same_address_destination(addresses[0].get("text"), expected):
+                            observed = addresses[0].get("text")
+                            explicit_scheme = isinstance(observed, str) and "://" in observed
+                            return Verification(True, {"address_bar_destination_verified": True,
+                                                       "submitted_scheme": urlsplit(expected).scheme,
+                                                       "scheme_visible_in_address_bar": explicit_scheme,
+                                                       "verification_reads": attempts})
+                    except (AttributeError, RuntimeError, ValueError):
+                        pass
+                    remaining = deadline - s.monotonic()
+                    if remaining <= 0:
+                        break
+                    s.cancel.wait(min(0.2, remaining))
+                return Verification(False, {"address_bar_destination_verified": False,
+                                            "verification_reads": attempts,
+                                            "reason": "address_bar_not_ready_or_destination_mismatch"})
+            if verification == "window_title":
+                started = s.monotonic()
+                deadline = started + min(10.0, max(0.0, s.max_session_lifetime -
+                                                    (started - s.started_clock)))
+                attempts = 1
+                current = snapshot
+                while True:
+                    if current.window_title == expected:
+                        return Verification(True, {"exact_window_title": True,
+                                                   "verification_reads": attempts})
+                    if s.cancel.is_set() or s.observations + 3 > s.max_observations:
+                        break
+                    try:
+                        s.tx._check_budget(s.session_id)
+                    except TransactionError:
+                        break
+                    remaining = deadline - s.monotonic()
+                    if remaining <= 0:
+                        break
+                    s.cancel.wait(min(0.2, remaining))
+                    if s.cancel.is_set():
+                        break
+                    try:
+                        current = s.tx._snapshot(s.session_id, s.app)
+                        s.observations += 1
+                        attempts += 1
+                    except (AttributeError, RuntimeError, TransactionError, ValueError):
+                        break
+                return Verification(False, {"exact_window_title": False,
+                                            "verification_reads": attempts})
+            if verification == "scroll_changed":
+                started = s.monotonic()
+                deadline = started + min(2.0, max(0.0, s.max_session_lifetime -
+                                                  (started - s.started_clock)))
+                attempts = 1
+                current = snapshot
+                measurement = "unavailable"
+                while True:
+                    prior = {(c.role, c.label): c.value_number for c in (before_snapshot.candidates if before_snapshot else ())
+                             if c.role in {"scroll bar", "scrollbar"} and c.value_number is not None}
+                    values = {(c.role, c.label): c.value_number for c in current.candidates
+                              if c.role in {"scroll bar", "scrollbar"} and c.value_number is not None}
+                    if len(prior) == len(values) == 1:
+                        prior_key, prior_value = next(iter(prior.items()))
+                        if prior_key in values:
+                            measurement = "accessibility_scroll_value"
+                            current_value = values[prior_key]
+                            moved = ((direction == "down" and current_value > prior_value)
+                                     or (direction == "up" and current_value < prior_value))
+                            if moved:
+                                return Verification(True, {"scroll_position_changed_in_requested_direction": True,
+                                                           "measurement": measurement,
+                                                           "verification_reads": attempts})
+                    before_viewport = next((c for c in (before_snapshot.candidates if before_snapshot else ())
+                                            if (c.role, c.label) == (candidate.role, candidate.label)), None)
+                    after_viewports = [c for c in current.candidates
+                                       if (c.role, c.label) == (candidate.role, candidate.label)]
+                    if before_snapshot is not None and before_viewport is not None and len(after_viewports) == 1:
+                        after_viewport = after_viewports[0]
+                        if before_viewport.bounds == after_viewport.bounds:
+                            before_positions = _scroll_witnesses(before_snapshot, before_viewport)
+                            after_positions = _scroll_witnesses(current, after_viewport)
+                            common = set(before_positions) & set(after_positions)
+                            deltas = [after_positions[key].y - before_positions[key].y for key in common]
+                            expected_sign = -1 if direction == "down" else 1
+                            agreeing = sum(delta * expected_sign > 0 for delta in deltas)
+                            opposing = sum(delta * expected_sign < 0 for delta in deltas)
+                            measurement = "semantic_content_bounds"
+                            if agreeing >= 2 and opposing == 0:
+                                return Verification(True, {"scroll_position_changed_in_requested_direction": True,
+                                                           "measurement": measurement,
+                                                           "verification_reads": attempts})
+                        else:
+                            measurement = "viewport_moved"
+                    if s.cancel.is_set() or s.observations + 3 > s.max_observations:
+                        break
+                    try:
+                        s.tx._check_budget(s.session_id)
+                    except TransactionError:
+                        break
+                    remaining = deadline - s.monotonic()
+                    if remaining <= 0:
+                        break
+                    s.cancel.wait(min(0.1, remaining))
+                    if s.cancel.is_set():
+                        break
+                    try:
+                        current = s.tx._snapshot(s.session_id, s.app)
+                        s.observations += 1
+                        attempts += 1
+                    except (AttributeError, RuntimeError, TransactionError, ValueError):
+                        break
+                return Verification(False, {"scroll_position_changed_in_requested_direction": False,
+                                            "measurement": measurement,
+                                            "verification_reads": attempts})
+            if verification == "visible_text":
+                try:
+                    raw = s.worker.atspi_find(s.app)
+                    rows = raw.get("result") if isinstance(raw, dict) and raw.get("ok") is True else []
+                    matches = [row for row in rows if isinstance(row, dict)
+                               and {str(state).casefold() for state in row.get("states", [])} & {"showing", "visible"}
+                               and (row.get("text") == expected or row.get("name") == expected)]
+                except Exception:
+                    matches = []
+                ok = len(matches) == 1
+                return Verification(ok, {"exact_visible_text": ok})
             if verification == "document_saved":
                 ok = len(target) == 1 and isinstance(target[0].value, str)
                 if ok:
@@ -833,4 +1109,5 @@ def _candidate(candidate: Candidate) -> dict[str, Any]:
     # Editable contents and coordinates never leave the owner process.
     label = "editable text" if "type_text" in candidate.actions else candidate.label
     return {"ref": candidate.ref, "role": candidate.role, "label": label,
-            "states": sorted(candidate.states), "actions": list(candidate.actions)}
+            "states": sorted(candidate.states), "actions": list(candidate.actions),
+            **({"unavailable_reason": candidate.unavailable_reason} if candidate.unavailable_reason else {})}

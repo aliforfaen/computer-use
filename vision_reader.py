@@ -30,9 +30,13 @@ import codecs
 import json
 import math
 import os
+import base64
+import subprocess
+import sys
+import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 try:
     import httpx
@@ -86,11 +90,267 @@ class ReaderResult:
     usage: dict[str, Any] = field(default_factory=dict)
     latency_ms: float | None = None
     uncertainty: str | None = None
+    owner_elapsed_ms: float | None = None
 
 
 class Reader(Protocol):
     def capabilities(self) -> dict[str, Any]: ...
     def interpret(self, image_bytes: bytes, questions: list[dict[str, Any]]) -> ReaderResult: ...
+
+
+def _usage_totals(value: Any, prefix: str = "") -> dict[str, int]:
+    """Flatten numeric usage counters without preserving provider text."""
+    totals: dict[str, int] = {}
+    if not isinstance(value, dict):
+        return totals
+    for key, item in value.items():
+        name = f"{prefix}.{key}" if prefix else str(key)
+        if type(item) is int and item >= 0:
+            totals[name] = item
+        elif isinstance(item, dict):
+            totals.update(_usage_totals(item, name))
+    return totals
+
+
+class BoundedReader:
+    """Per-session call cap and truthful local usage ledger for any reader.
+
+    The cap counts every attempted interpretation, including failures. A 429
+    latches the wrapper closed for the remainder of the session so no later
+    observation can silently retry a rate-limited provider.
+    """
+
+    def __init__(self, reader: Reader, max_calls: int, *,
+                 on_attempt_event: Callable[[str, int, ReaderResult | None], None] | None = None,
+                 cancel_event: threading.Event | None = None):
+        if type(max_calls) is not int or max_calls <= 0:
+            raise ValueError("max_reader_calls_must_be_positive")
+        self.reader = reader
+        reader_caps = reader.capabilities()
+        self.provider = str(reader_caps.get("provider", ""))
+        self.model = str(reader_caps.get("model", ""))
+        self.max_calls = max_calls
+        self.calls_used = 0
+        self.successful_calls = 0
+        self.failed_calls = 0
+        self.latency_total_ms = 0.0
+        self.owner_elapsed_total_ms = 0.0
+        self.reported_usage: dict[str, int] = {}
+        self.rate_limited = False
+        self.audit_failed = False
+        self.on_attempt_event = on_attempt_event
+        self.cancel_event = cancel_event
+        bind_cancel = getattr(reader, "set_cancel_event", None)
+        if callable(bind_cancel):
+            bind_cancel(cancel_event)
+        self._lock = threading.Lock()
+        self._request_lock = threading.Lock()
+
+    def capabilities(self) -> dict[str, Any]:
+        return {**self.reader.capabilities(), "max_calls_per_session": self.max_calls}
+
+    def summary(self) -> dict[str, Any]:
+        with self._lock:
+            return {"provider": self.provider, "model": self.model,
+                    "calls_used": self.calls_used, "max_calls": self.max_calls,
+                    "successful_calls": self.successful_calls, "failed_calls": self.failed_calls,
+                    "rate_limited": self.rate_limited, "audit_failed": self.audit_failed,
+                    "latency_total_ms": round(self.latency_total_ms, 2),
+                    "provider_latency_total_ms": round(self.latency_total_ms, 2),
+                    "owner_elapsed_total_ms": round(self.owner_elapsed_total_ms, 2),
+                    "reported_usage": dict(self.reported_usage)}
+
+    def interpret(self, image_bytes: bytes, questions: list[dict[str, Any]]) -> ReaderResult:
+        if not isinstance(image_bytes, bytes) or not image_bytes:
+            return ReaderResult("error", error="empty_image", provider=self.provider, model=self.model)
+        try:
+            _question_prompt(questions)
+        except (ValueError, KeyError, TypeError):
+            return ReaderResult("error", error="invalid_questions", provider=self.provider, model=self.model)
+        with self._request_lock:
+            with self._lock:
+                if self.cancel_event is not None and self.cancel_event.is_set():
+                    return ReaderResult("error", error="cancelled", provider=self.provider, model=self.model)
+                if self.rate_limited:
+                    return ReaderResult("error", error="provider_rate_limited", provider=self.provider, model=self.model)
+                if self.audit_failed:
+                    return ReaderResult("error", error="reader_audit_failed", provider=self.provider, model=self.model)
+                if self.calls_used >= self.max_calls:
+                    return ReaderResult("error", error="reader_call_budget_exceeded", provider=self.provider, model=self.model)
+                self.calls_used += 1
+                ordinal = self.calls_used
+            if self.on_attempt_event is not None:
+                try:
+                    self.on_attempt_event("started", ordinal, None)
+                except Exception:
+                    result = ReaderResult("error", error="reader_audit_failed", provider=self.provider, model=self.model)
+                    with self._lock:
+                        self.failed_calls += 1
+                        self.audit_failed = True
+                    return result
+            try:
+                result = self.reader.interpret(image_bytes, questions)
+            except Exception:
+                result = ReaderResult("error", error="reader_failed", provider=self.provider, model=self.model)
+            if self.on_attempt_event is not None:
+                try:
+                    self.on_attempt_event("completed", ordinal, result)
+                except Exception:
+                    result = ReaderResult("error", error="reader_audit_failed", provider=self.provider, model=self.model,
+                                          usage=result.usage, latency_ms=result.latency_ms)
+                    with self._lock:
+                        self.audit_failed = True
+            with self._lock:
+                if result.status in {"ok", "uncertain"}:
+                    self.successful_calls += 1
+                else:
+                    self.failed_calls += 1
+                if result.error == "http_status_429":
+                    self.rate_limited = True
+                if result.latency_ms is not None and math.isfinite(result.latency_ms) and result.latency_ms >= 0:
+                    self.latency_total_ms += result.latency_ms
+                if (result.owner_elapsed_ms is not None and math.isfinite(result.owner_elapsed_ms)
+                        and result.owner_elapsed_ms >= 0):
+                    self.owner_elapsed_total_ms += result.owner_elapsed_ms
+                for key, count in _usage_totals(result.usage).items():
+                    self.reported_usage[key] = self.reported_usage.get(key, 0) + count
+        return result
+
+
+class IsolatedVisionReader:
+    """Run each provider request in a killable process with a hard wall bound.
+
+    ``VisionReader`` retains its stream-level body safeguards for benchmarks.
+    The supported owner uses this process wrapper as an outer deadline across
+    DNS, connection, response headers and body, and to stop a request on task
+    cancellation. A reader process is always reaped before returning.
+    """
+
+    def __init__(self, config: "ReaderConfig", *, hard_timeout_seconds: float | None = None,
+                 cancel_event: threading.Event | None = None, poll_seconds: float = 0.05):
+        self.config = config
+        derived_bound = config.timeout_seconds + config.total_timeout_seconds + 2.0
+        self.hard_timeout_seconds = float(hard_timeout_seconds if hard_timeout_seconds is not None else derived_bound)
+        if not math.isfinite(self.hard_timeout_seconds) or not 0.1 <= self.hard_timeout_seconds <= 362:
+            raise ValueError("reader_hard_timeout_out_of_bounds")
+        if not math.isfinite(poll_seconds) or not 0.01 <= poll_seconds <= 0.5:
+            raise ValueError("reader_poll_interval_out_of_bounds")
+        self.cancel_event = cancel_event
+        self.poll_seconds = poll_seconds
+        self.last_child_pid: int | None = None
+        self.last_child_exitcode: int | None = None
+
+    def capabilities(self) -> dict[str, Any]:
+        return {**VisionReader(self.config).capabilities(),
+                "request_execution": "isolated_process",
+                "hard_timeout_seconds": round(self.hard_timeout_seconds, 3),
+                "hard_timeout_covers": "process_start, connection, response_headers_and_body",
+                "cancellation": "terminate_and_reap_reader_process",
+                "latency_fields": {"latency_ms": "provider_transport_elapsed_ms",
+                                   "owner_elapsed_ms": "request_wall_time_including_process_start"}}
+
+    def set_cancel_event(self, cancel_event: threading.Event | None) -> None:
+        self.cancel_event = cancel_event
+
+    @staticmethod
+    def _reap(proc: subprocess.Popen[bytes]) -> None:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.communicate(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.communicate(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    # The direct child is already SIGKILLed; wait remains a
+                    # bounded kernel/process-state operation in normal Linux use.
+                    proc.wait()
+        else:
+            proc.communicate()
+
+    def interpret(self, image_bytes: bytes, questions: list[dict[str, Any]]) -> ReaderResult:
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            return ReaderResult("error", error="cancelled", provider=self.config.provider, model=self.config.model)
+        if not isinstance(image_bytes, bytes) or not image_bytes:
+            return ReaderResult("error", error="empty_image", provider=self.config.provider, model=self.config.model)
+        try:
+            _question_prompt(questions)
+        except (ValueError, KeyError, TypeError):
+            return ReaderResult("error", error="invalid_questions", provider=self.config.provider, model=self.config.model)
+        started = time.perf_counter()
+        deadline = time.monotonic() + self.hard_timeout_seconds
+        request = {"config": {key: getattr(self.config, key) for key in (
+            "provider", "base_url", "model", "key_env", "timeout_seconds", "total_timeout_seconds",
+            "max_tokens", "max_response_chars")},
+            "image_base64": base64.b64encode(image_bytes).decode("ascii"), "questions": questions}
+        payload = (json.dumps(request, separators=(",", ":"), ensure_ascii=True) + "\n").encode("utf-8")
+        if len(payload) > 12 * 1024 * 1024:
+            return ReaderResult("error", error="reader_request_too_large", provider=self.config.provider,
+                                model=self.config.model, owner_elapsed_ms=round((time.perf_counter() - started) * 1000, 2))
+        worker_path = os.path.join(os.path.dirname(__file__), "vision_reader_worker.py")
+        try:
+            proc = subprocess.Popen([sys.executable, worker_path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            elapsed = round((time.perf_counter() - started) * 1000, 2)
+            return ReaderResult("error", error="reader_worker_unavailable", provider=self.config.provider,
+                                model=self.config.model, owner_elapsed_ms=elapsed)
+        self.last_child_pid = proc.pid
+        input_pending: bytes | None = payload
+        try:
+            while True:
+                if self.cancel_event is not None and self.cancel_event.is_set():
+                    self._reap(proc)
+                    elapsed = round((time.perf_counter() - started) * 1000, 2)
+                    return ReaderResult("error", error="cancelled", provider=self.config.provider, model=self.config.model,
+                                        owner_elapsed_ms=elapsed)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._reap(proc)
+                    elapsed = round((time.perf_counter() - started) * 1000, 2)
+                    return ReaderResult("error", error="request_deadline_exceeded", provider=self.config.provider,
+                                        model=self.config.model, owner_elapsed_ms=elapsed)
+                try:
+                    output, _ = proc.communicate(input=input_pending, timeout=min(self.poll_seconds, remaining))
+                    input_pending = None
+                    break
+                except subprocess.TimeoutExpired:
+                    input_pending = None
+                    continue
+            if proc.returncode != 0 or len(output) > 256 * 1024:
+                elapsed = round((time.perf_counter() - started) * 1000, 2)
+                return ReaderResult("error", error="reader_worker_failed", provider=self.config.provider,
+                                    model=self.config.model, owner_elapsed_ms=elapsed)
+            try:
+                value = json.loads(output)
+                if not isinstance(value, dict) or value.get("status") not in {"ok", "uncertain", "error", "invalid_response"}:
+                    raise ValueError
+                data = value.get("data")
+                if data is not None and not isinstance(data, dict):
+                    raise ValueError
+                usage = value.get("usage") if isinstance(value.get("usage"), dict) else {}
+                latency = value.get("latency_ms")
+                if isinstance(latency, bool) or not isinstance(latency, (int, float)) or not math.isfinite(latency) or latency < 0:
+                    latency = None
+                return ReaderResult(value["status"], data=data, error=value.get("error") if isinstance(value.get("error"), str) else None,
+                                    provider=self.config.provider, model=self.config.model,
+                                    served_model=value.get("served_model") if isinstance(value.get("served_model"), str) else None,
+                                    usage=usage, latency_ms=latency,
+                                    uncertainty=value.get("uncertainty") if isinstance(value.get("uncertainty"), str) else None,
+                                    owner_elapsed_ms=round((time.perf_counter() - started) * 1000, 2))
+            except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+                elapsed = round((time.perf_counter() - started) * 1000, 2)
+                return ReaderResult("error", error="reader_worker_protocol_error", provider=self.config.provider,
+                                    model=self.config.model, owner_elapsed_ms=elapsed)
+        finally:
+            if proc.poll() is None:
+                self._reap(proc)
+            self.last_child_exitcode = proc.returncode
+
+    def close(self) -> None:
+        # No persistent child is retained between requests.
+        return None
 
 
 class StreamParseError(ValueError):

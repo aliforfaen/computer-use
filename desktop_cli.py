@@ -87,6 +87,9 @@ def _build_parser() -> argparse.ArgumentParser:
     daemon.add_argument("--reader-base-url", default=None)
     daemon.add_argument("--reader-model", default=None)
     daemon.add_argument("--reader-key-env", default=None, help="environment variable name, never a key value")
+    daemon.add_argument("--dotenv", type=Path, default=Path(".env"), help="optional private dotenv file for the configured reader key")
+    daemon.add_argument("--reader-timeout", type=float, default=10.0, help="reader HTTP connect/read idle timeout in seconds")
+    daemon.add_argument("--reader-total-timeout", type=float, default=15.0, help="reader response-body deadline in seconds")
     daemon.add_argument("--max-reader-calls", type=int, default=None)
     daemon.add_argument("--idle-timeout", type=float, default=180.0,
                         help="stop the session after this many inactive seconds")
@@ -126,14 +129,21 @@ def _build_parser() -> argparse.ArgumentParser:
     observe.add_argument("--capture-id", help="reuse an unexpired capture ID")
     observe.add_argument("--questions-json", help="reader questions as a JSON list of field/type/description objects")
     _add_socket(observe)
+    wait = commands.add_parser("wait", help="wait for a bounded screenshot condition using the configured reader")
+    wait.add_argument("app")
+    wait.add_argument("--expected", required=True, help="caller-authored visible condition; maximum 500 characters")
+    wait.add_argument("--timeout", type=float, default=30.0, help="wait deadline in seconds (maximum 120)")
+    _add_socket(wait)
     act = commands.add_parser("act", help="execute and verify one grounded action")
     act.add_argument("app")
-    act.add_argument("action", choices=("click", "type_text", "replace_document", "save_document"))
+    act.add_argument("action", choices=("click", "type_text", "replace_document", "save_document", "navigate_url", "scroll"))
     act.add_argument("target_ref")
     act.add_argument("--approved", action="store_true", help="record approval for supervised or guarded actions")
-    act.add_argument("--verification", choices=("target_focused", "target_text", "fixture_state", "display_text", "document_saved"), required=True)
+    act.add_argument("--verification", choices=("target_focused", "target_text", "fixture_state", "display_text", "document_saved", "navigation_url", "window_title", "visible_text", "scroll_changed"), required=True)
     act.add_argument("--expected", help="exact expected visible text (kept as a string)")
     act.add_argument("--text-file", help="read typing payload from this file; '-' reads stdin")
+    act.add_argument("--direction", choices=("up", "down"))
+    act.add_argument("--steps", type=int)
     _add_socket(act)
     cancel = commands.add_parser("cancel", help="cancel current work for a session")
     cancel.add_argument("--session-id")
@@ -173,6 +183,8 @@ def main(argv: list[str] | None = None) -> int:
             daemon_args += ["--reader-model", args.reader_model]
         if args.reader_key_env:
             daemon_args += ["--reader-key-env", args.reader_key_env]
+        daemon_args += ["--dotenv", str(args.dotenv), "--reader-timeout", str(args.reader_timeout),
+                        "--reader-total-timeout", str(args.reader_total_timeout)]
         if args.max_reader_calls is not None:
             daemon_args += ["--max-reader-calls", str(args.max_reader_calls)]
         daemon_args += ["--idle-timeout", str(args.idle_timeout),
@@ -193,6 +205,8 @@ def main(argv: list[str] | None = None) -> int:
                 daemon_args += ["--reader-model", args.reader_model]
             if args.reader_key_env:
                 daemon_args += ["--reader-key-env", args.reader_key_env]
+            daemon_args += ["--dotenv", str(args.dotenv), "--reader-timeout", str(args.reader_timeout),
+                            "--reader-total-timeout", str(args.reader_total_timeout)]
             if args.max_reader_calls is not None:
                 daemon_args += ["--max-reader-calls", str(args.max_reader_calls)]
             daemon_args += ["--idle-timeout", str(args.idle_timeout),
@@ -226,6 +240,12 @@ def main(argv: list[str] | None = None) -> int:
             if not isinstance(questions, list) or not all(isinstance(item, dict) for item in questions):
                 raise ValueError("--questions-json must be a list of question objects")
             method_params["questions"] = questions
+    elif method == "wait":
+        if len(args.expected) > 500:
+            raise ValueError("expected_condition_too_long")
+        if not 0.1 <= args.timeout <= 120:
+            raise ValueError("timeout_must_be_0.1_to_120_seconds")
+        method_params = {"app": args.app, "expected": args.expected, "timeout_seconds": args.timeout}
     elif method == "act":
         if args.expected is not None and len(args.expected) > MAX_DESKTOP_TEXT_CHARS:
             raise ValueError("expected_text_too_long")
@@ -234,12 +254,18 @@ def main(argv: list[str] | None = None) -> int:
                          "verification": args.verification}
         if args.expected is not None:
             method_params["expected"] = args.expected
-        if args.action == "type_text":
+        if args.action in {"type_text", "navigate_url"}:
             method_params["text"] = _read_text_file(args.text_file)
         elif args.action == "replace_document":
             method_params["text"] = _read_text_file(args.text_file)
         elif args.text_file is not None:
             raise ValueError("--text-file applies only to type_text or replace_document")
+        if args.action == "scroll":
+            if args.direction is None or args.steps is None or not 1 <= args.steps <= 8:
+                raise ValueError("scroll requires --direction and --steps from 1 to 8")
+            method_params.update(direction=args.direction, steps=args.steps)
+        elif args.direction is not None or args.steps is not None:
+            raise ValueError("--direction and --steps apply only to scroll")
     elif method == "cancel":
         method_params = {"session_id": args.session_id} if args.session_id else {}
     elif method in {"stop", "stop-all", "shutdown"}:

@@ -46,6 +46,7 @@ class WaitFrame:
     image: bytes = field(repr=False)
     capture_id: str | None = None
     captured_at: float | None = None
+    metadata: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.image, bytes) or not self.image:
@@ -92,7 +93,10 @@ class AdapterFrameSource:
         observation = self.adapter.observe(ref, mode="image")
         if observation.image is None:
             raise ObservationError("image_unavailable", "app image was unavailable")
-        return WaitFrame(observation.image, ref.capture_id, time.monotonic())
+        metadata = getattr(observation, "metadata", None)
+        if not isinstance(metadata, dict):
+            metadata = None
+        return WaitFrame(observation.image, ref.capture_id, time.monotonic(), metadata)
 
 
 class ReaderJudge:
@@ -179,9 +183,10 @@ class WaitWatcher:
         capture_count = capture_errors = coalesced = judged_seq = judgments = 0
         capture_time = judge_time = 0.0
         usage: dict[str, Any] = {}
+        capture_error_code: str | None = None
 
         def capture_loop() -> None:
-            nonlocal latest, capture_count, capture_errors, coalesced, capture_time
+            nonlocal latest, capture_count, capture_errors, coalesced, capture_time, capture_error_code
             while not stop.is_set() and not cancel.is_set():
                 before = self.clock()
                 try:
@@ -196,11 +201,13 @@ class WaitWatcher:
                             coalesced += 1
                         latest = (capture_count, frame)
                         changed.notify_all()
-                except Exception:
+                except Exception as exc:
                     duration = max(0.0, self.clock() - before)
                     with changed:
                         capture_errors += 1
                         capture_time += duration
+                        code = getattr(exc, "code", None)
+                        capture_error_code = code if isinstance(code, str) else "capture_failed"
                         changed.notify_all()
                     return
                 stop.wait(self.interval_seconds)
@@ -219,7 +226,7 @@ class WaitWatcher:
                     status = "cancelled"
                     break
                 if capture_errors:
-                    status, error_code = "error", "capture_failed"
+                    status, error_code = "error", capture_error_code or "capture_failed"
                     break
                 if now >= deadline:
                     status = "timeout"
@@ -266,8 +273,7 @@ class WaitWatcher:
                 if decision == "error":
                     if reader_result is not None and reader_result.status not in {"ok", "uncertain"}:
                         status = "error"
-                        error_code = ("invalid_judgment" if reader_result.error == "invalid_judgment"
-                                      else "reader_error")
+                        error_code = reader_result.error or "reader_error"
                         break
                 elif decision == "wait":
                     candidate, candidate_since = None, None
