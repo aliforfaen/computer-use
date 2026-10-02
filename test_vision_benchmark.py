@@ -15,8 +15,9 @@ class FakeResponse:
     def __init__(self, lines):
         self.lines = lines
 
-    def iter_lines(self):
-        return iter(self.lines)
+    def iter_bytes(self):
+        for line in self.lines:
+            yield (line + "\n").encode("utf-8")
 
 
 class VisionBenchmarkTests(unittest.TestCase):

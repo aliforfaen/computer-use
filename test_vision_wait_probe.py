@@ -307,6 +307,210 @@ class VisionWaitProbeTests(unittest.TestCase):
         self.assertEqual(len(inner.calls), 1)
         self.assertEqual(budget_reader.attempts[0]["status"], "in_flight")
 
+    def _case_dir_tracker(self):
+        import vision_wait_probe as probe
+
+        real_mkdtemp = tempfile.mkdtemp
+        profiles = []
+
+        def fake_mkdtemp(prefix):
+            path = Path(real_mkdtemp(prefix=prefix))
+            profiles.append(path)
+            return str(path)
+
+        return probe, profiles, mock.patch.object(probe.tempfile, "mkdtemp", fake_mkdtemp)
+
+    class _CaseServer:
+        server_port = 9
+
+        def snapshot(self, trial):
+            return []
+
+    def test_run_case_removes_profile_when_engine_construction_fails(self):
+        import kwin_mcp.core as kwin_core
+
+        probe, profiles, patch = self._case_dir_tracker()
+
+        class BrokenEngine:
+            def __init__(self):
+                raise RuntimeError("engine_unavailable")
+
+        inner = FakeReader()
+        budget_reader = BudgetedReader(inner)
+        scratch = Path(tempfile.mkdtemp())
+        try:
+            with patch, mock.patch.object(kwin_core, "AutomationEngine", BrokenEngine):
+                row = probe._run_case(self._CaseServer(), dict(TRIAL_CASES[0]), scratch, budget_reader,
+                                      deadline_seconds=1.0, debounce_seconds=0.0)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["error"], "engine_unavailable")
+        self.assertEqual(row["cleanup"], "not_started")
+        self.assertEqual(row["profile_cleanup"], "passed")
+        self.assertTrue(profiles and not profiles[0].exists())
+        self.assertEqual(len(inner.calls), 0)
+
+    def test_run_case_removes_profile_when_engine_construction_interrupts(self):
+        import kwin_mcp.core as kwin_core
+
+        probe, profiles, patch = self._case_dir_tracker()
+
+        class InterruptingEngine:
+            def __init__(self):
+                raise KeyboardInterrupt
+
+        budget_reader = BudgetedReader(FakeReader())
+        scratch = Path(tempfile.mkdtemp())
+        try:
+            with patch, mock.patch.object(kwin_core, "AutomationEngine", InterruptingEngine):
+                with self.assertRaises(KeyboardInterrupt):
+                    probe._run_case(self._CaseServer(), dict(TRIAL_CASES[0]), scratch, budget_reader,
+                                    deadline_seconds=1.0, debounce_seconds=0.0)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        self.assertTrue(profiles and not profiles[0].exists())
+
+    def _run_case_with_start(self, start):
+        import kwin_mcp.core as kwin_core
+
+        probe, profiles, patch = self._case_dir_tracker()
+        engines = []
+
+        class Engine:
+            def __init__(self):
+                self.stop_calls = 0
+                engines.append(self)
+
+            def session_start(self, **kwargs):
+                raise start
+
+            def session_stop(self):
+                self.stop_calls += 1
+                return "Session stopped"
+
+        budget_reader = BudgetedReader(FakeReader())
+        scratch = Path(tempfile.mkdtemp())
+        outcome = None
+        try:
+            with patch, \
+                 mock.patch.object(kwin_core, "AutomationEngine", Engine), \
+                 mock.patch.object(wait_benchmark, "_url", lambda server, case, trial: "http://127.0.0.1/x"):
+                try:
+                    outcome = probe._run_case(self._CaseServer(), dict(TRIAL_CASES[0]), scratch, budget_reader,
+                                              deadline_seconds=1.0, debounce_seconds=0.0)
+                except BaseException as exc:  # captured so cleanup can be asserted
+                    outcome = exc
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        return engines, profiles, outcome
+
+    def test_run_case_stops_session_when_start_raises_after_partial_creation(self):
+        engines, profiles, row = self._run_case_with_start(RuntimeError("kwin_eis_unavailable"))
+        self.assertIsInstance(row, dict)
+        self.assertEqual(row["error"], "kwin_eis_unavailable")
+        self.assertEqual(row["cleanup"], "passed")
+        self.assertEqual(engines[0].stop_calls, 1)
+        self.assertTrue(profiles and not profiles[0].exists())
+
+    def test_run_case_stops_session_when_start_interrupts(self):
+        engines, profiles, outcome = self._run_case_with_start(KeyboardInterrupt())
+        self.assertIsInstance(outcome, KeyboardInterrupt)
+        self.assertEqual(engines[0].stop_calls, 1)
+        self.assertTrue(profiles and not profiles[0].exists())
+
+    def test_run_case_removes_profile_when_case_started_journal_raises(self):
+        import kwin_mcp.core as kwin_core
+
+        probe, profiles, patch = self._case_dir_tracker()
+
+        class Engine:
+            pass
+
+        def broken_journal(event, payload):
+            raise RuntimeError("journal_unavailable")
+
+        budget_reader = BudgetedReader(FakeReader())
+        scratch = Path(tempfile.mkdtemp())
+        try:
+            with patch, mock.patch.object(kwin_core, "AutomationEngine", Engine):
+                with self.assertRaises(RuntimeError):
+                    probe._run_case(self._CaseServer(), dict(TRIAL_CASES[0]), scratch, budget_reader,
+                                    deadline_seconds=1.0, debounce_seconds=0.0, on_case_event=broken_journal)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        self.assertTrue(profiles and not profiles[0].exists())
+
+    def _run_setup_failure(self, *, versions, server_factory):
+        import vision_wait_probe as probe
+
+        tmp = Path(tempfile.mkdtemp())
+        closed = []
+
+        class Reader:
+            def capabilities(self):
+                return {"images": True}
+
+            def interpret(self, *args):
+                raise AssertionError("reader must not be called")
+
+            def close(self):
+                closed.append(True)
+
+        try:
+            with mock.patch.object(wait_benchmark, "_versions", versions):
+                with self.assertRaises(RuntimeError):
+                    probe.run(tmp, reader_factory=Reader, server_factory=server_factory)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        return closed
+
+    def test_run_closes_reader_when_versions_lookup_fails(self):
+        def boom():
+            raise RuntimeError("no_versions")
+
+        def unreachable():
+            raise AssertionError("server must not be created")
+
+        self.assertEqual(self._run_setup_failure(versions=boom, server_factory=unreachable), [True])
+
+    def test_run_closes_reader_when_server_creation_fails(self):
+        def boom():
+            raise RuntimeError("no_server")
+
+        self.assertEqual(self._run_setup_failure(versions=lambda: {}, server_factory=boom), [True])
+
+    def test_run_closes_reader_and_server_when_start_fails(self):
+        class Server:
+            def __init__(self):
+                self.closed = 0
+
+            def start(self):
+                raise RuntimeError("start_failed")
+
+            def server_close(self):
+                self.closed += 1
+
+        server = Server()
+        closed = self._run_setup_failure(versions=lambda: {}, server_factory=lambda: server)
+        self.assertEqual(closed, [True])
+        self.assertEqual(server.closed, 1)
+
+    def test_run_refuses_to_overwrite_existing_evidence(self):
+        import vision_wait_probe as probe
+
+        tmp = Path(tempfile.mkdtemp())
+        prior = tmp / "progress.jsonl"
+        prior.write_text('{"event":"attempt_started"}\n', encoding="utf-8")
+        before = prior.read_text(encoding="utf-8")
+        try:
+            with self.assertRaises(probe.ProbeOutputError):
+                probe.run(tmp, reader_factory=FakeReader, server_factory=lambda: None)
+            after = prior.read_text(encoding="utf-8")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual(after, before)
+
     def test_interrupted_run_persists_pre_call_journal_and_does_not_retry(self):
         import vision_wait_probe as probe
 

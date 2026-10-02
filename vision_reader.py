@@ -3,16 +3,30 @@
 The module deliberately returns only structured, safe error codes. It never
 logs request bodies, credentials, screenshots, or extracted text.
 
-Stream runtime is bounded by ``total_timeout_seconds`` checked between stream
-lines. A transport read blocked at that deadline is bounded by
-``timeout_seconds`` (the HTTP read/idle timeout, passed per request so an
-injected client cannot extend it). Worst-case stream runtime is therefore
-``total_timeout_seconds + timeout_seconds``; the probe configures 30 s + 5 s
-inside a 40 s watch deadline.
+Stream parsing consumes raw response chunks (``iter_bytes``), so the total
+deadline and the input-size cap are checked on every incoming chunk,
+including partial lines that have not yet seen a newline. For the body phase
+the guaranteed bound is ``total_timeout_seconds + timeout_seconds``: the
+absolute deadline checked between chunks, plus at most one blocked transport
+read bounded by the HTTP read/idle timeout. The probe configures 30 s + 5 s
+inside a 40 s watch limit.
+
+Header reception is *not* covered by our deadline: ``httpx`` only returns from
+``stream()`` once the status line and headers are complete, and the read
+/idle timeout bounds each idle gap but not a peer that trickles header bytes
+faster than that timeout. A host that needs a hard wall-clock bound across
+the header phase must add its own outer deadline; this module does not claim
+one.
+
+The per-chunk checks run when the transport yields a chunk. A lower-level
+framing layer that buffers an incomplete unit (for example an unterminated
+HTTP transfer chunk) can delay delivery; in that case the idle read timeout,
+not the per-chunk deadline, is what bounds the delay.
 """
 
 from __future__ import annotations
 
+import codecs
 import json
 import math
 import os
@@ -33,13 +47,17 @@ class ReaderConfig:
     model: str = "deepseek-flash"
     key_env: str = "DEEPSEEK_API_KEY"
     # timeout_seconds is the HTTP connect/read inactivity limit. A blocked
-    # transport read is bounded by this value.
+    # transport read (including while awaiting headers) is bounded by this
+    # value.
     timeout_seconds: float = 60.0
-    # The parser checks this monotonic wall deadline between stream lines, so
-    # worst-case bounded runtime is total_timeout_seconds + timeout_seconds
-    # (one blocked read that began just before the deadline).
+    # Absolute wall deadline for the body phase, checked on every chunk. The
+    # worst-case body runtime is total_timeout_seconds + timeout_seconds (one
+    # blocked read that began just before the deadline). Header reception is
+    # bounded only by timeout_seconds per idle gap; see the module docstring.
     total_timeout_seconds: float = 180.0
     max_tokens: int = 256
+    # Cap on raw response bytes, enforced on every chunk so it also bounds a
+    # partial line before its newline arrives.
     max_response_chars: int = 64 * 1024
 
     def __post_init__(self) -> None:
@@ -122,25 +140,58 @@ def _safe_usage(value: Any, depth: int = 0) -> Any:
     return None
 
 
+def _iter_response_lines(response: Any, *, max_response_chars: int, deadline_monotonic: float | None,
+                         clock) -> Any:
+    """Yield decoded SSE lines while bounding time and size on raw chunks.
+
+    ``iter_lines`` buffers bytes until a newline, so a peer that trickles bytes
+    without newlines can reset the idle timeout forever while the parser never
+    regains control. Consuming ``iter_bytes`` lets the deadline and byte cap
+    apply to every received chunk, including a partial line. A read that blocks
+    with no bytes is still bounded by the transport read timeout.
+    """
+    if not callable(getattr(response, "iter_bytes", None)):
+        raise StreamParseError("unsupported_stream_transport")
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    pending = ""
+    total_bytes = 0
+    for chunk in response.iter_bytes():
+        if deadline_monotonic is not None and clock() >= deadline_monotonic:
+            raise StreamParseError("stream_total_timeout")
+        if not isinstance(chunk, (bytes, bytearray)):
+            raise StreamParseError("malformed_stream_event")
+        total_bytes += len(chunk)
+        if total_bytes > max_response_chars:
+            raise StreamParseError("response_too_large")
+        pending += decoder.decode(bytes(chunk))
+        if "\n" in pending:
+            lines = pending.split("\n")
+            pending = lines.pop()
+            for line in lines:
+                yield line
+    pending += decoder.decode(b"", final=True)
+    if pending:
+        yield pending
+
+
 def parse_stream(response: Any, on_first_content=None, *, max_response_chars: int = 256 * 1024,
                  deadline_monotonic: float | None = None, clock=time.monotonic) -> tuple[str, dict[str, Any], str, str | None]:
-    """Parse OpenAI-compatible SSE once for both reader and benchmark callers."""
+    """Parse OpenAI-compatible SSE once for both reader and benchmark callers.
+
+    The deadline and the size cap are enforced on every raw chunk, so a
+    newline-free byte trickle cannot bypass them; the byte cap also bounds a
+    partial line before it is terminated.
+    """
     fragments: list[str] = []
     usage: dict[str, Any] = {}
     finish_reason: str | None = None
     served_model: str | None = None
     saw_done = False
-    response_chars = 0
     try:
-        lines = response.iter_lines()
-        for line in lines:
-            if deadline_monotonic is not None and clock() >= deadline_monotonic:
-                raise StreamParseError("stream_total_timeout")
+        for line in _iter_response_lines(response, max_response_chars=max_response_chars,
+                                         deadline_monotonic=deadline_monotonic, clock=clock):
             if not isinstance(line, str):
                 raise StreamParseError("malformed_stream_event")
-            response_chars += len(line)
-            if response_chars > max_response_chars:
-                raise StreamParseError("response_too_large")
             if not line or line.startswith(":") or not line.startswith("data:"):
                 continue
             payload = line[5:].strip()
@@ -173,8 +224,6 @@ def parse_stream(response: Any, on_first_content=None, *, max_response_chars: in
                     if not fragments and on_first_content is not None:
                         on_first_content()
                     fragments.append(content)
-                    if sum(map(len, fragments)) > max_response_chars:
-                        raise StreamParseError("response_too_large")
     except StreamParseError:
         raise
     if not saw_done:

@@ -46,15 +46,20 @@ interrupted by a comment-only SSE stream that exceeded four minutes; its old
 runner swallowed the first interrupt and lost exact attempt/usage counts.
 Cleanup was confirmed. Reserve the full 12-attempt worst-case estimate
 ($0.0211968) as possibly charged; that amount is not observed billing. On
-2026-10-02 the frozen 5-second idle, 30-second total stream and 40-second watch
-deadlines, fsynced pre-attempt/lifecycle journal and interrupt propagation were
-independently reviewed and fixed (an undefined prior-run reserve constant made
-`run()` raise `NameError`), and nine new offline tests cover comment-only SSE,
-stalled reads, late content, interrupt propagation, pre-call journaling,
-partial persistence and owned-session/profile cleanup. The one configured
-follow-up request then completed: one `deepseek-flash` judgment, returned usage
+2026-10-02 the frozen deadlines, fsynced pre-attempt/lifecycle journal and
+interrupt path were independently reviewed and fixed (an undefined prior-run
+reserve constant made `run()` raise `NameError`). A follow-up review then found
+the stated deadline bound still overstated: `iter_lines` buffered partial
+lines, so the parser now enforces the deadline and byte cap on every raw
+response chunk (including partial lines) and no longer claims a bound across
+header reception. Fourteen new offline tests cover these paths, and the suite
+is **111 tests, all passing**. The one configured follow-up request then
+completed: one `deepseek-flash` judgment, returned usage
 821 prompt / 8 completion tokens, 1.41 s, no rate limit, cleanup passed, and a
-peak cache-miss upper bound of $0.0002559. The follow-up cap is now consumed;
+peak cache-miss upper bound of $0.0002559. That paid result predates the
+second-pass parser fix but used a normal newline-terminated stream, so it
+remains valid; the strengthened bound rests on offline regressions. The
+follow-up cap is now consumed;
 do not make another provider request without fresh authorization. See doc 17
 for detail and evidence limits.
 
@@ -63,8 +68,11 @@ for detail and evidence limits.
 Completed 2026-10-02:
 
 1. Reviewed the frozen stream timeout, progress journal and interrupt path;
-   fixed the undefined prior-run reserve constant and hardened the per-request
-   read bound. The offline suite is **97 tests, all passing**.
+   fixed the undefined prior-run reserve constant. A second-pass review found
+   the deadline claim still overstated for newline-free byte trickles; the
+   parser now bounds time and size per raw chunk (partial lines included) and
+   documents the header-phase limitation. The offline suite is **111 tests,
+   all passing**, and the probe refuses to overwrite existing evidence.
 2. Ran the single configured DeepSeek follow-up request; it returned one valid
    structured judgment and confirmed cleanup. The paid cap is consumed.
 3. Corrected the stale HANDOFF claim that the initial remote connection/push
@@ -81,7 +89,8 @@ Next work remains gated:
 3. **OCR+Jev and end-to-end primary-agent comparison:** later arms; they need
    fresh authorization and must count primary turns/tokens and every backend
    request. Do not infer acceleration from the M4a pixel-diff baseline or the
-   single M4b heartbeat.
+   single M4b heartbeat. The chunk-level parser fix is offline-tested; no paid
+   request has exercised the newline-free trickle path.
 
 The owner-supported direction is a screenshot-driven computer-use terminal
 for local and tailnet agents, using `kwin-mcp` for sessions, capture and input.

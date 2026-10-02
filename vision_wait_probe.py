@@ -71,6 +71,10 @@ class ProbeBudgetError(RuntimeError):
     """Raised before a request that could violate the probe's hard budget."""
 
 
+class ProbeOutputError(RuntimeError):
+    """Raised when the output directory already contains run evidence."""
+
+
 def estimate_cost_usd(prompt_tokens: int, completion_tokens: int) -> float:
     if type(prompt_tokens) is not int or prompt_tokens < 0 or type(completion_tokens) is not int or completion_tokens < 0:
         raise ValueError("token counts must be non-negative integers")
@@ -273,20 +277,23 @@ def _run_case(server: Any, case: dict[str, Any], output: Path, budget_reader: Bu
 
     trial = uuid.uuid4().hex
     profile = Path(tempfile.mkdtemp(prefix="jev-vision-wait-profile-"))
-    engine = AutomationEngine()
+    engine = None
     session_attempted = False
     row: dict[str, Any] = {"case": case["case"], "trial": trial, "expected": case["expected"],
                            "status": "failed", "cleanup": "pending"}
-    if on_case_event is not None:
-        on_case_event("case_started", {"case": case["case"], "trial": trial})
     title = "Jev local wait fixture"
     try:
+        engine = AutomationEngine()
+        if on_case_event is not None:
+            on_case_event("case_started", {"case": case["case"], "trial": trial})
         command = " ".join(("firefox", "--no-remote", "--new-instance", "--profile", shlex.quote(str(profile)),
                             shlex.quote(_url(server, case, trial))))
+        # Mark attempted before the call: a partial or interrupted start may
+        # have created owned resources that session_stop must clean up.
+        session_attempted = True
         started = engine.session_start(app_command=command, screen_width=1280, screen_height=800,
                                        isolate_home=True, keep_home=False, keep_screenshots=False,
                                        env={"MOZ_ENABLE_ACCESSIBILITY": "1"})
-        session_attempted = True
         if "Input backend: KWin EIS" not in started:
             raise RuntimeError("kwin_eis_unavailable")
         adapter = ObservationAdapter(engine, trial, allowed_apps={"firefox"})
@@ -343,7 +350,7 @@ def _run_case(server: Any, case: dict[str, Any], output: Path, budget_reader: Bu
         row["fixture_events"] = _case_result_events(server, trial)
         row["attempts"] = [entry for entry in budget_reader.attempts if entry.get("case") == case["case"]]
     finally:
-        if session_attempted:
+        if session_attempted and engine is not None:
             try:
                 stop = engine.session_stop()
                 row["cleanup"] = "passed" if isinstance(stop, str) and "Session stopped" in stop else "unconfirmed"
@@ -376,6 +383,10 @@ def run(output: Path = OUT, *, seed: int = 41,
     debounce_seconds = 0.0
     budget = validate_probe_budget(max_calls, max_case_calls)
     output.mkdir(parents=True, exist_ok=True)
+    # Never truncate or overwrite existing evidence (including the paid
+    # follow-up result). Each run needs a fresh output directory.
+    if any(output.iterdir()):
+        raise ProbeOutputError("output_directory_not_empty")
     journal = output / "progress.jsonl"
     journal.write_text("", encoding="utf-8")
 
@@ -397,43 +408,63 @@ def run(output: Path = OUT, *, seed: int = 41,
                               key_env="DEEPSEEK_API_KEY", timeout_seconds=5, total_timeout_seconds=30,
                               max_tokens=MAX_TOKENS, max_response_chars=8192)
         reader_factory = lambda: VisionReader(config)
-    reader = reader_factory()
-    budget_reader = BudgetedReader(reader, max_calls=max_calls, max_case_calls=max_case_calls,
-                                   on_attempt_event=journal_event)
-    from wait_benchmark import _versions
-    versions = _versions()
-    if server_factory is None:
-        from wait_benchmark import FixtureServer
-        server_factory = FixtureServer
-    server = server_factory()
-    server.start()
+    reader = None
+    server = None
+    server_started = False
     rows: list[dict[str, Any]] = []
-    shuffled = list(selected_cases)
-    random.Random(seed).shuffle(shuffled)
     interrupted = False
     try:
-        for case in shuffled:
-            if budget_reader.stop_reason or len(budget_reader.attempts) >= max_calls:
-                break
-            row = _run_case(server, case, output, budget_reader, deadline_seconds=deadline_seconds,
-                            debounce_seconds=debounce_seconds, on_case_event=journal_event)
-            rows.append(row)
-            if budget_reader.rate_limited or budget_reader.stop_reason:
-                break
-    except KeyboardInterrupt:
-        interrupted = True
-        journal_event("run_interrupted", {"reason": "keyboard_interrupt"})
+        reader = reader_factory()
+        budget_reader = BudgetedReader(reader, max_calls=max_calls, max_case_calls=max_case_calls,
+                                       on_attempt_event=journal_event)
+        from wait_benchmark import _versions
+        versions = _versions()
+        if server_factory is None:
+            from wait_benchmark import FixtureServer
+            server_factory = FixtureServer
+        server = server_factory()
+        server.start()
+        server_started = True
+        shuffled = list(selected_cases)
+        random.Random(seed).shuffle(shuffled)
+        try:
+            for case in shuffled:
+                if budget_reader.stop_reason or len(budget_reader.attempts) >= max_calls:
+                    break
+                row = _run_case(server, case, output, budget_reader, deadline_seconds=deadline_seconds,
+                                debounce_seconds=debounce_seconds, on_case_event=journal_event)
+                rows.append(row)
+                if budget_reader.rate_limited or budget_reader.stop_reason:
+                    break
+        except KeyboardInterrupt:
+            interrupted = True
+            journal_event("run_interrupted", {"reason": "keyboard_interrupt"})
     finally:
         try:
-            server.shutdown()
-            server.server_close()
-            thread = getattr(server, "thread", None)
-            if thread is not None:
-                thread.join(timeout=3)
+            if server is not None and server_started:
+                try:
+                    server.shutdown()
+                finally:
+                    try:
+                        server.server_close()
+                    finally:
+                        thread = getattr(server, "thread", None)
+                        if thread is not None:
+                            thread.join(timeout=3)
+            elif server is not None:
+                # start() never completed; close what we can without a
+                # shutdown() that would wait forever on a non-running server.
+                close_server = getattr(server, "server_close", None)
+                if callable(close_server):
+                    try:
+                        close_server()
+                    except Exception:
+                        pass
         finally:
-            close = getattr(reader, "close", None)
-            if callable(close):
-                close()
+            if reader is not None:
+                close = getattr(reader, "close", None)
+                if callable(close):
+                    close()
 
     attempts = budget_reader.attempts
     complete_costs = [entry["cost_upper_usd"] for entry in attempts
@@ -470,7 +501,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, default=OUT)
     parser.add_argument("--seed", type=int, default=41)
     args = parser.parse_args(argv)
-    result = run(args.output, seed=args.seed)
+    try:
+        result = run(args.output, seed=args.seed)
+    except ProbeOutputError as exc:
+        print(json.dumps({"status": "refused", "error": str(exc), "output": str(args.output)}, sort_keys=True))
+        return 2
     print(json.dumps({"status": result.get("status"), "paid_provider_attempts": result.get("paid_provider_attempts", 0),
                       "rate_limited": result.get("rate_limited", False), "stop_reason": result.get("stop_reason"),
                       "execution_completed": result.get("execution_completed", False),

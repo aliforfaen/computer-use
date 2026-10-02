@@ -25,8 +25,12 @@ verified virtual-task slice, the M3 local owner/CLI/MCP implementation, and one
 bounded DeepSeek heartbeat probe under $1 (all 2026-10-01). Those local virtual
 slices may proceed without further approval. On 2026-10-02 the owner resumed
 work; the frozen M4b timeout/journal/interrupt changes were independently
-reviewed and covered by nine new offline tests (97 total, all passing), and the
-probe's single configured follow-up request was then made and completed. That
+reviewed, and a second-pass review corrected the deadline guarantee (time and
+size are now bounded per raw response chunk, including partial lines; no bound
+is claimed across header reception). Fourteen new offline tests cover these
+paths (111 total, all passing), and the probe refuses to overwrite existing
+evidence. The probe's single configured follow-up request was then made and
+completed. That
 follow-up cap is now consumed: do not make another provider request without a
 fresh, explicit authorization. General planning, tailnet deployment and live
 tasks remain later gates; do not repeat authorization questions for M1–M3.

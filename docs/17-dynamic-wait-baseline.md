@@ -34,8 +34,8 @@ test additions, the full suite passed 77 tests. M4a tests cover supported
 reader schema, wake debounce, serialization/coalescing, deadlines/cancellation,
 whole-app capture, fixture events, the loading/ready/error palette and
 screenshot diff threshold at fixture geometry. The paid-probe changes were
-reviewed, fixed and tested on 2026-10-02; the suite is now **97 tests** (see
-the M4b section below).
+reviewed, fixed and tested on 2026-10-02; the suite is now **111 tests** after a
+second-pass review (see the M4b section below).
 
 Run the local no-provider comparison with:
 
@@ -114,29 +114,60 @@ reviewed, tested and fixed:
   `PRIOR_INTERRUPTED_RUN_RESERVE_USD` and raised `NameError` at the end of every
   non-blocked run. It is now a frozen constant derived from the 12-attempt
   ceiling, so the prior-run reserve and the follow-up cap stay consistent.
-- **Bound hardened:** the read/idle timeout is passed per request, so an injected
-  shared client cannot extend a blocked transport read past this reader's
-  configuration. Total stream runtime is bounded by
-  `total_timeout_seconds + timeout_seconds` (30 s + 5 s = 35 s), inside the
-  40-second watch limit. A stream that delivers only comment keepalives still
-  hits the absolute 30-second deadline between lines; the finite overshoot is
-  at most one idle read.
+- **Bound initially overstated (later corrected):** the first pass passed the
+  read/idle timeout per request, but it still parsed with
+  `response.iter_lines()`. `iter_lines` buffers bytes until a newline, so a
+  peer that trickles bytes without newlines keeps the idle read timeout from
+  firing while the parser never regains control. The claimed strict 30 s + 5 s
+  bound was therefore false for newline-free trickles; see the second-pass fix
+  below.
 - **Interrupt path:** the reader and case runner catch `Exception`, not
   `BaseException`, so `KeyboardInterrupt` propagates after the case's
   session/profile cleanup. The pre-attempt record is fsynced before the provider
   call and survives an interrupted attempt whose usage remains unknown.
 
-Nine offline tests were added, and `uv run python -m unittest discover -v`
-passed **97 tests**. New coverage: comment-only SSE total deadline, a stalled
-loopback read bounded by the read timeout, content arriving after the total
-deadline, interrupt propagation with no second provider request, fsynced
-pre-call journaling observed during the call, interrupted-run partial
-persistence, and owned-session/profile cleanup.
+### Second-pass review and fix (2026-10-02)
 
-The single configured follow-up request then ran with `max_calls = 1` on the
-`ready` fixture on cachy (KWin 6.7.5, `kwin-mcp` 0.10.0, Firefox 157.0,
-AT-SPI 2.60.7). The judge returned `ready`, matching the independent fixture
-event.
+Codex reviewed the first-pass claim and reproduced the flaw with a loopback
+server: 20 `:` bytes flushed 50 ms apart with the newline only at the end
+(`timeout_seconds=0.15`, `total_timeout_seconds=0.2`) produced
+`stream_total_timeout` at 1,002.98 ms instead of ~350 ms. An unbounded byte
+trickle could likewise grow the parser buffer past `max_response_chars` before
+any newline arrived.
+
+The parser now consumes raw `response.iter_bytes()` chunks and enforces the
+absolute deadline and the byte cap on every chunk, including partial lines,
+with incremental UTF-8 decoding. Body-phase bound: `total_timeout_seconds`
+checked between chunks, plus at most one blocked read bounded by
+`timeout_seconds`. It does **not** claim a strict wall-clock bound across the
+header phase: `httpx` returns from `stream()` only once headers are complete,
+and the read/idle timeout bounds idle gaps but not a peer that trickles header
+bytes. A framing layer that buffers an incomplete HTTP transfer chunk can also
+delay delivery; there the idle read timeout, not the per-chunk deadline, is
+the bound.
+
+Fourteen offline tests were added across the two passes, and the current suite
+is **111 tests, all passing**. Reader coverage now includes comment-only SSE
+total deadline, newline-free byte trickle cut at the total deadline,
+partial-line bytes hitting the size cap before any newline, split multi-byte
+UTF-8 with a missing final newline, a stalled loopback read bounded by the read
+timeout, content arriving after the total deadline, delayed-header idle
+timeout, unsupported `iter_lines`-only transport, interrupt propagation with no
+second provider request, fsynced pre-call journaling observed during the call,
+interrupted-run partial persistence, and owned-session/profile cleanup
+including engine-construction failure, partial `session_start`, and journal
+failure. The probe also refuses to reuse a non-empty output directory, so an
+existing paid result (including `run/vision-wait-probe-followup`) cannot be
+truncated or overwritten, and setup failures now close an already-created
+reader or server.
+
+The single configured follow-up request (made before the second-pass parser
+fix) ran with `max_calls = 1` on the `ready` fixture on cachy (KWin 6.7.5,
+`kwin-mcp` 0.10.0, Firefox 157.0, AT-SPI 2.60.7). It returned on a normal
+newline-terminated stream, so its result is valid; it did not exercise the
+newline-free trickle path, so the strengthened bound rests on the offline
+regressions rather than on a paid reproduction. The judge returned `ready`,
+matching the independent fixture event.
 
 | Field | Result |
 | --- | --- |

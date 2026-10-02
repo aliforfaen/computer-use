@@ -21,6 +21,8 @@ class _SseTestServer:
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
             def log_message(self, *_args):
                 pass
 
@@ -32,6 +34,10 @@ class _SseTestServer:
                     outer._script(self)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+                finally:
+                    # The client closes as soon as it has what it needs; do not
+                    # try to read a second keep-alive request from a dead socket.
+                    self.close_connection = True
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.httpd.block_on_close = False
@@ -133,10 +139,10 @@ class VisionReaderTests(unittest.TestCase):
         now = [0.0]
 
         class SlowResponse:
-            def iter_lines(self):
-                yield "data: {}"
+            def iter_bytes(self):
+                yield b"data: {}\n"
                 now[0] = 2.0
-                yield "data: {}"
+                yield b"data: {}\n"
 
         with self.assertRaisesRegex(Exception, "stream_total_timeout"):
             parse_stream(SlowResponse(), deadline_monotonic=1.0, clock=lambda: now[0])
@@ -159,8 +165,9 @@ class VisionReaderTests(unittest.TestCase):
         ]
 
         class Response:
-            def iter_lines(self):
-                return iter(lines)
+            def iter_bytes(self):
+                for line in lines:
+                    yield (line + "\n").encode("utf-8")
 
         first = []
         parsed = parse_stream(Response(), lambda: first.append(True))
@@ -185,13 +192,48 @@ class VisionReaderTests(unittest.TestCase):
         now = [0.0]
 
         class CommentResponse:
-            def iter_lines(self):
-                yield ": keep-alive"
+            def iter_bytes(self):
+                yield b": keep-alive\n"
                 now[0] = 5.0
-                yield ": keep-alive"
+                yield b": keep-alive\n"
 
         with self.assertRaisesRegex(StreamParseError, "stream_total_timeout"):
             parse_stream(CommentResponse(), deadline_monotonic=1.0, clock=lambda: now[0])
+
+    def test_partial_line_bytes_hit_size_cap_before_any_newline(self):
+        class TrickleResponse:
+            def iter_bytes(self):
+                yield b":" * 64
+                yield b":" * 64
+
+        with self.assertRaisesRegex(StreamParseError, "response_too_large"):
+            parse_stream(TrickleResponse(), max_response_chars=32)
+
+    def test_response_without_chunk_transport_is_rejected(self):
+        class LegacyResponse:
+            def iter_lines(self):
+                return iter([])
+
+        with self.assertRaisesRegex(StreamParseError, "unsupported_stream_transport"):
+            parse_stream(LegacyResponse())
+
+    def test_split_utf8_and_missing_final_newline_parse_correctly(self):
+        event = json.dumps({"choices": [{"delta": {"content": "café"}, "finish_reason": "stop"}]},
+                           ensure_ascii=False)
+        raw = f"data: {event}\n".encode("utf-8") + b"data: [DONE]"  # no trailing newline
+        split_at = raw.index("é".encode("utf-8")) + 1  # inside the two-byte sequence
+
+        class Chunked:
+            def iter_bytes(self):
+                yield raw[:split_at]
+                yield raw[split_at:split_at + 5]
+                yield raw[split_at + 5:]
+
+        first = []
+        content, usage, finish, served_model = parse_stream(Chunked(), lambda: first.append(True))
+        self.assertEqual(content, "café")
+        self.assertEqual(finish, "stop")
+        self.assertEqual(first, [True])
 
     def _sse_reader(self, base_url, *, timeout_seconds, total_timeout_seconds):
         # trust_env=False keeps the loopback test hermetic; the per-request
@@ -267,6 +309,56 @@ class VisionReaderTests(unittest.TestCase):
             server.close()
         self.assertEqual(result.error, "stream_total_timeout")
         self.assertLess(result.latency_ms, 1800.0)
+
+    def test_newline_free_byte_trickle_is_cut_by_total_deadline(self):
+        # Regression for the iter_lines flaw: 20 bytes are flushed 50 ms apart
+        # with no newline until the end. Frequent bytes keep the idle read
+        # timeout from firing, but the chunk-level absolute deadline must cut
+        # the stream near total_timeout_seconds, not when the newline arrives
+        # (the old parser needed ~1 s here).
+        def script(handler):
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.end_headers()
+            for _ in range(20):
+                handler.wfile.write(b":")
+                handler.wfile.flush()
+                time.sleep(0.05)
+            handler.wfile.write(b"\n")
+            handler.wfile.flush()
+
+        server = _SseTestServer(script)
+        reader, client = self._sse_reader(server.base_url, timeout_seconds=0.15, total_timeout_seconds=0.2)
+        try:
+            result = reader.interpret(b"image", self.questions)
+        finally:
+            client.close()
+            server.close()
+        self.assertEqual(result.error, "stream_total_timeout")
+        self.assertLess(result.latency_ms, 700.0)
+
+    def test_delayed_headers_are_bounded_by_read_timeout(self):
+        # The body deadline only starts being enforced once stream() returns.
+        # A peer that delays headers entirely is still bounded by the read/idle
+        # timeout; a peer that trickles header bytes is a documented residual
+        # limitation (httpx exposes no total header deadline to the caller).
+        def script(handler):
+            time.sleep(0.6)
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.end_headers()
+            handler.wfile.write(b"data: [DONE]\n\n")
+            handler.wfile.flush()
+
+        server = _SseTestServer(script)
+        reader, client = self._sse_reader(server.base_url, timeout_seconds=0.2, total_timeout_seconds=5.0)
+        try:
+            result = reader.interpret(b"image", self.questions)
+        finally:
+            client.close()
+            server.close()
+        self.assertEqual(result.error, "request_timeout")
+        self.assertLess(result.latency_ms, 1500.0)
 
 
 if __name__ == "__main__":

@@ -10,12 +10,15 @@ client. Jev is an optional future accelerator.
   verified actions; one shared local owner; cancellation and crash recovery.
 - **Local wait baseline (M4a):** 10/10 fixture outcomes passed with cleanup, one
   trial per case/arm. This is a local pixel-difference test, not evidence of model
-  or agent speed gains. Full suite is now 97 tests, all passing.
-- **Vision heartbeat (M4b):** the timeout/journal/interrupt changes were reviewed,
-  fixed and tested on 2026-10-02. The single configured DeepSeek follow-up returned
-  one valid structured judgment in 1.41 s (821 prompt / 8 completion tokens,
-  cleanup passed, $0.0002559 peak-upper). The earlier interrupted run's charge is
-  still unknown; the conservative whole-session reserve is $0.0229632.
+  or agent speed gains. Full suite is now 111 tests, all passing.
+- **Vision heartbeat (M4b):** the timeout/journal/interrupt changes were reviewed
+  and tested on 2026-10-02; a follow-up review corrected the stated deadline
+  guarantee (the parser now bounds time and size per response chunk, including
+  partial lines, and does not claim a bound across header reception). The single
+  configured DeepSeek follow-up returned one valid structured judgment in 1.41 s
+  (821 prompt / 8 completion tokens, cleanup passed, $0.0002559 peak-upper). The
+  earlier interrupted run's charge is still unknown; the conservative
+  whole-session reserve is $0.0229632.
 - **Later:** general planning, live desktop operation, tailnet deployment and Jev
   acceleration. These are not implemented in this release.
 
