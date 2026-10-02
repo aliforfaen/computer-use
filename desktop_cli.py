@@ -102,9 +102,14 @@ def _build_parser() -> argparse.ArgumentParser:
     for name, help_text in (("capabilities", "show owner capabilities"), ("status", "show owner/session status")):
         sub = commands.add_parser(name, help=help_text)
         _add_socket(sub)
-    start = commands.add_parser("session-start", aliases=["start"], help="start an allowlisted virtual session")
+    start = commands.add_parser("session-start", aliases=["start"], help="start an allowlisted virtual or explicitly authorized live task")
     start.add_argument("app")
     start.add_argument("--mode", choices=("supervised", "guarded", "yolo"), default="guarded")
+    start.add_argument("--live", action="store_true", help="use the owner's live desktop for this task")
+    start.add_argument("--owner-present-override", action="store_true",
+                       help="assert the owner is present; required because physical input detection is unavailable")
+    start.add_argument("--temporary-a11y", action="store_true",
+                       help="allow task-scoped AT-SPI enablement, restoring the exact prior flags on cleanup")
     _add_socket(start)
     stop = commands.add_parser("session-stop", help="stop a session, or the sole active session")
     stop.add_argument("--session-id")
@@ -114,6 +119,11 @@ def _build_parser() -> argparse.ArgumentParser:
     nested_start = session_commands.add_parser("start", help="start an allowlisted virtual session")
     nested_start.add_argument("app")
     nested_start.add_argument("--mode", choices=("supervised", "guarded", "yolo"), default="guarded")
+    nested_start.add_argument("--live", action="store_true", help="use the owner's live desktop for this task")
+    nested_start.add_argument("--owner-present-override", action="store_true",
+                              help="assert the owner is present; required because physical input detection is unavailable")
+    nested_start.add_argument("--temporary-a11y", action="store_true",
+                              help="allow task-scoped AT-SPI enablement and exact restoration on cleanup")
     _add_socket(nested_start)
     nested_stop = session_commands.add_parser("stop", help="stop a session, or the sole active session")
     nested_stop.add_argument("--session-id")
@@ -219,7 +229,10 @@ def main(argv: list[str] | None = None) -> int:
     if method in {"capabilities", "status"}:
         method_params = {}
     elif method in {"session-start", "start"} or (method == "session" and args.session_command == "start"):
-        method, method_params = "session_start", {"app": args.app, "mode": args.mode}
+        method, method_params = "session_start", {"app": args.app, "mode": args.mode,
+            "desktop_mode": "live" if args.live else "virtual",
+            "owner_present_override": args.owner_present_override,
+            "temporary_a11y": args.temporary_a11y}
     elif method in {"session-stop", "session"}:
         if method == "session" and args.session_command != "stop":
             raise ValueError("unknown session command")

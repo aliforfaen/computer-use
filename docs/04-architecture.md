@@ -304,3 +304,17 @@ same judged capture's image and identity. It is observation, not planning or
 proof of task completion. Two real wait trials returned invalid judgments;
 keep it experimental. Navigation verifies address entry separately from page
 readiness. Host scroll verification remains unresolved. See docs 23–25.
+
+### ADR-018 — Local live sessions require explicit owner presence
+**2026-10-02 · local implementation; owner-watched validation pending.** Reuse
+kwin-mcp 0.10.0 live connection behind the existing local CLI/MCP owner. Live
+mode is explicit per session, requires an owner-present override because this
+Wayland host does not support `GetSessionIdleTime()`, and requires opt-in to
+temporary task-scoped AT-SPI enablement with exact restoration. Each session
+starts one newly launched allowlisted app and verifies PID/window ownership.
+Each action snapshots the currently active exact window, focuses the task app,
+verifies the action and restores that snapshot before returning. Stop and worker
+recovery close only the journaled task app and restore focus/accessibility
+state; failed restoration remains a cleanup failure. No remote transport is
+added. Focused tests pass, but the owner-watched physical workflow remains
+pending; see doc 26.

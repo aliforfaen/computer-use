@@ -35,9 +35,9 @@ METHODS = frozenset({"capabilities", "status", "session_start", "session_stop", 
 def _safe_error(value: str) -> dict[str, str]:
     code = value if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", value or "") else "operation_failed"
     messages = {
-        "session_busy": "The virtual session is handling another request.",
-        "session_exists": "A virtual session is already active.",
-        "session_not_found": "No virtual session is active.",
+        "session_busy": "The desktop session is handling another request.",
+        "session_exists": "A desktop session is already active.",
+        "session_not_found": "No desktop session is active.",
         "app_not_allowed": "The requested app is not allowed.",
         "invalid_params": "Request parameters are invalid.",
         "unsupported_verification": "The requested verification is not supported.",
@@ -60,6 +60,9 @@ def _safe_error(value: str) -> dict[str, str]:
         "mapping_unavailable": "Screenshot coordinate mapping was unavailable.",
         "session_broken": "The virtual session is broken and must be stopped.",
         "cancelled": "The operation was cancelled.",
+        "owner_present_override_required": "Live mode requires an explicit owner-present override.",
+        "live_temporary_a11y_required": "Live mode requires explicit temporary AT-SPI opt-in.",
+        "live_focus_restore_failed": "The exact window focused before this action could not be restored; stop the broken live session to run cleanup.",
     }
     return {"code": code, "message": messages.get(code, "The requested operation failed safely.")}
 
@@ -124,8 +127,10 @@ class DesktopWorkerClient:
                 raise RuntimeError(response["error"].get("code", "worker_failed"))
             return response.get("result")
 
-    def start(self, app: str, journal_path: str | None = None):
-        result = self.rpc("start", app=app, journal_path=journal_path)
+    def start(self, app: str, journal_path: str | None = None, desktop_mode: str = "virtual",
+              temporary_a11y: bool = False):
+        result = self.rpc("start", app=app, journal_path=journal_path, desktop_mode=desktop_mode,
+                          temporary_a11y=temporary_a11y)
         self.cleanup_paths = result.get("cleanup_paths", []) if isinstance(result, dict) else []
         return result
 
@@ -216,10 +221,23 @@ class DesktopWorkerClient:
         try:
             record = json.loads(journal.read_text(encoding="utf-8"))
             if record.get("schema") != 1 or record.get("worker_pid") != self.proc.pid: return False
+            live_mode = record.get("desktop_mode") == "live"
             pid, ticks = record.get("session_pid"), record.get("session_start_ticks")
-            initial = self._proc_info(pid)
-            if type(pid) is not int or type(ticks) is not int: return False
-            if initial and initial["start_ticks"] == ticks and initial["pgrp"] == pid:
+            initial = self._proc_info(pid) if type(pid) is int else None
+            if not live_mode and (type(pid) is not int or type(ticks) is not int): return False
+            a11y_ok = record.get("original_a11y_flags") is None
+            if live_mode and record.get("original_a11y_flags") is not None:
+                flags = record.get("original_a11y_flags")
+                address = record.get("a11y_address")
+                if (isinstance(address, str) and address and isinstance(flags, dict)
+                        and set(flags) == {"IsEnabled", "ScreenReaderEnabled"}
+                        and all(type(value) is bool for value in flags.values())):
+                    try:
+                        from live_desktop_probe import _set_a11y_flags_at
+                        a11y_ok = _set_a11y_flags_at(address, flags) == flags
+                    except Exception:
+                        a11y_ok = False
+            if not live_mode and initial and initial["start_ticks"] == ticks and initial["pgrp"] == pid:
                 os.killpg(pid, signal.SIGTERM)
                 deadline = time.monotonic() + 2
                 while time.monotonic() < deadline and self._group_live(pid):
@@ -229,7 +247,7 @@ class DesktopWorkerClient:
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline and self._group_live(pid):
                         time.sleep(0.05)
-            elif self._group_live(pid):
+            elif not live_mode and type(pid) is int and self._group_live(pid):
                 return False
             for app in record.get("app_processes", []):
                 app_pid, app_ticks = app.get("pid"), app.get("start_ticks")
@@ -248,7 +266,7 @@ class DesktopWorkerClient:
                     time.sleep(0.05)
                 if self._same_live_process(atspi_pid, atspi_ticks): os.kill(atspi_pid, signal.SIGKILL)
                 if self._same_live_process(atspi_pid, atspi_ticks): return False
-            if self._group_live(pid): return False
+            if not live_mode and type(pid) is int and self._group_live(pid): return False
             private_paths = record.get("private_paths", [])
             if not isinstance(private_paths, list) or not all(isinstance(value, str) for value in private_paths): return False
             self.cleanup_paths = private_paths
@@ -278,6 +296,23 @@ class DesktopWorkerClient:
                 for suffix in ("", ".lock"):
                     (runtime / f"{socket_name}{suffix}").unlink(missing_ok=True)
             if self.cleanup_recorded_paths() is False and self.cleanup_paths: return False
+            if live_mode:
+                original = record.get("action_original_window") or record.get("original_window")
+                focus_ok = False
+                from kwin_mcp.core import AutomationEngine
+                from live_desktop_probe import _restore_exact, _window_rows
+                engine = AutomationEngine()
+                try:
+                    connected = engine.session_connect(keep_screenshots=False)
+                    connected = isinstance(connected, str) and "Connected to live KWin session" in connected
+                    if connected and isinstance(original, dict) and isinstance(original.get("id"), str) \
+                            and isinstance(original.get("app"), str):
+                        try: focus_ok = _restore_exact(engine, original, _window_rows(engine))
+                        except Exception: focus_ok = False
+                finally:
+                    try: engine.session_stop()
+                    except Exception: pass
+                if not focus_ok or not a11y_ok: return False
             journal.unlink(missing_ok=True)
             self.journal_path = None
             return True
@@ -327,6 +362,10 @@ class DesktopWorkerClient:
             return data
         except (ValueError, UnicodeDecodeError):
             raise RuntimeError("worker_protocol_error") from None
+    def focus_live_app(self): return self.rpc("focus_live_app")
+    def restore_live_focus(self):
+        result = self.rpc("restore_live_focus")
+        return isinstance(result, dict) and result.get("restored") is True
     def _run_kwin_query(self, params): return self.window_query()
     def _run_atspi(self, command, **params): return self.atspi_find(params["app_name"])
     def accessibility_elements(self, app): return self.atspi_find(app)["result"]
@@ -343,8 +382,9 @@ def _readline_timeout(stream, timeout):
 class _Session:
     def __init__(self, app, mode, worker, session_id, reader=None, audit_path=None, max_reader_calls=0,
                  *, idle_timeout=180.0, max_session_lifetime=1800.0, max_actions=64,
-                 max_observations=256, monotonic=time.monotonic):
+                 max_observations=256, monotonic=time.monotonic, desktop_mode="virtual"):
         self.app = app
+        self.desktop_mode = desktop_mode
         self.mode = mode
         self.worker = worker
         self.session_id = session_id
@@ -492,10 +532,11 @@ class DesktopService:
         return True
 
     def _audit(self, method, ctx, app="", mode="guarded", status="ok", reason="completed", verification=None,
-               duration_ms=None, request_id=None):
+               duration_ms=None, request_id=None, desktop_mode="virtual"):
         record = {"timestamp": datetime.now(timezone.utc).isoformat(),
                   "caller_node": _context(ctx, "caller_node"), "transport": _context(ctx, "transport"),
                   "tool": method, "app": app if app in APPS else "", "autonomy_mode": mode,
+                  "desktop_mode": desktop_mode,
                   "event": method, "status": status, "jev_answers": None,
                   "action": method if method == "act" else None,
                   "verification": verification, "reason": reason,
@@ -518,6 +559,7 @@ class DesktopService:
         age = max(0.0, now - s.started_clock)
         idle = max(0.0, now - s.last_activity_clock)
         return {"session_id": s.session_id, "app": s.app, "mode": s.mode.value,
+                "desktop_mode": s.desktop_mode,
                 "state": "stopping" if s.stopping else "busy" if busy else s.state, "started_at": s.started_at,
                 "age_seconds": round(age, 3), "last_activity_at": s.last_activity_at,
                 "idle_seconds": round(idle, 3), "idle_timeout_seconds": s.idle_timeout,
@@ -554,10 +596,13 @@ class DesktopService:
         context = context if isinstance(context, dict) else {}
         app = params.get("app", "")
         s = None
+        live_restore_failed = False
         try:
             if method not in METHODS: raise ValueError("method_not_found")
             if method == "capabilities":
-                result = {"allowed_apps": sorted(self.allowed_apps), "virtual_only": True, "one_active_session": True,
+                result = {"allowed_apps": sorted(self.allowed_apps), "virtual_only": False, "one_active_session": True,
+                          "desktop_modes": {"virtual": "available", "live": "explicit_owner_present_override_required"},
+                          "physical_input_detection": "unavailable",
                           "methods": sorted(METHODS), "driver": "kwin-mcp==0.10.0",
                           "lifecycle": {"idle_timeout_seconds": self.idle_timeout,
                                         "max_session_lifetime_seconds": self.max_session_lifetime,
@@ -575,6 +620,12 @@ class DesktopService:
                     "watchdog_running": self._watchdog.is_alive()}}
             elif method == "session_start":
                 if app not in self.allowed_apps: raise ValueError("app_not_allowed")
+                desktop_mode = params.get("desktop_mode", "virtual")
+                if desktop_mode not in {"virtual", "live"}: raise ValueError("invalid_params")
+                if desktop_mode == "live" and params.get("owner_present_override") is not True:
+                    raise ValueError("owner_present_override_required")
+                if desktop_mode == "live" and params.get("temporary_a11y") is not True:
+                    raise ValueError("live_temporary_a11y_required")
                 mode = AutonomyMode(params.get("mode", "guarded"))
                 with self._lock:
                     if self._session is not None: raise ValueError("session_exists")
@@ -585,12 +636,16 @@ class DesktopService:
                     s = _Session(app, mode, worker, sid, reader=self.reader, audit_path=self.audit_path,
                                  max_reader_calls=self.max_reader_calls, idle_timeout=self.idle_timeout,
                                  max_session_lifetime=self.max_session_lifetime, max_actions=self.max_actions,
-                                 max_observations=self.max_observations, monotonic=self._monotonic)
+                                 max_observations=self.max_observations, monotonic=self._monotonic,
+                                 desktop_mode=desktop_mode)
                     s.state = "starting"
                     self._last_stop_reason = None
                     self._last_stop_at = None
                     try:
-                        started = worker.start(app, str(journal_path)) if isinstance(worker, DesktopWorkerClient) else worker.start(app)
+                        started = (worker.start(app, str(journal_path), desktop_mode,
+                                                temporary_a11y=params.get("temporary_a11y") is True)
+                                   if isinstance(worker, DesktopWorkerClient)
+                                   else worker.start(app))
                         if isinstance(started, dict):
                             path = started.get("document_path")
                             if isinstance(path, str): s.document_path = path
@@ -599,7 +654,10 @@ class DesktopService:
                             "invalid_worker_start", "session_stop_unconfirmed", "session_not_started",
                             "app_not_allowed", "fixture_unavailable", "virtual_session_unavailable",
                             "atspi_setup_failed", "app_window_open_unconfirmed", "document_create_failed", "document_open_unconfirmed",
-                            "worker_timeout", "worker_protocol_error", "worker_failed",
+                            "worker_timeout", "worker_protocol_error", "worker_failed", "live_session_unavailable",
+                            "live_input_unavailable", "live_app_already_open", "live_atspi_unavailable",
+                            "live_app_window_ambiguous", "live_app_not_owned", "live_app_window_unavailable",
+                            "live_focus_restore_failed", "live_cleanup_unconfirmed", "live_temporary_a11y_required",
                         }
                         failure_code = str(exc) if str(exc) in safe_start_codes else "worker_failed"
                         if hasattr(worker, "terminate"): worker.terminate()
@@ -687,7 +745,13 @@ class DesktopService:
                     self._expire_if_needed()
                     raise ValueError("session_expiring")
                 if not s.busy.acquire(blocking=False): raise ValueError("session_busy")
+                restore_live_after_action = s.desktop_mode == "live" and method == "act"
                 try:
+                    if restore_live_after_action:
+                        # Wayland routes EIS to the focused surface. Re-focus the
+                        # task-owned window for this one input transaction only.
+                        if not s.worker.focus_live_app():
+                            raise ValueError("live_target_focus_failed")
                     s.cancel.clear()
                     s.tx.audit.caller_node = _context(context, "caller_node")
                     s.tx.audit.transport = _context(context, "transport")
@@ -750,7 +814,7 @@ class DesktopService:
                         if s.mode is AutonomyMode.GUARDED and risk and not approval: raise ValueError("approval_required")
                         self._audit(method, context, app, s.mode.value, "pending",
                                     "approved_action" if approval else "action_pending", verification,
-                                    request_id=request_id)
+                                    request_id=request_id, desktop_mode=s.desktop_mode)
                         before_snapshot = s.tx._last.get((s.session_id, app))
                         verifier = self._verifier(s, verification, params.get("expected"), candidate,
                                                   before_snapshot, direction=direction)
@@ -773,7 +837,25 @@ class DesktopService:
                             or (callable(proc) and proc() is not None)):
                         s.state = "broken"
                     raise
-                finally: s.busy.release()
+                finally:
+                    try:
+                        if restore_live_after_action:
+                            try:
+                                live_restore_failed = not s.worker.restore_live_focus()
+                            except Exception:
+                                live_restore_failed = True
+                            if live_restore_failed:
+                                s.state = "broken"
+                                try:
+                                    self._audit("live_focus_restore", context, app, s.mode.value, "failed",
+                                                "original_focus_not_restored", request_id=request_id,
+                                                desktop_mode="live")
+                                except OSError:
+                                    pass
+                    finally:
+                        s.busy.release()
+                if live_restore_failed:
+                    raise ValueError("live_focus_restore_failed")
             completed_reason = self._last_stop_reason if _context(context, "transport") == "watchdog" else "completed"
             verification = result.get("verification") if isinstance(result, dict) else None
             if method == "wait" and isinstance(result, dict):
@@ -782,17 +864,20 @@ class DesktopService:
                                 ("status", "captures", "judgments", "coalesced_frames", "error_code")}
             self._audit(method, context, app, s.mode.value if s else "guarded", "ok", completed_reason,
                         verification,
-                        duration_ms=(self._monotonic() - dispatch_started) * 1000, request_id=request_id)
+                        duration_ms=(self._monotonic() - dispatch_started) * 1000, request_id=request_id,
+                        desktop_mode=s.desktop_mode if s else params.get("desktop_mode", "virtual"))
             return {"ok": True, **result}
         except Exception as exc:
-            raw = (exc.code if isinstance(exc, ObservationError) else
+            raw = ("live_focus_restore_failed" if live_restore_failed else
+                   exc.code if isinstance(exc, ObservationError) else
                    str(exc) if isinstance(exc, (ValueError, TransactionError, RuntimeError)) else
                    "operation_failed")
             code = raw if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", raw or "") else "operation_failed"
             err = _safe_error(code)
             self._audit(method if isinstance(method, str) else "unknown", context, app,
                         s.mode.value if s else "guarded", "failed", err["code"],
-                        duration_ms=(self._monotonic() - dispatch_started) * 1000, request_id=request_id)
+                        duration_ms=(self._monotonic() - dispatch_started) * 1000, request_id=request_id,
+                        desktop_mode=s.desktop_mode if s else params.get("desktop_mode", "virtual"))
             return {"ok": False, "error": err}
 
     def _check_verifier(self, s, verification, expected, target):

@@ -17,9 +17,10 @@ Temporary accessibility flags are snapshotted, enabled only for this probe and
 restored exactly. The user can watch: named demonstration holds add 2 s before
 input and 3 s afterward. They are not adapter latency.
 
-This is an explicitly owner-present local test. Physical-input idle detection
-is unavailable; remote live-task idle gating is not implemented. The owner
-MCP still supports only virtual sessions. No providers or tailnet changes.
+This was an explicitly owner-present local test. At the time, physical-input
+idle detection and live owner MCP tasks were unavailable. Current local live
+support and its limits are recorded in [doc 26](26-live-owner.md). No providers
+or tailnet changes were part of this probe.
 The task deadline is checked between phases; synchronous driver calls retain
 their own timeouts, so it is not a hard wall deadline.
 

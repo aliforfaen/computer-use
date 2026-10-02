@@ -34,10 +34,15 @@ def _tools() -> list[types.Tool]:
     app = _string("Exact application identity from the configured allowlist.")
     session = _string("Owner-issued session ID.")
     mode = _string(enum=["supervised", "guarded", "yolo"])
+    desktop_mode = _string("Virtual is the default. Live operates one newly launched owned app.",
+                           enum=["virtual", "live"])
     tools = [
         ("desktop_capabilities", "Report supported local desktop operations and limits.", _obj(), True, False),
         ("desktop_status", "Report owner and active session status.", _obj(), True, False),
-        ("desktop_session_start", "Start one configured virtual app session.", _obj({"app": app, "mode": mode}, ["app"]), False, False),
+        ("desktop_session_start", "Start one virtual session or an explicitly authorized live task for a newly launched owned app.",
+         _obj({"app": app, "mode": mode, "desktop_mode": desktop_mode,
+               "owner_present_override": {"type": "boolean", "description": "Required for live mode because physical-input detection is unavailable."},
+               "temporary_a11y": {"type": "boolean", "description": "Required for live mode; AT-SPI flags are restored exactly during cleanup."}}, ["app"]), False, False),
         ("desktop_session_stop", "Stop the specified session, or the sole active session.", _obj({"session_id": session}), False, True),
         ("desktop_candidates", "Read fresh semantic candidates. Editable contents are omitted.", _obj({"app": app}, ["app"]), True, False),
         ("desktop_observe", "Observe one allowlisted app. Images are returned only for explicit image or both output.", _obj({
@@ -165,7 +170,7 @@ def _build_server(socket_path: Path | None = None) -> Server:
                                     structuredContent=output, isError=False)
 
     return Server("jev-desktop", version="0.1.0",
-                  instructions="This server is a local client of one desktop owner. App access is explicitly allowlisted. Read fresh candidates before acting; act accepts only code-owned verification kinds. An observation image is returned only when output=image or output=both is explicitly requested. desktop_wait is a bounded visual readiness observation; inspect its returned final image before deciding whether to act.",
+                  instructions="This server is a local client of one desktop owner. App access is explicitly allowlisted. Live mode requires an explicit owner-present override and temporary AT-SPI opt-in because physical-input detection is unavailable. It launches only a newly owned app, restores the exact original window after each action, and closes only the task-owned app. Read fresh candidates before acting; act accepts only code-owned verification kinds. An observation image is returned only when output=image or output=both is explicitly requested. desktop_wait is a bounded visual readiness observation; inspect its returned final image before deciding whether to act.",
                   on_list_tools=list_tools, on_call_tool=call_tool)
 
 

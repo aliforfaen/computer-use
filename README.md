@@ -14,12 +14,19 @@ client. Jev is an optional future accelerator.
   cancellable requests. The heartbeat is experimental: both wait trials returned
   invalid judgments; ordinary screenshot polling completed both tasks.
   [Comparison](docs/24-primary-agent-wait-comparison.md).
-- **Unresolved:** scrolling still fails host effect verification. General live
-  MCP tasks, tailnet deployment and Jev replay remain later phases.
+- **Local live mode:** implemented for one newly launched allowlisted app per
+  session. It requires `--live --owner-present-override --temporary-a11y`,
+  restores the prior focused window after each action, and closes only its
+  owned app. Physical-input idle detection is unavailable on this host.
+  [Contract and pending watched check](docs/26-live-owner.md).
+- **Still pending:** scrolling fails host effect verification. The operator-
+  watched live desktop check, tailnet deployment and Jev replay have not been
+  completed.
 
 Start with [the handoff](docs/HANDOFF.md). [Local commands](docs/16-local-owner-and-mcp.md)
 · [next phases](docs/25-next-phases.md). A fixed physical KCalc smoke test passed
-previously; [its scope](docs/22-live-desktop-smoke.md) remains separate from live MCP support.
+previously; [its scope](docs/22-live-desktop-smoke.md) remains separate from the
+new local live-task service.
 
 ## Local quick start
 

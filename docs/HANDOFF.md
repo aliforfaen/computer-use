@@ -28,8 +28,15 @@ then [the local owner surface](16-local-owner-and-mcp.md).
 - Last full offline run: 172 tests passed; wheel build passed. Fixture signal
   handling was checked separately afterward. No larger matrix was run after
   the owner requested lighter testing. Use targeted checks going forward.
-- Live MCP support still needs implementation. [Next phases](25-next-phases.md)
-  put owner-watched input last; no live input or Serve changes in this work.
+- Local live CLI/MCP support is implemented and independently reviewed. Start
+  requires both explicit owner-present override and temporary AT-SPI opt-in;
+  each session owns one newly launched allowlisted app, snapshots/restores exact
+  focus around each action, and cleans up only that app. Physical-input idle
+  detection is unavailable, so the override is mandatory. Four focused owner
+  tests passed, with eleven earlier focused lifecycle/service tests; no live app
+  or physical input was used for this validation. The operator-watched desktop
+  check remains pending. See [live contract](26-live-owner.md) and
+  [next phases](25-next-phases.md). No Serve changes.
 
 ## Earlier checkpoint notes (historical)
 
@@ -82,10 +89,12 @@ Historical M1–M4 validation below describes the earlier checkpoints.
 
 M1–M2 provide reusable app observation, semantic action transactions and a
 disposable virtual Kate/Firefox/KCalc task harness. M3 adds the single-owner
-virtual daemon, thin CLI and official MCP SDK stdio facade. The disposable host
+daemon, thin CLI and official MCP SDK stdio facade. The disposable host
 integration probe passed; CLI and MCP observe the same session, CLI verifies a
-KCalc transition and worker-death recovery confirms cleanup. There is no
-remote HTTP service, live desktop mode or general planner. M4a adds a bounded
+KCalc transition and worker-death recovery confirms cleanup. Local live mode is
+now explicit opt-in with an owner-present assertion and temporary AT-SPI flags;
+its owner-watched host workflow remains pending. There is no remote HTTP
+service, tailnet access or general planner. M4a adds a bounded
 local screenshot-change watcher and synthetic Firefox fixture; its corrected
 seed-17 host baseline classified all ten polling/watcher outcomes and cleaned
 up all sessions. This local pixel-diff run does not use a vision reader, Jev,
@@ -152,9 +161,12 @@ Next work remains gated:
 1. **Planner contract / action grounding:** resolve ADR-011 and visual
    grounding before broad task execution. Current transactions support unique
    mapped semantic AT-SPI targets, not arbitrary screenshot coordinates.
-2. **Live and tailnet (M5/M6):** idle/focus measurements, explicit live tasks,
-   cancellation/error restoration, preserved Serve routes and real remote
-   caller tests. Do not change Serve configuration without approval.
+2. **Live owner-watched validation, then tailnet (M5/M6):** validate focus,
+   effect verification, cleanup and accessibility restoration with a short
+   physical-monitor-watched local workflow. The physical-input idle API is
+   unsupported here, so keep the explicit owner-present gate. Tailnet then
+   needs preserved Serve routes and real remote caller tests. Do not change
+   Serve configuration without approval.
 3. **OCR+Jev and end-to-end primary-agent comparison:** later arms; they need
    fresh authorization and must count primary turns/tokens and every backend
    request. Do not infer acceleration from the M4a pixel-diff baseline or the
@@ -163,9 +175,10 @@ Next work remains gated:
 
 The owner-supported direction is a screenshot-driven computer-use terminal
 for local and tailnet agents, using `kwin-mcp` for sessions, capture and input.
-Virtual sessions are the default; real desktop and `yolo` remain intended
-features. The primary agent interprets tasks and handles recovery. Jev is an
-optional accelerator for bounded judgments and familiar workflows.
+Virtual sessions are the default; local real-desktop sessions are explicit and
+owner-present, while tailnet access remains unimplemented. The primary agent
+interprets tasks and handles recovery. Jev is an optional accelerator for
+bounded judgments and familiar workflows.
 
 **Observation requirements:** app-window capture by default; explicit images
 for callers with vision, interpreted data for callers without it; both may
@@ -178,13 +191,13 @@ reader, with provider/model switching supported by the benchmark.
 | File | Purpose |
 | --- | --- |
 | `observation.py` + `vision_reader.py` | Allowlisted mapped captures, bounded TTL store, same-capture metadata/image/data and shared reader transport. |
-| `transactions.py` | Fresh AT-SPI target refs, virtual-only input, policy/caps/audit, read-after-action verification and failure latch. |
+| `transactions.py` | Fresh AT-SPI target refs, policy/caps/audit, read-after-action verification and failure latch for virtual and guarded local-live actions. |
 | `virtual_tasks.py` + `benchmark_fixtures/action.html` | Disposable Kate edits, Firefox action/disabled refusal and KCalc capture; no paid calls. |
 | `benchmark_capture.py` + `benchmark_fixtures/` | Five synthetic Kate/Firefox cases, isolated sessions, AT-SPI setup verification, mapped full/app/region PNGs. |
 | `vision_benchmark.py` | Saved-image evaluation, DeepSeek/MiMo/generic endpoint configuration, seeded order, bounded calls, strict scoring and JSONL results. |
 | `test_vision_benchmark.py` | Six validation tests covering schemas, streams, image hashes, call caps, provider payload and expected-answer isolation. |
 | `p2_kcalc.py` + `test_p2_kcalc.py` | One Jev-selected button press, fresh target check, exact blank-to-1 display verification; five tests. |
-| `desktop_service.py` + `desktop_worker.py` | One virtual session owner and one persistent `AutomationEngine` worker child. |
+| `desktop_service.py` + `desktop_worker.py` | One virtual or explicit local-live session owner and one persistent `AutomationEngine` worker child. |
 | `desktop_daemon.py` + `desktop_cli.py` + `desktop_mcp.py` | Private Unix socket owner, thin CLI and official MCP SDK stdio client. |
 | `test_desktop_surfaces.py` + `local_service_probe.py` | Synthetic socket/MCP checks and the passing separate host integration probe. |
 | `wait_watcher.py` | Bounded full-app capture wait primitive with debounce, latest-frame coalescing, cancellation/deadline checks and optional existing Reader seam. |
@@ -330,18 +343,21 @@ limits.
    execution. Current transactions support unique mapped semantic targets,
    not arbitrary screenshot coordinates from a model. Task-specific verifiers
    and guarded effect policies need expansion beyond the synthetic fixtures.
-3. **Live and tailnet (M5/M6):** idle/focus measurements, explicit live tasks,
-   cancellation/error restoration, preserved Serve routes and actual remote
-   caller tests. These do not block a useful virtual local service.
+3. **Owner-watched live validation, then tailnet (M5/M6):** the local live
+   contract is implemented; the next step is an owner-watched local workflow
+   covering per-call focus, effects and cleanup. Physical idle detection is
+   unavailable on this host, so require the override. Tailnet still needs
+   preserved Serve routes and actual remote caller tests.
 4. **Workflow acceleration later:** semantic replay prerequisites, expected
    effects and recovery exits, with Jev as an optional bounded selector.
 
 M1–M3 local virtual implementation was authorized. Do not ask for that
 approval again. The M3 integration probe passed. M4b was reviewed, fixed,
 tested and its single follow-up request completed on 2026-10-02; that paid cap
-is consumed. Planner, live tasks and remote deployment remain later gates in
-doc 14; no Serve configuration was changed. No paid provider calls are needed
-for the local host probes.
+is consumed. Local live support is implemented with the owner-watched check
+pending. Planner work and remote deployment remain later gates in doc 14; no
+Serve configuration was changed. No paid provider calls are needed for local
+host checks.
 
 ## Codex MCP workflow checkpoint — 2026-10-02
 

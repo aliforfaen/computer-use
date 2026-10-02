@@ -1,10 +1,13 @@
 # 16 — Local owner, CLI and MCP surface
 
-**2026-10-01 · M3 local surface implementation.** The checkout now has one
-`jev-desktop` owner process, a thin CLI client, and an MCP stdio client. Both
-clients use the same private Unix socket and the same `DesktopService` state.
-This is a virtual-only local surface. No HTTP listener, Tailscale Serve route,
-live desktop mode or planner is implemented here.
+**2026-10-01 · M3 local surface implementation; updated 2026-10-02 for live opt-in.**
+The checkout has one `jev-desktop` owner process, a thin CLI client, and an MCP
+stdio client. Both clients use the same private Unix socket and the same
+`DesktopService` state.
+Virtual remains the default. A local live mode is now available only with
+explicit owner-present and temporary AT-SPI opt-ins. Physical-input detection
+is unavailable on this host, so the owner-present override is required every
+time. No HTTP listener, Tailscale Serve route or planner is implemented here.
 
 ## Runtime and ownership
 
@@ -60,6 +63,24 @@ uv run jev-desktop act kcalc click TARGET_REF --verification display_text --expe
 uv run jev-desktop session stop
 uv run jev-desktop stop --all
 ```
+
+After an owner-watched workflow is explicitly ready, a live session can be
+started with both safeguards:
+
+```bash
+uv run jev-desktop session start firefox --live --owner-present-override --temporary-a11y
+```
+
+Live sessions launch one newly owned allowlisted app and refuse an existing
+window for that app. Each input action snapshots the currently focused window,
+focuses the task app, verifies the action and restores the exact prior focus
+before returning. Stop snapshots current focus when possible and restores it
+after closing the tracked app; if the owned app held focus, stop restores the
+session baseline instead. Stop also restores original accessibility flags.
+Failure recovery uses the task journal to terminate only the recorded app PID
+and independently retries focus and accessibility restoration. Live runtime
+behavior still needs the owner-watched host check; see [doc 26](26-live-owner.md).
+Do not treat the example as evidence that a live task has been run.
 
 Observation defaults to metadata for the app window. `--output image` and
 `--output both` explicitly request PNG data; `--output data` requests configured

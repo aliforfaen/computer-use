@@ -70,6 +70,13 @@ class Worker:
         self.journal_path: Path | None = None
         self.app: str | None = None
         self.document_path: Path | None = None
+        self.desktop_mode = "virtual"
+        self.original_window: dict | None = None
+        self.action_original_window: dict | None = None
+        self.live_process = None
+        self.live_window_id: str | None = None
+        self.original_a11y_flags: dict[str, bool] | None = None
+        self.a11y_address: str | None = None
 
     @staticmethod
     def _start_ticks(pid: int | None):
@@ -130,14 +137,26 @@ class Worker:
         session = getattr(self.engine, "_session", None)
         info = getattr(session, "info", None)
         if info is None: return
-        apps = [{"pid": int(pid), "start_ticks": self._start_ticks(int(pid))}
-                for pid in getattr(info, "apps", {})]
+        apps = ([] if self.desktop_mode == "live" else
+                [{"pid": int(pid), "start_ticks": self._start_ticks(int(pid))}
+                 for pid in getattr(info, "apps", {})])
+        launched_pid = getattr(self.live_process, "pid", None)
+        if self.live_process is not None and isinstance(launched_pid, int):
+            apps.append({"pid": launched_pid, "start_ticks": self._start_ticks(launched_pid)})
         process = getattr(session, "_process", None)
         pid = getattr(process, "pid", None)
         atspi = getattr(self.engine, "_atspi_proc", None)
         atspi_pid = getattr(atspi, "pid", None)
         record = {"schema": 1, "worker_pid": os.getpid(), "session_pid": pid,
                   "session_start_ticks": self._start_ticks(pid), "app_processes": apps,
+                  "desktop_mode": self.desktop_mode,
+                  "original_window": ({"id": self.original_window.get("id"), "app": self.original_window.get("app")}
+                                      if self.original_window else None),
+                  "action_original_window": ({"id": self.action_original_window.get("id"),
+                                              "app": self.action_original_window.get("app")}
+                                             if self.action_original_window else None),
+                  "original_a11y_flags": self.original_a11y_flags,
+                  "a11y_address": self.a11y_address,
                   "atspi_pid": atspi_pid, "atspi_start_ticks": self._start_ticks(atspi_pid),
                   "home_dir": str(getattr(info, "home_dir", "") or ""),
                   "config_dir": str(getattr(session, "_session_config_dir", "") or ""),
@@ -154,29 +173,49 @@ class Worker:
         record = None
         if self.journal_path is not None and self.journal_path.is_file():
             record = json.loads(self.journal_path.read_text(encoding="utf-8"))
+        live_cleanup_ok = True
+        if self.desktop_mode == "live" and self.engine is not None:
+            live_cleanup_ok = self._stop_live_app()
         if self.engine is not None:
             result = self.engine.session_stop()
-            if not isinstance(result, str) or not ("Session stopped" in result or "No session running" in result):
+            if not isinstance(result, str) or not ("Session stopped" in result or "No session running" in result
+                                                   or (self.desktop_mode == "live" and "Disconnected" in result)):
                 raise ValueError("session_stop_unconfirmed")
             self.engine = None
         self.cleanup()
         if record is not None and not self._resources_gone(record):
             raise ValueError("session_cleanup_unconfirmed")
+        if not live_cleanup_ok:
+            raise ValueError("live_cleanup_unconfirmed")
         if self.journal_path is not None:
             self.journal_path.unlink(missing_ok=True)
         self.app = None
         self.document_path = None
+        self.desktop_mode = "virtual"
+        self.original_window = None
+        self.action_original_window = None
+        self.live_process = None
+        self.live_window_id = None
+        self.original_a11y_flags = None
+        self.a11y_address = None
         self.journal_path = None
         return {"stopped": True, "cleanup_paths": []}
 
-    def start(self, app: str, journal_path: str | None = None) -> dict:
+    def start(self, app: str, journal_path: str | None = None, desktop_mode: str = "virtual",
+              temporary_a11y: bool = False) -> dict:
         if app not in {"kate", "firefox", "kcalc"} or self.engine is not None:
+            raise ValueError("invalid_worker_start")
+        if desktop_mode not in {"virtual", "live"}:
             raise ValueError("invalid_worker_start")
         if not isinstance(journal_path, str) or not journal_path:
             raise ValueError("invalid_worker_start")
         self.journal_path = Path(journal_path)
         self.app = app
+        self.desktop_mode = desktop_mode
         from kwin_mcp.core import AutomationEngine
+
+        if desktop_mode == "live":
+            return self._start_live(app, temporary_a11y=temporary_a11y)
 
         env = {"QT_ACCESSIBILITY": "1", "GTK_MODULES": "gail:atk-bridge"}
         if app == "kate":
@@ -221,6 +260,184 @@ class Worker:
                 self._remove_empty_failed_document(failed_document)
             raise
 
+    def _start_live(self, app: str, *, temporary_a11y: bool = False) -> dict:
+        """Connect to the owner desktop and launch one PID-owned allowlisted app."""
+        from kwin_mcp.core import AutomationEngine
+        from live_desktop_probe import (_active_row, _a11y_address, _a11y_flags, _raw_window_rows,
+                                        _set_a11y_flags_at,
+                                        _raw_pid_for_window_id, _restore_exact, _window_rows)
+        self.engine = AutomationEngine()
+        try:
+            connected = self.engine.session_connect(keep_screenshots=False)
+            if not isinstance(connected, str) or "Connected to live KWin session" not in connected:
+                raise ValueError("live_session_unavailable")
+            if "Input backend: KWin EIS" not in connected:
+                raise ValueError("live_input_unavailable")
+            self.original_window = _active_row(self.engine)
+            initial_windows = _window_rows(self.engine)
+            app_ids = {"kate": {"kate", "org.kde.kate"},
+                       "firefox": {"firefox", "org.mozilla.firefox"},
+                       "kcalc": {"kcalc", "org.kde.kcalc"}}[app]
+            if any(str(row.get("app", "")).casefold() in app_ids for row in initial_windows):
+                raise ValueError("live_app_already_open")
+            flags = _a11y_flags(self.engine)
+            if not all(flags.values()):
+                if not temporary_a11y:
+                    raise ValueError("live_temporary_a11y_required")
+                self.original_a11y_flags = dict(flags)
+                self.a11y_address = _a11y_address(self.engine)
+                self._write_journal()
+                enabled = _set_a11y_flags_at(self.a11y_address,
+                                             {"IsEnabled": True, "ScreenReaderEnabled": True})
+                if not all(enabled.values()):
+                    raise ValueError("live_atspi_unavailable")
+            self._write_journal()
+            if app == "kate":
+                self.document_path = self._new_document()
+                command = ["kate", "--new", str(self.document_path)]
+                env = {"QT_ACCESSIBILITY": "1", "GTK_MODULES": "gail:atk-bridge"}
+                self.engine._ensure_atspi_worker = MethodType(_ensure_bounded_atspi_worker, self.engine)
+            elif app == "firefox":
+                profile = _profile()
+                self.paths.append(profile)
+                command = ["firefox", "--no-remote", "--new-instance", "--profile", str(profile)]
+                env = {"MOZ_ENABLE_ACCESSIBILITY": "1"}
+            else:
+                command = ["kcalc"]
+                env = {"QT_ACCESSIBILITY": "1", "GTK_MODULES": "gail:atk-bridge"}
+            self.live_process = self.engine._get_session().launch_app(command, extra_env=env)
+            self._write_journal()
+            deadline = time.monotonic() + 8.0
+            selected = None
+            while time.monotonic() < deadline:
+                rows = _window_rows(self.engine)
+                matches = [row for row in rows if str(row.get("app", "")).casefold() in app_ids]
+                if len(matches) > 1:
+                    raise ValueError("live_app_window_ambiguous")
+                if matches:
+                    selected = matches[0]
+                    raw_pid = _raw_pid_for_window_id(_raw_window_rows(self.engine), selected["id"])
+                    if raw_pid != self.live_process.pid:
+                        raise ValueError("live_app_not_owned")
+                    self.live_window_id = selected["id"]
+                    break
+                time.sleep(0.1)
+            if selected is None:
+                raise ValueError("live_app_window_unavailable")
+            self._write_journal()
+            if not _restore_exact(self.engine, self.original_window, _window_rows(self.engine)):
+                raise ValueError("live_focus_restore_failed")
+            return {"started": True, "desktop_mode": "live", "input_idle_detection": "unavailable",
+                    "owner_present_override": True, "task_owned_window_id": self.live_window_id,
+                    **({"document_path": str(self.document_path)} if self.document_path else {})}
+        except Exception:
+            failed_document = self.document_path
+            try:
+                self.stop()
+            except Exception:
+                pass
+            if failed_document is not None:
+                self._remove_empty_failed_document(failed_document)
+            raise
+
+    def _focus_live_app(self) -> bool:
+        if self.desktop_mode != "live" or self.engine is None or not self.live_window_id:
+            return False
+        from live_desktop_probe import _active_row, _restore_needle, _window_rows
+        rows = _window_rows(self.engine)
+        matches = [row for row in rows if row.get("id") == self.live_window_id]
+        if len(matches) != 1 or not isinstance(matches[0].get("app"), str):
+            return False
+        row = matches[0]
+        caption = row.get("caption")
+        if not isinstance(caption, str) or not caption:
+            return False
+        needle = _restore_needle(row, rows)
+        if needle is None:
+            return False
+        response = self.engine._run_kwin_query({"op": "activate", "app_name": needle})
+        return (isinstance(response, dict) and response.get("ok") is True and bool(response.get("result"))
+                and _active_row(self.engine).get("id") == self.live_window_id)
+
+    def restore_live_focus(self, *, baseline: bool = False) -> bool:
+        target = self.action_original_window or (self.original_window if baseline else None)
+        if self.desktop_mode != "live" or self.engine is None or not target:
+            return False
+        from live_desktop_probe import _restore_exact, _window_rows
+        restored = _restore_exact(self.engine, target, _window_rows(self.engine))
+        if restored and self.action_original_window is not None:
+            self.action_original_window = None
+            self._write_journal()
+        return restored
+
+    def prepare_live_action(self) -> dict:
+        if self.desktop_mode != "live" or self.engine is None:
+            raise ValueError("live_mode_required")
+        from live_desktop_probe import _active_row, _restore_needle, _window_rows
+        original = _active_row(self.engine)
+        if _restore_needle(original, _window_rows(self.engine)) is None:
+            raise ValueError("live_original_focus_unrestorable")
+        self.action_original_window = original
+        self._write_journal()
+        if not self._focus_live_app():
+            raise ValueError("live_target_focus_failed")
+        return {"focused": True}
+
+    def _stop_live_app(self) -> bool:
+        """Terminate only the exact process returned by this task's launch."""
+        from live_desktop_probe import _active_row, _restore_needle, _window_rows
+        focus_snapshot_ok = True
+        if self.action_original_window is None:
+            try:
+                current = _active_row(self.engine)
+                if current.get("id") != self.live_window_id:
+                    if _restore_needle(current, _window_rows(self.engine)) is None:
+                        focus_snapshot_ok = False
+                    else:
+                        self.action_original_window = current
+                        self._write_journal()
+            except Exception:
+                focus_snapshot_ok = False
+        launched = self.live_process
+        process = getattr(launched, "process", launched)
+        process_ok = True
+        if process is not None:
+            try:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=3)
+                    except Exception:
+                        process.kill()
+                        process.wait(timeout=2)
+                process_ok = process.poll() is not None
+            except Exception:
+                process_ok = False
+        window_ok = True
+        if self.live_window_id:
+            try:
+                until = time.monotonic() + 3
+                while time.monotonic() < until:
+                    if not any(row.get("id") == self.live_window_id for row in _window_rows(self.engine)):
+                        break
+                    time.sleep(0.1)
+                window_ok = not any(row.get("id") == self.live_window_id for row in _window_rows(self.engine))
+            except Exception:
+                window_ok = False
+        try:
+            restored = (self.restore_live_focus(baseline=True) if focus_snapshot_ok else False)
+        except Exception:
+            restored = False
+        a11y_ok = True
+        if self.original_a11y_flags is not None and self.a11y_address is not None:
+            try:
+                from live_desktop_probe import _set_a11y_flags_at
+                actual = _set_a11y_flags_at(self.a11y_address, self.original_a11y_flags)
+                a11y_ok = actual == self.original_a11y_flags
+            except Exception:
+                a11y_ok = False
+        return process_ok and window_ok and restored and a11y_ok
+
     def _wait_for_app_window(self, app: str, *, document_path: Path | None = None,
                              timeout_seconds: float = 8.0, poll_seconds: float = 0.1) -> None:
         """Wait for one fresh, mapped window of the app launched in this virtual session."""
@@ -259,7 +476,12 @@ class Worker:
 
     def call(self, method: str, params: dict):
         if method == "start":
-            return self.start(params.get("app"), params.get("journal_path"))
+            return self.start(params.get("app"), params.get("journal_path"), params.get("desktop_mode", "virtual"),
+                              params.get("temporary_a11y", False))
+        if method == "focus_live_app":
+            return self.prepare_live_action()
+        if method == "restore_live_focus":
+            return {"restored": self.restore_live_focus()}
         if method == "stop":
             return self.stop()
         if self.engine is None:
@@ -422,8 +644,12 @@ def main() -> int:
             safe = str(exc)
             allowed = {"invalid_request", "invalid_worker_start", "session_stop_unconfirmed", "session_not_started",
                        "app_not_allowed", "fixture_unavailable", "virtual_session_unavailable", "atspi_setup_failed",
-                       "worker_method_not_allowed", "document_unavailable", "document_operation_not_allowed",
-                       "document_create_failed", "document_too_large", "document_open_unconfirmed"}
+                       "live_session_unavailable", "live_input_unavailable", "live_app_already_open",
+                       "live_atspi_unavailable", "live_temporary_a11y_required", "live_app_window_ambiguous",
+                       "live_app_not_owned", "live_app_window_unavailable", "live_focus_restore_failed",
+                       "live_cleanup_unconfirmed", "worker_method_not_allowed", "document_unavailable",
+                       "document_operation_not_allowed", "document_create_failed", "document_too_large",
+                       "document_open_unconfirmed"}
             code = safe if safe in allowed else type(exc).__name__
             response = {"id": request.get("id") if isinstance(request, dict) else None,
                         "error": {"code": code, "cleanup_paths": [str(p) for p in worker.paths],

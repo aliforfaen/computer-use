@@ -14,8 +14,14 @@ numeric usage accounting and killable request processes. This authorization
 supersedes the older consumed paid-probe cap and dollar-reservation refusal.
 The four-trial comparison (doc 24) found polling completed both tasks while
 both wait trials returned `invalid_judgment`; keep heartbeat waiting experimental.
-No general live MCP support or tailnet deployment was added. See doc 25 for
-remaining work and the owner-watched phase last.
+Local live CLI/MCP support is now implemented: each live session requires an
+explicit owner-present override and temporary AT-SPI opt-in; it starts one newly
+launched allowlisted app, snapshots/restores exact focus per action and stop,
+and verifies owned-app cleanup. Physical-input idle detection is unavailable
+on this host. Four focused `test_live_owner` tests passed (plus eleven earlier
+focused live/service tests); no live apps or physical input were used for these
+checks. The short owner-watched desktop check is still pending; tailnet
+deployment and general planning remain out of scope. See docs 25–26.
 
 **Testing preference:** this is the owner's small personal tool. Use targeted
 checks for changed behavior and small useful host probes. Avoid repeated full
