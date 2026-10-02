@@ -4,6 +4,7 @@
 !.env.example
 
 # runtime artifacts
+.memsearch/
 *.log
 run/
 traces/
