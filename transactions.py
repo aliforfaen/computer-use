@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
+from audit_log import DEFAULT_ROTATION, AuditRotation, append_jsonl
+
 
 _TREE_LINE = re.compile(
     r'^\s*- \[(?P<role>[^]]+)\] "(?P<name>(?:[^"\\]|\\.)*)"'
@@ -221,11 +223,12 @@ class KwinMcpBackend:
 class AuditLog:
     """Append-only JSONL audit writer with a deliberately closed field schema."""
 
-    def __init__(self, path: str | os.PathLike[str], *, caller_node: str = "local", transport: str = "local"):
+    def __init__(self, path: str | os.PathLike[str], *, caller_node: str = "local", transport: str = "local",
+                 rotation: AuditRotation = DEFAULT_ROTATION):
         self.path = Path(path)
         self.caller_node = _safe_context(caller_node)
         self.transport = _safe_context(transport)
-        self._lock = threading.Lock()
+        self.rotation = rotation
 
     def write(self, *, tool: str, app: str, mode: AutonomyMode, event: str, status: str, reason: str) -> None:
         event = event if event in {"observe", "click", "type_text", "replace_document", "save_document",
@@ -245,13 +248,7 @@ class AuditLog:
             "reason": reason,
         }
         encoded = (json.dumps(record, separators=(",", ":"), ensure_ascii=True) + "\n").encode("utf-8")
-        with self._lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            try:
-                os.write(fd, encoded)
-            finally:
-                os.close(fd)
+        append_jsonl(self.path, encoded, rotation=self.rotation)
 
 
 def _safe_context(value: str) -> str:

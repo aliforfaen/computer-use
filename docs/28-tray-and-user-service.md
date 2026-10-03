@@ -21,6 +21,9 @@ Path: `$JEV_DESKTOP_CONFIG`, else `--config`, else
   "max_session_lifetime": 1800,
   "max_actions": 64,
   "max_observations": 256,
+  "audit_max_bytes": 4194304,
+  "audit_backups": 3,
+  "audit_max_age_days": 30,
   "reader": {"provider": "deepseek", "key_env": "DEEPSEEK_API_KEY", "max_calls_per_session": 8}
 }
 ```
@@ -30,6 +33,18 @@ and an empty allowlist still fails closed whether it comes from flags, env or
 file (`JEV_DESKTOP_ALLOW_APPS` accepts commas or whitespace). **The config
 carries no secret values**: a reader key stays in the environment or the
 configured `dotenv` file; the config only names the environment variable.
+
+## Audit retention
+
+The audit is durable state, so it defaults to
+`~/.config/jev-desktop/audit.jsonl` (0600) rather than the runtime directory
+where a logout would lose it. All owner writers share one append path:
+newline-terminated JSON, fsynced, size-rotated to `audit.jsonl.1..N`
+(default 4 MiB, 3 backups) and age-pruned (default 30 days). Stale session
+journals under `sessions/` are swept at startup with the same age limit. The
+socket and live session journals stay in the private runtime directory, and the
+recorded fields and no-sampling rule are unchanged. `capabilities` reports the
+path and the active rotation. See ADR-021.
 
 ## systemd --user unit
 
@@ -78,7 +93,31 @@ uv run jev-desktop service uninstall --stop
 overwrite or "fix" an allowlist the owner already edited. `uninstall` refuses
 to remove an active unit without `--stop`, because stopping the owner closes
 its owned app. `status` reports active/enabled state, the config allowlist and
-template/entry-point drift.
+template/entry-point drift for both units.
+
+`service install --tray` also writes `jev-desktop-tray.service` (same
+`graphical-session.target` gating, `Restart=on-failure`). It is never enabled
+automatically either, and `uninstall` removes both units.
+
+## Tray settings
+
+Tray behaviour lives in `~/.config/jev-desktop/tray.json` (0600):
+
+```json
+{
+  "desktop_mode": "virtual",
+  "autonomy_mode": "guarded",
+  "poll_seconds": 3.0,
+  "confirm_kill_switch": true,
+  "confirm_cleanup": true
+}
+```
+
+Missing or invalid values fall back to the defaults, and the Settings… dialog
+edits the same file. The live-mode gate is deliberately **not** configurable:
+`desktop_mode` only decides what a tray-started task requests, and a physical
+task still opens the per-task owner-present + temporary-accessibility dialog.
+"Open config folder" hands the directory to `xdg-open`.
 
 ## Tray indicator
 
@@ -118,11 +157,12 @@ no traceback. libayatana prints a deprecation notice recommending
 ## Verified and not verified
 
 Verified: config precedence and fail-closed allowlist, install/status/
-uninstall behaviour including drift and the active-unit refusal, preference
-round-trip, tray SNI registration and coexistence, live-gate decisions and
+uninstall behaviour including drift and the active-unit refusal, tray-unit
+install, audit rotation and pruning, tray settings round-trip, tray SNI
+registration and coexistence with a sandbox owner, live-gate decisions and
 kill-switch confirmation (stubbed toolkit), and the full affected suite
-(77 cases).
+(177 cases, all green).
 
-Not verified: clicking every tray item on screen, enabling the unit at login
-by the project, a live task started from the tray, and the tray under a
+Not verified: clicking every tray item on screen, enabling a unit at login by
+the project, a live task started from the tray, and the tray under a
 non-Plasma desktop.

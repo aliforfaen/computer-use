@@ -15,11 +15,36 @@ Numbered docs retain earlier experiments; this page is the current summary.
 | Observation | Explicit app images for vision agents; optional interpreted data from a bounded, cancellable reader. DeepSeek is provisional, MiMo configurable. |
 | Lifecycle | Idle/lifetime/read/action caps, watchdog teardown, owned-app cleanup and recovery journals. |
 | Local live Kate | Owner-watched document workflow and app screenshot passed; exact focus and accessibility flags restored, zero Kate windows remaining. |
-| Owner surfaces | JSON config (CLI > env > file > default), `systemd --user` unit via `service install|status|uninstall`, and an AppIndicator tray with status, virtual/physical preference, session cleanup and the kill switch. |
+| Owner surfaces | JSON config (CLI > env > file > default), `systemd --user` unit via `service install|status|uninstall`, and an AppIndicator tray with status, virtual/physical preference, session cleanup, settings and the kill switch. |
+| Audit retention | Durable audit at `~/.config/jev-desktop/audit.jsonl`, size-rotated (4 MiB, 3 backups) and age-pruned (30 days); stale session journals swept at startup. |
+| Jev selector seam | `jev_selector.py` builds an enumerated decision request from candidate output and validates the typed answer in code. Offline probe, not wired into the loop. |
 
 Useful agent acceptance: [Codex Luna workflow](20-codex-luna-workflow.md),
 [document workflow](21-kate-acceptance-workflow.md),
 [public webpage → Kate](23-public-browser-kate-agent-task.md).
+
+## Latest work — 2026-10-03 (later session)
+
+**Testing pit closed.** The suite went from 190 to 177 cases by collapsing
+exhaustive per-failure-point and historical harness matrices; the one-off wait
+comparison fixture was deleted. `uv run python -m tools.check` runs the 96-case
+core set in ~4 s, and [doc 29](29-verification-runbook.md) maps a change to its
+cheapest check. The heartbeat wait is now reported `experimental` in
+`capabilities`, the CLI help and the MCP description, with polling named as the
+recommended loop.
+
+**Audit retention.** The audit moved to the durable config directory with
+size/age rotation and session-journal pruning (ADR-021).
+
+**Tray settings.** `~/.config/jev-desktop/tray.json` now holds desktop-mode
+preference, autonomy mode, poll interval and the two confirmation toggles, with
+a Settings dialog and an Open-config-folder item. `service install --tray` can
+add the indicator unit; it is still never enabled automatically (ADR-022).
+
+**Jev path.** `jev_selector.py` + `tools/jev_selector_probe.py` + doc 30: an
+offline-first, enumerated-options-only selector with a one-call `HttpSelector`,
+ready for the owner to test the decision-model idea cheaply. ADR-011 stays
+proposed; nothing is wired into the running owner.
 
 ## Latest work — 2026-10-03
 
@@ -105,16 +130,18 @@ MCP host command: `uv run jev-desktop-mcp`; it connects to the same owner.
 See [doc 16](16-local-owner-and-mcp.md) for sockets, actions, images, readers,
 lifecycle and live opt-in. Changes to tool schemas require a host refresh.
 
-Use targeted offline checks and small host probes for changed behavior.
-The last broad historical run passed 172 tests and built a wheel; the
-2026-10-03 surfaces received 77 focused cases across the daemon, service, tray,
-service unit, transaction and service modules plus one watched host probe. Do
-not rerun a large matrix solely to reproduce an old test count.
+Use targeted offline checks and small host probes for changed behavior:
+`uv run python -m tools.check` is the 96-case core set (~4 s), and
+[doc 29](29-verification-runbook.md) maps a change type to its cheapest check.
+The suite is 177 cases after collapsing the historical harness matrices; full
+discovery is ~10 s but only needed for cross-module, packaging or contract
+changes. Do not rerun a large matrix solely to reproduce an old test count.
 
 ## Cleanup checkpoint
 
 The 17 root test files now live in `tests/`. Standalone utilities moved to
-`tools/`: `local_service_probe`, `mcp_trial_client`, `vision_wait_probe`.
+`tools/`: `check` (fast core suite), `local_service_probe`, `mcp_trial_client`,
+`scroll_effect_probe`, `vision_wait_probe`.
 Invoke them with `uv run python -m tools.NAME`; runtime-imported benchmark
 modules remain at root. Tool roots and packaging were updated accordingly.
 

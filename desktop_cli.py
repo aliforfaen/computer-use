@@ -106,6 +106,7 @@ def _build_parser() -> argparse.ArgumentParser:
     install.add_argument("--allow-app", action="append", default=[], help="seed the starter config allowlist (repeatable)")
     install.add_argument("--config", type=Path, default=None, help="config path to seed and reference")
     install.add_argument("--unit-dir", type=Path, default=None, help="override the systemd user unit directory")
+    install.add_argument("--tray", action="store_true", help="also install the tray indicator unit")
     uninstall = service_commands.add_parser("uninstall", help="stop, disable and remove the unit")
     uninstall.add_argument("--stop", action="store_true", help="allow stopping an active unit")
     uninstall.add_argument("--unit-dir", type=Path, default=None)
@@ -115,6 +116,8 @@ def _build_parser() -> argparse.ArgumentParser:
     tray = commands.add_parser("tray", help="run the desktop tray indicator in foreground")
     tray.add_argument("--socket", type=Path, default=argparse.SUPPRESS)
     tray.add_argument("--unit", default="jev-desktop", help="systemd --user unit name the tray controls")
+    tray.add_argument("--settings", type=Path, default=None,
+                      help="tray settings file (default: ~/.config/jev-desktop/tray.json)")
     for name, help_text in (("capabilities", "show owner capabilities"), ("status", "show owner/session status")):
         sub = commands.add_parser(name, help=help_text)
         _add_socket(sub)
@@ -155,7 +158,7 @@ def _build_parser() -> argparse.ArgumentParser:
     observe.add_argument("--capture-id", help="reuse an unexpired capture ID")
     observe.add_argument("--questions-json", help="reader questions as a JSON list of field/type/description objects")
     _add_socket(observe)
-    wait = commands.add_parser("wait", help="wait for a bounded screenshot condition using the configured reader")
+    wait = commands.add_parser("wait", help="EXPERIMENTAL heartbeat wait for a bounded screenshot condition; prefer polling observe/candidates")
     wait.add_argument("app")
     wait.add_argument("--expected", required=True, help="caller-authored visible condition; maximum 500 characters")
     wait.add_argument("--timeout", type=float, default=30.0, help="wait deadline in seconds (maximum 120)")
@@ -228,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
         return service_command(args)
     if args.command == "tray":
         from desktop_tray import tray_main
-        return tray_main(socket=args.socket, unit=args.unit)
+        return tray_main(socket=args.socket, unit=args.unit, settings_path=args.settings)
     method_params: dict[str, Any]
     method = args.command
     if method in {"capabilities", "status"}:

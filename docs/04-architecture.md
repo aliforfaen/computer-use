@@ -303,7 +303,8 @@ The MCP/CLI wait primitive shares session read/reader limits and returns the
 same judged capture's image and identity. It is observation, not planning or
 proof of task completion. Two real wait trials returned invalid judgments;
 keep it experimental. Navigation verifies address entry separately from page
-readiness. Host scroll verification remains unresolved. See docs 23–25.
+readiness. Host scroll verification was fixed on 2026-10-03 (see doc 27). See
+docs 23–25 for the surrounding agent trials.
 
 ### ADR-018 — Local live sessions require explicit owner presence
 **2026-10-02 · local implementation; owner-watched validation pending.** Reuse
@@ -344,3 +345,46 @@ deny-by-default allowlist or audit logging. The tray may select virtual or
 physical mode as a **preference**, but a live task is still started only after a
 per-task dialog confirms owner presence and temporary accessibility, preserving
 ADR-018. See doc 28.
+
+### ADR-021 — Audit retention: persistent file with bounded rotation
+**2026-10-03 · supersedes the runtime-directory audit default.** The audit log is
+durable state, so it defaults to
+`${XDG_CONFIG_HOME:-~/.config}/jev-desktop/audit.jsonl` rather than
+`$XDG_RUNTIME_DIR`, where it would not survive a logout or reboot. All owner writers
+share one append helper (`audit_log.append_jsonl`): 0600, append-only, fsynced,
+size-rotated to `audit.jsonl.1..N` (default 4 MiB, 3 backups) and age-pruned (default
+30 days), with the same sweep applied to stale session journals at startup. Retention
+is config-file tunable. The socket and live session journals stay in the private
+runtime directory. Nothing about the recorded fields or the no-sampling rule changes.
+See doc 28.
+
+### ADR-022 — Tray settings are a preference file, never authorization
+**2026-10-03 · extends ADR-020.** Tray behaviour lives in
+`~/.config/jev-desktop/tray.json` (0600): desktop-mode preference, autonomy mode for
+tray-started tasks, status refresh interval, and whether cleanup and the kill switch
+ask for confirmation. Invalid values fall back to defaults. The live-mode gate is
+deliberately **not** configurable: a physical task still requires the per-task dialog
+confirming owner presence and temporary accessibility. `service install --tray` may
+add a second `graphical-session.target` unit for the indicator; it is never enabled
+automatically. See doc 28.
+
+### ADR-023 — Jev selector seam is offline-first and unwired
+**2026-10-03 · ADR-011 remains proposed.** Add `jev_selector.py` as a pure selector:
+it builds an indexed state from existing candidate output (roles, labels, states,
+action names — no coordinates, values, selectors or paths), builds `action` and
+`target` choice heads, enforces the documented token budget, and validates the typed
+answer so a target must be an index we created. `HttpSelector` performs one request
+with a hard call cap and no retries; `RecordedSelector` replays a saved answer for
+free. Nothing is wired into the owner: execution, verification and policy stay in
+`transactions.py`, and the existing `authorizer` seam remains the only place a selector
+could advise. Experiment stages and what would not count as evidence are in doc 30.
+
+### ADR-024 — Verification is a runbook, not a matrix
+**2026-10-03 · process decision.** A small edit gets the module that owns it; the fast
+core set is `uv run python -m tools.check` (~4 s); full discovery is for cross-module,
+packaging or contract changes. The suite was reduced from 190 to 177 cases by
+collapsing exhaustive per-failure-point and historical harness matrices while keeping
+shipped-surface and safety-invariant coverage; the one-off wait-comparison fixture was
+removed. The reader-wait heartbeat is reported as `experimental` in `capabilities`,
+the CLI help and the MCP tool description, with polling named as the recommended loop.
+See docs 29 and 24.

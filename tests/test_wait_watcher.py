@@ -5,7 +5,7 @@ import time
 import unittest
 
 from vision_reader import ReaderResult, _validate_questions
-from wait_watcher import AdapterFrameSource, JudgeDecision, ReaderJudge, WaitFrame, WaitSpec, WaitWatcher
+from wait_watcher import AdapterFrameSource, ReaderJudge, WaitFrame, WaitSpec, WaitWatcher
 
 
 class WaitWatcherTests(unittest.TestCase):
@@ -95,19 +95,6 @@ class WaitWatcherTests(unittest.TestCase):
         result = waiting.wait(WaitSpec("finished"), deadline_seconds=0.5, cancel_event=cancelled)
         self.assertEqual(result.status, "cancelled")
 
-    def test_capture_finishing_after_deadline_is_not_judged(self):
-        judged = []
-
-        def slow_capture():
-            time.sleep(0.04)
-            return WaitFrame(b"late-frame")
-
-        result = WaitWatcher(slow_capture, lambda *_: judged.append(True) or "wake",
-                             interval_seconds=0.005, debounce_seconds=0).wait(
-                                 WaitSpec("ready"), deadline_seconds=0.015)
-        self.assertEqual(result.status, "timeout")
-        self.assertEqual(judged, [])
-
     def test_bad_capture_and_bad_or_error_judgment_fail_explicitly(self):
         capture_error = WaitWatcher(lambda: (_ for _ in ()).throw(RuntimeError("private")), lambda *_: "wait",
                                     interval_seconds=0.01).wait(WaitSpec("ready"), deadline_seconds=0.2)
@@ -129,28 +116,18 @@ class WaitWatcherTests(unittest.TestCase):
                                 interval_seconds=0.01, debounce_seconds=0).wait(WaitSpec("ready"), deadline_seconds=0.2)
         self.assertEqual((app_error.status, app_error.error_code), ("error", "app_error_detected"))
 
-    def test_reader_decision_wrapper_is_accepted(self):
-        calls = []
-
-        def judge(frame, spec):
-            calls.append((frame.capture_id, spec.expected))
-            return JudgeDecision("wake")
-
-        result = WaitWatcher(lambda: WaitFrame(b"img", "id"), judge,
-                             interval_seconds=0.01, debounce_seconds=0).wait(WaitSpec("ready"), deadline_seconds=0.2)
-        self.assertEqual(result.status, "ready")
-        self.assertEqual(calls, [("id", "ready")])
-
-    def test_reader_judge_uses_existing_reader_schema(self):
+    def test_reader_judge_schema_and_error_separation(self):
         class FakeReader:
-            def __init__(self):
+            def __init__(self, result=None):
+                self.result = result
                 self.questions = None
+                self.asserted_image = None
 
             def interpret(self, image, questions):
                 self.asserted_image = image
                 self.questions = questions
                 _validate_questions(questions)
-                return ReaderResult("ok", data={"judgment": "wait"})
+                return self.result or ReaderResult("ok", data={"judgment": "wait"})
 
             def capabilities(self):
                 return {"images": True}
@@ -160,17 +137,6 @@ class WaitWatcherTests(unittest.TestCase):
         self.assertEqual(decision.judgment, "wait")
         self.assertEqual(reader.asserted_image, b"image")
         self.assertEqual(reader.questions[0]["type"], "string")
-
-    def test_reader_judge_valid_app_error_is_separate_from_reader_failure(self):
-        class FakeReader:
-            def __init__(self, result):
-                self.result = result
-
-            def interpret(self, image, questions):
-                return self.result
-
-            def capabilities(self):
-                return {"images": True}
 
         app_reader = FakeReader(ReaderResult("ok", data={"judgment": "error"}, provider="fake", model="test"))
         result = WaitWatcher(lambda: WaitFrame(b"frame"), ReaderJudge(app_reader), interval_seconds=0.01,

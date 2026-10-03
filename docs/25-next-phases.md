@@ -1,23 +1,34 @@
 # 25 — Next phases
 
-Updated 2026-10-03 after the scroll fix and the tray/user-service work.
-See [the handoff](HANDOFF.md) for the current working surfaces and commands.
+Updated 2026-10-03 after the scroll fix, owner surfaces, test-suite shrink and
+the Jev selector seam. See [the handoff](HANDOFF.md) for current commands.
 
 ## Done 2026-10-03
 
 1. Scroll effect grounding: fixed and host-verified in both directions with a
    reusable offline fixture. [doc 27](27-scroll-effect-verification.md).
 2. Owner surfaces: JSON config with CLI/env precedence, `systemd --user` unit
-   and `service install|status|uninstall`, and an AppIndicator tray whose live
-   mode stays behind a per-task confirmation. [doc 28](28-tray-and-user-service.md).
+   and `service install|status|uninstall`, AppIndicator tray with a settings
+   file and optional tray unit. Live mode stays behind a per-task confirmation.
+   [doc 28](28-tray-and-user-service.md).
+3. Durable audit with size/age rotation and session-journal pruning (ADR-021).
+4. Testing pit closed: 190 → 177 cases, `tools.check` core set, and a
+   change-to-check runbook. [doc 29](29-verification-runbook.md).
+5. Jev selector seam implemented offline-first and left unwired, with an
+   experiment plan. [doc 30](30-jev-selector-experiment.md).
 
 ## Small local follow-ups
 
-1. Diagnose the wait reader's invalid enum response with one retained, bounded
-   example when useful. Keep ordinary screenshots as the default meanwhile.
-2. Use targeted checks; avoid another broad test matrix for this personal tool.
-3. Optional: enable the user unit at login and click through the tray menu with
-the owner watching; neither was done by this session.
+1. Owner: enable the user unit at login (optionally with `--tray`) and click
+   through the tray menu and Settings dialog once, watched. Neither was done by
+   this session; SNI registration and logic were verified instead.
+2. Optional: one bounded look at the reader wait's `invalid_judgment`, or leave
+   it experimental. Polling is the documented default either way.
+3. Optional watched live checks (Firefox, cancellation/crash). Not important
+   enough to block anything; the vision path is already demonstrated.
+4. Jev: run Stage 0 (free) then Stage 1 (one call) from doc 30 and decide
+   whether Stage 2 is worth it.
+5. Later, only if a task needs it: nested/horizontal scroll regions.
 
 ## Local live support — Kate host check passed
 

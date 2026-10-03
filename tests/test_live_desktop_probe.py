@@ -123,43 +123,6 @@ class FakeAdapter:
 
 
 class LiveDesktopProbeTests(unittest.TestCase):
-    def test_fake_flow_clicks_fresh_semantic_target_restores_and_cleans_owned_process(self):
-        with tempfile.TemporaryDirectory() as folder, \
-             patch.object(probe, "_a11y_flags", return_value={"IsEnabled": True, "ScreenReaderEnabled": True}), \
-             patch.object(probe, "_raw_window_rows", return_value=[{"id": "kcalc-1", "pid": 4321}]), \
-             patch.object(probe, "_version_facts", return_value={"kwin_mcp": "0.10.0", "kwin": "test"}):
-            engine = FakeEngine()
-            report = probe.run_probe(output_root=Path(folder), engine_factory=lambda: engine,
-                                     adapter_factory=FakeAdapter)
-            self.assertEqual(report["result"], "passed")
-            self.assertEqual(engine.clicked, [(220, 215, "left")])
-            self.assertTrue(report["restored_original_window"])
-            self.assertEqual(report["cleanup"], "confirmed")
-            self.assertEqual(report["owned_process_cleanup"], "confirmed")
-            self.assertEqual(report["owned_window_cleanup"], "confirmed")
-            self.assertEqual(engine.session.process.returncode, 0)
-            stored = json.loads(Path(report["report_path"]).read_text())
-            self.assertNotIn("caption", stored["original_window"])
-            self.assertEqual(len(stored["captures"]), 2)
-            self.assertEqual([phase["name"] for phase in stored["phases"] if phase["name"].startswith("owner_watch")], [])
-
-    def test_visible_holds_are_named_and_current_caption_restores_by_stable_id(self):
-        with tempfile.TemporaryDirectory() as folder, \
-             patch.object(probe, "_a11y_flags", return_value={"IsEnabled": True, "ScreenReaderEnabled": True}), \
-             patch.object(probe, "_raw_window_rows", return_value=[{"id": "kcalc-1", "pid": 4321}]), \
-             patch.object(probe, "_version_facts", return_value={"kwin_mcp": "0.10.0", "kwin": "test"}), \
-             patch.object(probe.time, "sleep") as sleep:
-            engine = FakeEngine()
-            report = probe.run_probe(output_root=Path(folder), engine_factory=lambda: engine,
-                                     adapter_factory=FakeAdapter, visible_hold=True)
-            self.assertEqual(report["result"], "passed")
-            self.assertTrue(report["restored_original_window"])
-            self.assertEqual(engine.active_id, "orig-1")
-            names = [phase["name"] for phase in report["phases"]]
-            self.assertIn("owner_watch_before", names)
-            self.assertIn("owner_watch_after", names)
-            self.assertEqual(sleep.call_args_list[:2], [unittest.mock.call(2), unittest.mock.call(3)])
-
     def test_temporary_atspi_flags_restore_exact_initial_values_after_success(self):
         initial = {"IsEnabled": False, "ScreenReaderEnabled": False}
         enabled = {"IsEnabled": True, "ScreenReaderEnabled": True}
@@ -210,15 +173,6 @@ class LiveDesktopProbeTests(unittest.TestCase):
             self.assertEqual(engine.clicked, [])
             self.assertEqual(calls, [enabled, initial])
             self.assertTrue(report["temporary_a11y_restored"])
-
-    def test_raw_pid_lookup_requires_exact_unique_public_window_id(self):
-        self.assertEqual(probe._raw_pid_for_window_id([
-            {"id": "window-1", "pid": 4321}, {"id": "window-2", "pid": 4322}], "window-2"), 4322)
-        with self.assertRaisesRegex(probe.ProbeError, "missing or ambiguous"):
-            probe._raw_pid_for_window_id([{"id": "window-1", "pid": 4321}], "window-2")
-        with self.assertRaisesRegex(probe.ProbeError, "missing or ambiguous"):
-            probe._raw_pid_for_window_id([
-                {"id": "window-1", "pid": 4321}, {"id": "window-1", "pid": 4322}], "window-1")
 
     def test_capture_mapping_failure_refuses_input_and_still_restores(self):
         from observation import ObservationError

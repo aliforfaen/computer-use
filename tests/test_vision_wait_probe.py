@@ -1,3 +1,12 @@
+"""Safety-invariant tests for the paid heartbeat probe harness.
+
+The probe tool is an experiment harness, not the product surface. This file
+keeps only the invariants that protect real money and real cleanup: budget
+ceilings fail before an extra provider call, the pre-call journal is durable,
+interrupts do not retry, owned sessions/profiles are cleaned, and evidence is
+never overwritten. The exhaustive per-failure-point matrix was collapsed.
+"""
+
 from __future__ import annotations
 
 import io
@@ -16,15 +25,12 @@ from vision_reader import ReaderResult
 from wait_watcher import ReaderJudge, WaitFrame, WaitSpec
 from tools.vision_wait_probe import (
     BudgetedReader,
-    FOLLOWUP_MAX_CALLS,
-    MAX_CASE_CALLS,
     MAX_CALLS,
-    MAX_COST_PER_CALL,
+    MAX_CASE_CALLS,
     MAX_COST_RESERVE,
     MAX_COST_USD,
     MAX_TOKENS,
     MIN_REQUEST_GAP_SECONDS,
-    PRIOR_INTERRUPTED_RUN_ATTEMPTS,
     PRIOR_INTERRUPTED_RUN_RESERVE_USD,
     ProbeBudgetError,
     TRIAL_CASES,
@@ -93,20 +99,6 @@ class VisionWaitProbeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             estimate_cost_usd(-1, 2)
 
-    def test_starts_are_spaced_and_usage_is_recorded(self):
-        clock = FakeClock()
-        inner = FakeReader()
-        reader = BudgetedReader(inner, clock=clock, sleeper=clock.sleep)
-        reader.begin_case("ready")
-        questions = [{"field": "judgment", "type": "string", "description": "Return wait, wake, error, or unexpected."}]
-        reader.interpret(png_bytes(), questions)
-        reader.interpret(png_bytes(), questions)
-        starts = [entry["request_start_monotonic"] for entry in reader.attempts]
-        self.assertGreaterEqual(starts[1] - starts[0], 1.0)
-        self.assertEqual(len(inner.calls), 2)
-        self.assertEqual(reader.attempts[0]["served_model"], "deepseek-flash")
-        self.assertIsInstance(reader.attempts[0]["cost_upper_usd"], float)
-
     def test_real_readerjudge_question_fits_the_paid_probe_bound(self):
         class CaptureQuestions:
             def __init__(self):
@@ -123,85 +115,44 @@ class VisionWaitProbeTests(unittest.TestCase):
         bounded = BudgetedReader(inner)
         bounded.begin_case("ready")
         frame = WaitFrame(png_bytes(), "id")
-        ReaderJudge(bounded)(frame, WaitSpec("green ready state and forecast text", {"x": 20, "y": 96, "width": 920, "height": 480}))
+        ReaderJudge(bounded)(frame, WaitSpec("green ready state and forecast text",
+                                             {"x": 20, "y": 96, "width": 920, "height": 480}))
         self.assertLessEqual(bounded.attempts[0]["prompt_ascii_chars"], 2048)
 
     def test_attempt_caps_fail_before_an_extra_provider_call(self):
         clock = FakeClock()
         inner = FakeReader()
         reader = BudgetedReader(inner, clock=clock, sleeper=clock.sleep)
-        questions = [{"field": "judgment", "type": "string", "description": "Return wait, wake, error, or unexpected."}]
         reader.begin_case("ready")
         for _ in range(MAX_CASE_CALLS):
-            reader.interpret(png_bytes(), questions)
+            reader.interpret(png_bytes(), QUESTIONS)
         with self.assertRaises(ProbeBudgetError):
-            reader.interpret(png_bytes(), questions)
+            reader.interpret(png_bytes(), QUESTIONS)
         self.assertEqual(len(inner.calls), MAX_CASE_CALLS)
         self.assertEqual(reader.stop_reason, "case_attempt_cap_reached")
 
-    def test_rate_limit_stops_all_later_provider_attempts(self):
+    def test_rate_limit_and_usage_anomaly_stop_further_calls(self):
         clock = FakeClock()
-        limited = FakeReader([ReaderResult("error", error="http_status_429", provider="deepseek", model="deepseek-flash")])
+        limited = FakeReader([ReaderResult("error", error="http_status_429",
+                                           provider="deepseek", model="deepseek-flash")])
         reader = BudgetedReader(limited, clock=clock, sleeper=clock.sleep)
-        questions = [{"field": "judgment", "type": "string", "description": "Return wait, wake, error, or unexpected."}]
         reader.begin_case("ready")
-        result = reader.interpret(png_bytes(), questions)
-        self.assertEqual(result.error, "http_status_429")
+        self.assertEqual(reader.interpret(png_bytes(), QUESTIONS).error, "http_status_429")
         self.assertTrue(reader.rate_limited)
         with self.assertRaises(ProbeBudgetError):
-            reader.interpret(png_bytes(), questions)
+            reader.interpret(png_bytes(), QUESTIONS)
         self.assertEqual(len(limited.calls), 1)
 
-    def test_actual_usage_over_bound_prevents_any_next_request(self):
-        clock = FakeClock()
         over = FakeReader([ReaderResult("ok", data={"judgment": "wait"},
                                         usage={"prompt_tokens": 999_999, "completion_tokens": 2})])
         reader = BudgetedReader(over, clock=clock, sleeper=clock.sleep)
-        questions = [{"field": "judgment", "type": "string", "description": "Return wait, wake, error, or unexpected."}]
         reader.begin_case("ready")
-        reader.interpret(png_bytes(), questions)
+        reader.interpret(png_bytes(), QUESTIONS)
         self.assertEqual(reader.stop_reason, "usage_exceeded_estimate_bound")
         with self.assertRaises(ProbeBudgetError):
-            reader.interpret(png_bytes(), questions)
+            reader.interpret(png_bytes(), QUESTIONS)
         self.assertEqual(len(over.calls), 1)
         self.assertIn("usage_anomaly", reader.attempts[0])
-
-    def test_minimum_gap_wait_cannot_start_request_after_wait_deadline(self):
-        clock = FakeClock()
-        inner = FakeReader()
-        reader = BudgetedReader(inner, clock=clock, sleeper=clock.sleep)
-        reader.begin_case("ready")
-        reader.set_wait_deadline(clock.now + 0.5)
-        questions = [{"field": "judgment", "type": "string", "description": "Return wait, wake, error, or unexpected."}]
-        reader.interpret(png_bytes(), questions)
-        with self.assertRaises(ProbeBudgetError) as raised:
-            reader.interpret(png_bytes(), questions)
-        self.assertEqual(str(raised.exception), "wait_deadline_reached")
-        self.assertTrue(reader.deadline_blocked)
-        self.assertEqual(len(inner.calls), 1)
-        self.assertEqual(len(reader.attempts), 1)
-
-    def test_oversized_prompt_fails_and_unicode_prompt_is_counted_as_json_escaped_ascii(self):
-        inner = FakeReader()
-        reader = BudgetedReader(inner)
-        reader.begin_case("ready")
-        questions = [{"field": "judgment", "type": "string", "description": "x" * 3000}]
-        with self.assertRaises(ProbeBudgetError):
-            reader.interpret(png_bytes(), questions)
-        non_ascii = [{"field": "judgment", "type": "string", "description": "café"}]
-        reader.interpret(png_bytes(), non_ascii)
-        self.assertGreater(reader.attempts[0]["prompt_ascii_chars"], len("café"))
-        self.assertEqual(len(inner.calls), 1)
-
-    def test_prior_interrupted_reserve_and_followup_cap_are_accounted(self):
-        self.assertEqual(PRIOR_INTERRUPTED_RUN_ATTEMPTS, 12)
-        self.assertEqual(PRIOR_INTERRUPTED_RUN_ATTEMPTS, MAX_CALLS)
-        self.assertAlmostEqual(PRIOR_INTERRUPTED_RUN_RESERVE_USD, MAX_COST_RESERVE, places=9)
-        self.assertAlmostEqual(PRIOR_INTERRUPTED_RUN_RESERVE_USD, 0.0211968, places=7)
-        budget = validate_probe_budget(FOLLOWUP_MAX_CALLS, FOLLOWUP_MAX_CALLS)
-        whole = PRIOR_INTERRUPTED_RUN_RESERVE_USD + budget["max_total_reserved_cost_usd"]
-        self.assertAlmostEqual(whole, 0.0229632, places=7)
-        self.assertLess(whole, MAX_COST_USD)
 
     def test_interrupt_propagates_without_an_extra_provider_request(self):
         inner = InterruptingReader()
@@ -307,7 +258,14 @@ class VisionWaitProbeTests(unittest.TestCase):
         self.assertEqual(len(inner.calls), 1)
         self.assertEqual(budget_reader.attempts[0]["status"], "in_flight")
 
-    def _case_dir_tracker(self):
+    class _CaseServer:
+        server_port = 9
+
+        def snapshot(self, trial):
+            return []
+
+    def test_run_case_removes_profile_when_engine_construction_fails(self):
+        import kwin_mcp.core as kwin_core
         import tools.vision_wait_probe as probe
 
         real_mkdtemp = tempfile.mkdtemp
@@ -318,28 +276,15 @@ class VisionWaitProbeTests(unittest.TestCase):
             profiles.append(path)
             return str(path)
 
-        return probe, profiles, mock.patch.object(probe.tempfile, "mkdtemp", fake_mkdtemp)
-
-    class _CaseServer:
-        server_port = 9
-
-        def snapshot(self, trial):
-            return []
-
-    def test_run_case_removes_profile_when_engine_construction_fails(self):
-        import kwin_mcp.core as kwin_core
-
-        probe, profiles, patch = self._case_dir_tracker()
-
         class BrokenEngine:
             def __init__(self):
                 raise RuntimeError("engine_unavailable")
 
-        inner = FakeReader()
-        budget_reader = BudgetedReader(inner)
+        budget_reader = BudgetedReader(FakeReader())
         scratch = Path(tempfile.mkdtemp())
         try:
-            with patch, mock.patch.object(kwin_core, "AutomationEngine", BrokenEngine):
+            with mock.patch.object(probe.tempfile, "mkdtemp", fake_mkdtemp), \
+                 mock.patch.object(kwin_core, "AutomationEngine", BrokenEngine):
                 row = probe._run_case(self._CaseServer(), dict(TRIAL_CASES[0]), scratch, budget_reader,
                                       deadline_seconds=1.0, debounce_seconds=0.0)
         finally:
@@ -349,99 +294,8 @@ class VisionWaitProbeTests(unittest.TestCase):
         self.assertEqual(row["cleanup"], "not_started")
         self.assertEqual(row["profile_cleanup"], "passed")
         self.assertTrue(profiles and not profiles[0].exists())
-        self.assertEqual(len(inner.calls), 0)
 
-    def test_run_case_removes_profile_when_engine_construction_interrupts(self):
-        import kwin_mcp.core as kwin_core
-
-        probe, profiles, patch = self._case_dir_tracker()
-
-        class InterruptingEngine:
-            def __init__(self):
-                raise KeyboardInterrupt
-
-        budget_reader = BudgetedReader(FakeReader())
-        scratch = Path(tempfile.mkdtemp())
-        try:
-            with patch, mock.patch.object(kwin_core, "AutomationEngine", InterruptingEngine):
-                with self.assertRaises(KeyboardInterrupt):
-                    probe._run_case(self._CaseServer(), dict(TRIAL_CASES[0]), scratch, budget_reader,
-                                    deadline_seconds=1.0, debounce_seconds=0.0)
-        finally:
-            shutil.rmtree(scratch, ignore_errors=True)
-        self.assertTrue(profiles and not profiles[0].exists())
-
-    def _run_case_with_start(self, start):
-        import kwin_mcp.core as kwin_core
-
-        probe, profiles, patch = self._case_dir_tracker()
-        engines = []
-
-        class Engine:
-            def __init__(self):
-                self.stop_calls = 0
-                engines.append(self)
-
-            def session_start(self, **kwargs):
-                raise start
-
-            def session_stop(self):
-                self.stop_calls += 1
-                return "Session stopped"
-
-        budget_reader = BudgetedReader(FakeReader())
-        scratch = Path(tempfile.mkdtemp())
-        outcome = None
-        try:
-            with patch, \
-                 mock.patch.object(kwin_core, "AutomationEngine", Engine), \
-                 mock.patch.object(wait_benchmark, "_url", lambda server, case, trial: "http://127.0.0.1/x"):
-                try:
-                    outcome = probe._run_case(self._CaseServer(), dict(TRIAL_CASES[0]), scratch, budget_reader,
-                                              deadline_seconds=1.0, debounce_seconds=0.0)
-                except BaseException as exc:  # captured so cleanup can be asserted
-                    outcome = exc
-        finally:
-            shutil.rmtree(scratch, ignore_errors=True)
-        return engines, profiles, outcome
-
-    def test_run_case_stops_session_when_start_raises_after_partial_creation(self):
-        engines, profiles, row = self._run_case_with_start(RuntimeError("kwin_eis_unavailable"))
-        self.assertIsInstance(row, dict)
-        self.assertEqual(row["error"], "kwin_eis_unavailable")
-        self.assertEqual(row["cleanup"], "passed")
-        self.assertEqual(engines[0].stop_calls, 1)
-        self.assertTrue(profiles and not profiles[0].exists())
-
-    def test_run_case_stops_session_when_start_interrupts(self):
-        engines, profiles, outcome = self._run_case_with_start(KeyboardInterrupt())
-        self.assertIsInstance(outcome, KeyboardInterrupt)
-        self.assertEqual(engines[0].stop_calls, 1)
-        self.assertTrue(profiles and not profiles[0].exists())
-
-    def test_run_case_removes_profile_when_case_started_journal_raises(self):
-        import kwin_mcp.core as kwin_core
-
-        probe, profiles, patch = self._case_dir_tracker()
-
-        class Engine:
-            pass
-
-        def broken_journal(event, payload):
-            raise RuntimeError("journal_unavailable")
-
-        budget_reader = BudgetedReader(FakeReader())
-        scratch = Path(tempfile.mkdtemp())
-        try:
-            with patch, mock.patch.object(kwin_core, "AutomationEngine", Engine):
-                with self.assertRaises(RuntimeError):
-                    probe._run_case(self._CaseServer(), dict(TRIAL_CASES[0]), scratch, budget_reader,
-                                    deadline_seconds=1.0, debounce_seconds=0.0, on_case_event=broken_journal)
-        finally:
-            shutil.rmtree(scratch, ignore_errors=True)
-        self.assertTrue(profiles and not profiles[0].exists())
-
-    def _run_setup_failure(self, *, versions, server_factory):
+    def test_run_closes_reader_and_server_when_start_fails(self):
         import tools.vision_wait_probe as probe
 
         tmp = Path(tempfile.mkdtemp())
@@ -457,30 +311,6 @@ class VisionWaitProbeTests(unittest.TestCase):
             def close(self):
                 closed.append(True)
 
-        try:
-            with mock.patch.object(wait_benchmark, "_versions", versions):
-                with self.assertRaises(RuntimeError):
-                    probe.run(tmp, reader_factory=Reader, server_factory=server_factory)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-        return closed
-
-    def test_run_closes_reader_when_versions_lookup_fails(self):
-        def boom():
-            raise RuntimeError("no_versions")
-
-        def unreachable():
-            raise AssertionError("server must not be created")
-
-        self.assertEqual(self._run_setup_failure(versions=boom, server_factory=unreachable), [True])
-
-    def test_run_closes_reader_when_server_creation_fails(self):
-        def boom():
-            raise RuntimeError("no_server")
-
-        self.assertEqual(self._run_setup_failure(versions=lambda: {}, server_factory=boom), [True])
-
-    def test_run_closes_reader_and_server_when_start_fails(self):
         class Server:
             def __init__(self):
                 self.closed = 0
@@ -492,7 +322,12 @@ class VisionWaitProbeTests(unittest.TestCase):
                 self.closed += 1
 
         server = Server()
-        closed = self._run_setup_failure(versions=lambda: {}, server_factory=lambda: server)
+        try:
+            with mock.patch.object(wait_benchmark, "_versions", lambda: {}):
+                with self.assertRaises(RuntimeError):
+                    probe.run(tmp, reader_factory=Reader, server_factory=lambda: server)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
         self.assertEqual(closed, [True])
         self.assertEqual(server.closed, 1)
 

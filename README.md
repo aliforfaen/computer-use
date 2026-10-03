@@ -12,8 +12,15 @@ client. Jev is an optional future accelerator.
 - **Owner surfaces:** a private JSON config (CLI > env > file > default), a
   `systemd --user` unit with `service install|status|uninstall`, and an
   AppIndicator tray with status, a virtual/physical **preference**, session
-  cleanup and the kill switch. The tray never pre-authorizes live mode.
-  [Tray, service and config](docs/28-tray-and-user-service.md).
+  cleanup, settings and the kill switch. The tray never pre-authorizes live
+  mode. [Tray, service and config](docs/28-tray-and-user-service.md).
+- **Audit retention:** the audit log is durable at
+  `~/.config/jev-desktop/audit.jsonl`, size-rotated and age-pruned; stale session
+  journals are swept at startup. [ADR-021](docs/04-architecture.md).
+- **Jev selector seam:** `jev_selector.py` turns candidate output into an
+  enumerated decision request and validates the typed answer in code. Offline by
+  default, one-call `HttpSelector`, not wired into the loop.
+  [Experiment plan](docs/30-jev-selector-experiment.md).
 - **Scroll fixed:** the verifier now resolves the live scroll pane instead of an
   ambiguous `(role, label)` match, and failed verifications keep their evidence.
   Host-verified down and up on an offline fixture.
@@ -86,7 +93,7 @@ uv run jev-desktop tray
 | --- | --- |
 | Root Python modules | Service, clients, workers and shared capture/benchmark code. |
 | `tests/` | Offline unit tests, grouped by module. |
-| `tools/` | Standalone probes: service probe, MCP trial client, vision-wait probe, scroll-effect probe. |
+| `tools/` | Standalone probes and the fast core check: `check`, service probe, MCP trial client, vision-wait probe, scroll-effect probe. |
 | `benchmark_fixtures/` | Reusable local HTML fixtures. |
 | `docs/` | Current handoff, contracts, decisions and historical results. |
 | `run/` (ignored) | Captures, documents, timelines and trial evidence. |
@@ -94,15 +101,15 @@ uv run jev-desktop tray
 Run a targeted check from the repo root:
 
 ```bash
-uv run python -m unittest -v tests.test_live_owner
-uv run python -m tools.mcp_trial_client --help
+uv run python -m tools.check                      # fast core set (~4 s, 96 cases)
+uv run python -m unittest tests.test_live_owner   # one module
+uv run python -m unittest discover -s tests       # everything (~10 s, 177 cases)
 ```
 
-Full offline discovery, when a broad change warrants it:
-`uv run python -m unittest discover -s tests -v`.
-Probe commands can launch apps or call a provider; read their documented limits
-before running them. Shared benchmark modules remain at root because the
-runtime imports them.
+[Verification runbook](docs/29-verification-runbook.md) maps a change type to its
+cheapest check. Probe commands can launch apps or call a provider; read their
+documented limits before running them. Shared benchmark modules remain at root
+because the runtime imports them.
 
 ## Benchmarks and design
 

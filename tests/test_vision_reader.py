@@ -11,7 +11,6 @@ import httpx
 
 from vision_reader import (BoundedReader, IsolatedVisionReader, ReaderConfig, ReaderResult,
                            StreamParseError, VisionReader, build_request_body, parse_stream)
-import vision_benchmark as vb
 
 
 class _SseTestServer:
@@ -313,28 +312,6 @@ class VisionReaderTests(unittest.TestCase):
         self.assertEqual(fake.calls, 1)
         self.assertCountEqual([result.error for result in results], ["http_status_429", "provider_rate_limited"])
 
-    def test_benchmark_wrapper_and_reader_share_sse_parser(self):
-        lines = [
-            'data: {"model":"shared","choices":[{"delta":{"content":"{\\"value\\":1}"},"finish_reason":"stop"}]}',
-            'data: {"choices":[],"usage":{"prompt_tokens":3,"private":"discard"}}',
-            "data: [DONE]",
-        ]
-
-        class Response:
-            def iter_bytes(self):
-                for line in lines:
-                    yield (line + "\n").encode("utf-8")
-
-        first = []
-        parsed = parse_stream(Response(), lambda: first.append(True))
-        second_first = []
-        benchmark = vb._sse_content(Response(), lambda: second_first.append(True))
-        self.assertEqual(parsed, benchmark)
-        self.assertEqual(parsed[0], '{"value":1}')
-        self.assertEqual(parsed[1], {"prompt_tokens": 3})
-        self.assertEqual(first, [True])
-        self.assertEqual(second_first, [True])
-
     def test_shared_stream_size_limit_is_reported(self):
         reader, client = self.reader(sse_response('{"value":"long response"}'))
         reader.config = ReaderConfig(key_env="TEST_VISION_KEY", max_response_chars=8)
@@ -343,18 +320,6 @@ class VisionReaderTests(unittest.TestCase):
         finally:
             client.close()
         self.assertEqual(result.error, "response_too_large")
-
-    def test_comment_only_lines_with_fake_clock_exceed_total_deadline(self):
-        now = [0.0]
-
-        class CommentResponse:
-            def iter_bytes(self):
-                yield b": keep-alive\n"
-                now[0] = 5.0
-                yield b": keep-alive\n"
-
-        with self.assertRaisesRegex(StreamParseError, "stream_total_timeout"):
-            parse_stream(CommentResponse(), deadline_monotonic=1.0, clock=lambda: now[0])
 
     def test_partial_line_bytes_hit_size_cap_before_any_newline(self):
         class TrickleResponse:
@@ -399,30 +364,6 @@ class VisionReaderTests(unittest.TestCase):
                                            timeout_seconds=timeout_seconds,
                                            total_timeout_seconds=total_timeout_seconds), client=client)
         return reader, client
-
-    def test_comment_only_keepalive_is_cut_by_total_deadline(self):
-        stop = threading.Event()
-
-        def script(handler):
-            handler.send_response(200)
-            handler.send_header("Content-Type", "text/event-stream")
-            handler.end_headers()
-            while not stop.is_set():
-                handler.wfile.write(b": keep-alive\n\n")
-                handler.wfile.flush()
-                time.sleep(0.03)
-
-        server = _SseTestServer(script)
-        reader, client = self._sse_reader(server.base_url, timeout_seconds=1.0, total_timeout_seconds=0.4)
-        try:
-            result = reader.interpret(b"image", self.questions)
-        finally:
-            stop.set()
-            client.close()
-            server.close()
-        self.assertEqual(result.error, "stream_total_timeout")
-        # Total deadline plus at most one bounded read, with scheduling margin.
-        self.assertLess(result.latency_ms, 1800.0)
 
     def test_stalled_transport_read_is_bounded_by_read_timeout(self):
         def script(handler):

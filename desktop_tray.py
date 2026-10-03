@@ -4,6 +4,9 @@ Runs as its own process and talks to the owner over the same private Unix
 socket as the CLI and MCP clients. It never reads or writes session state, and
 it cannot pre-authorize a live task: starting a physical-desktop task always
 needs the owner's explicit confirmation in a dialog for that one task.
+
+Settings live in ``~/.config/jev-desktop/tray.json`` (0600). The desktop-mode
+entry is a *preference* for tray-started tasks, never an authorization.
 """
 
 from __future__ import annotations
@@ -18,37 +21,60 @@ from pathlib import Path
 from typing import Any, Callable
 
 from desktop_cli import ipc_call
+from desktop_daemon import default_config_dir
 
-POLL_SECONDS = 3.0
 MODE_VIRTUAL = "virtual"
 MODE_LIVE = "live"
+VALID_MODES = (MODE_VIRTUAL, MODE_LIVE)
+VALID_AUTONOMY = ("supervised", "guarded", "yolo")
 ICON_CANDIDATES = ("input-mouse", "input-tablet", "preferences-desktop", "computer")
 SERVICE_VERBS = ("start", "stop", "enable", "disable")
 
+DEFAULT_SETTINGS: dict[str, Any] = {
+    "desktop_mode": MODE_VIRTUAL,
+    "autonomy_mode": "guarded",
+    "poll_seconds": 3.0,
+    "confirm_kill_switch": True,
+    "confirm_cleanup": True,
+}
 
-def default_tray_config_path() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME")
-    root = Path(base) if base else Path.home() / ".config"
-    return root / "jev-desktop" / "tray.json"
+
+def default_settings_path() -> Path:
+    return default_config_dir() / "tray.json"
 
 
-def load_preference(path: Path) -> dict[str, str]:
+def load_settings(path: Path) -> dict[str, Any]:
+    """Load tray settings; any missing or invalid value falls back to the default."""
+    settings = dict(DEFAULT_SETTINGS)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return {"desktop_mode": MODE_VIRTUAL}
-    mode = data.get("desktop_mode") if isinstance(data, dict) else None
-    return {"desktop_mode": mode if mode in (MODE_VIRTUAL, MODE_LIVE) else MODE_VIRTUAL}
+        return settings
+    if not isinstance(data, dict):
+        return settings
+    if data.get("desktop_mode") in VALID_MODES:
+        settings["desktop_mode"] = data["desktop_mode"]
+    if data.get("autonomy_mode") in VALID_AUTONOMY:
+        settings["autonomy_mode"] = data["autonomy_mode"]
+    poll = data.get("poll_seconds")
+    if isinstance(poll, (int, float)) and not isinstance(poll, bool) and 1 <= poll <= 30:
+        settings["poll_seconds"] = float(poll)
+    for key in ("confirm_kill_switch", "confirm_cleanup"):
+        if isinstance(data.get(key), bool):
+            settings[key] = data[key]
+    return settings
 
 
-def save_preference(path: Path, mode: str) -> None:
-    if mode not in (MODE_VIRTUAL, MODE_LIVE):
-        raise ValueError("invalid_desktop_mode")
+def save_settings(path: Path, settings: dict[str, Any]) -> None:
+    validated = dict(DEFAULT_SETTINGS)
+    validated.update({key: value for key, value in settings.items() if key in DEFAULT_SETTINGS})
+    if validated["desktop_mode"] not in VALID_MODES or validated["autonomy_mode"] not in VALID_AUTONOMY:
+        raise ValueError("invalid_tray_settings")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.write(fd, (json.dumps({"desktop_mode": mode}) + "\n").encode("utf-8"))
+        os.write(fd, (json.dumps(validated, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     finally:
         os.close(fd)
     os.replace(temporary, path)
@@ -66,13 +92,13 @@ class DesktopTray:
     """GTK main-loop object; every owner or systemctl call runs off-thread."""
 
     def __init__(self, *, socket: Path | None, unit: str, gtk: Any, glib: Any, appindicator: Any,
-                 preference_path: Path | None = None) -> None:
+                 settings_path: Path | None = None) -> None:
         self.gtk = gtk
         self.glib = glib
         self.socket = socket
         self.unit = unit
-        self.preference_path = preference_path or default_tray_config_path()
-        self.preference = load_preference(self.preference_path)
+        self.settings_path = settings_path or default_settings_path()
+        self.settings = load_settings(self.settings_path)
         self.status: dict[str, Any] | None = None
         self.capabilities: dict[str, Any] | None = None
         self.service_state: tuple[str, str] = ("unknown", "unknown")
@@ -129,7 +155,9 @@ class DesktopTray:
         self.item_session.set_sensitive(False)
         self.item_service = gtk.MenuItem(label="Service: checking…")
         self.item_service.set_sensitive(False)
-        for item in (self.item_owner, self.item_session, self.item_service):
+        self.item_error = gtk.MenuItem(label="")
+        self.item_error.set_sensitive(False)
+        for item in (self.item_owner, self.item_session, self.item_service, self.item_error):
             menu.append(item)
         menu.append(gtk.SeparatorMenuItem())
 
@@ -170,6 +198,14 @@ class DesktopTray:
         menu.append(service_root)
         menu.append(gtk.SeparatorMenuItem())
 
+        self.item_settings = gtk.MenuItem(label="Settings…")
+        self.item_settings.connect("activate", self._on_settings)
+        menu.append(self.item_settings)
+        self.item_open_config = gtk.MenuItem(label="Open config folder")
+        self.item_open_config.connect("activate", self._on_open_config)
+        menu.append(self.item_open_config)
+        menu.append(gtk.SeparatorMenuItem())
+
         self.item_kill = gtk.MenuItem(label="Stop all and shut down owner")
         self.item_kill.connect("activate", self._on_kill_switch)
         menu.append(self.item_kill)
@@ -188,8 +224,8 @@ class DesktopTray:
     def _set_modes(self) -> None:
         self._syncing = True
         try:
-            self.mode_virtual.set_active(self.preference["desktop_mode"] == MODE_VIRTUAL)
-            self.mode_live.set_active(self.preference["desktop_mode"] == MODE_LIVE)
+            self.mode_virtual.set_active(self.settings["desktop_mode"] == MODE_VIRTUAL)
+            self.mode_live.set_active(self.settings["desktop_mode"] == MODE_LIVE)
         finally:
             self._syncing = False
 
@@ -202,13 +238,21 @@ class DesktopTray:
             placeholder.set_sensitive(False)
             self.start_menu.append(placeholder)
         else:
-            for app in apps:
+            for app in sorted(apps):
                 item = self.gtk.MenuItem(label=app)
                 item.connect("activate", self._on_start, app)
                 self.start_menu.append(item)
         self.start_menu.show_all()
 
     # ---------------------------------------------------------------- refresh
+    def _session_summary(self, session: dict[str, Any]) -> str:
+        summary = (f"{session.get('app')} · {session.get('desktop_mode')} · {session.get('state')}"
+                   f" · {int(session.get('age_seconds') or 0)}s")
+        actions, cap = session.get("actions"), session.get("action_cap")
+        if isinstance(actions, int) and isinstance(cap, int):
+            summary += f" · act {actions}/{cap}"
+        return summary
+
     def _refresh_labels(self) -> None:
         if self.owner_state == "running":
             self.item_owner.set_label(f"Owner: running{self._owner_suffix()}")
@@ -216,9 +260,7 @@ class DesktopTray:
             self.item_owner.set_label("Owner: stopped (or unreachable)")
         session = (self.status or {}).get("session")
         if isinstance(session, dict):
-            self.item_session.set_label(
-                f"Session: {session.get('app')} · {session.get('desktop_mode')} · {session.get('state')}"
-                f" · {int(session.get('age_seconds') or 0)}s")
+            self.item_session.set_label(f"Session: {self._session_summary(session)}")
             self.item_cleanup.set_sensitive(True)
             self.start_root.set_sensitive(False)
         else:
@@ -229,16 +271,22 @@ class DesktopTray:
         active, enabled = self.service_state
         if active == "unavailable":
             self.item_service.set_label("Service: systemctl unavailable")
-        elif active in {"inactive", "unknown", "failed"} and enabled == "disabled":
+        elif active in {"inactive", "unknown", "failed"} and enabled in {"disabled", "not-found"}:
             self.item_service.set_label("Service: not installed/active")
         else:
             self.item_service.set_label(f"Service: {active} · {enabled}")
-        mode = self.preference["desktop_mode"]
+        if self.error:
+            self.item_error.set_label(f"Last error: {self.error[:60]}")
+            self.item_error.set_sensitive(False)
+        else:
+            self.item_error.set_label("")
+        mode = self.settings["desktop_mode"]
         self.indicator.set_title(f"Jev desktop ({mode})")
         self._set_modes()
-        if self.preference["desktop_mode"] == MODE_LIVE:
-            self.item_owner.set_tooltip_text(
-                "Physical mode still requires a per-task owner-present confirmation in the dialog.")
+        tooltip = f"Jev desktop — {mode} preference, autonomy {self.settings['autonomy_mode']}"
+        if isinstance(session, dict):
+            tooltip += f"; session {session.get('app')} ({session.get('desktop_mode')})"
+        self.item_owner.set_tooltip_text(tooltip)
 
     def _owner_suffix(self) -> str:
         session = (self.status or {}).get("session")
@@ -277,21 +325,16 @@ class DesktopTray:
         self._async(work, done)
 
     def _poll_loop(self) -> None:
-        self._poll_once()
-        self._stop.wait(POLL_SECONDS)
         while not self._stop.is_set():
             self._poll_once()
-            self._stop.wait(POLL_SECONDS)
+            self._stop.wait(self.settings["poll_seconds"])
 
     # --------------------------------------------------------------- handlers
     def _on_mode(self, item: Any, mode: str) -> None:
         if self._syncing:
             return
-        self.preference["desktop_mode"] = mode
-        try:
-            save_preference(self.preference_path, mode)
-        except (OSError, ValueError) as exc:
-            self.error = str(exc)
+        self.settings["desktop_mode"] = mode
+        self._persist_settings()
         if mode == MODE_LIVE:
             self._inform("Physical desktop selected",
                          "A live task is only started after you confirm, in the dialog, that you are "
@@ -299,8 +342,8 @@ class DesktopTray:
         self._refresh_labels()
 
     def _on_start(self, item: Any, app: str) -> None:
-        mode = self.preference["desktop_mode"]
-        params: dict[str, Any] = {"app": app, "mode": "guarded", "desktop_mode": mode}
+        mode = self.settings["desktop_mode"]
+        params: dict[str, Any] = {"app": app, "mode": self.settings["autonomy_mode"], "desktop_mode": mode}
         if mode == MODE_LIVE:
             if not self._confirm_live(app):
                 return
@@ -318,6 +361,11 @@ class DesktopTray:
         self._async(lambda: self.call("session_start", params), done)
 
     def _on_cleanup(self, item: Any) -> None:
+        if self.settings["confirm_cleanup"] and not self._confirm(
+                "Stop the active session and close its owned app?",
+                "Cleanup restores focus and accessibility; the result reports confirmed or unconfirmed."):
+            return
+
         def done(ok: bool, value: Any) -> None:
             if ok:
                 cleanup = value.get("cleanup") if isinstance(value, dict) else None
@@ -350,8 +398,9 @@ class DesktopTray:
         self._async(work, done)
 
     def _on_kill_switch(self, item: Any) -> None:
-        if not self._confirm("Stop all sessions and shut down the owner?",
-                             "This stops the active session, closes its owned app and exits the owner."):
+        if self.settings["confirm_kill_switch"] and not self._confirm(
+                "Stop all sessions and shut down the owner?",
+                "This stops the active session, closes its owned app and exits the owner."):
             return
 
         def work() -> dict[str, Any]:
@@ -371,6 +420,76 @@ class DesktopTray:
             self._poll_once()
 
         self._async(work, done)
+
+    def _on_open_config(self, item: Any) -> None:
+        folder = self.settings_path.parent
+
+        def work() -> str:
+            try:
+                subprocess.run(["xdg-open", str(folder)], capture_output=True, timeout=20)
+                return str(folder)
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                return str(folder)
+
+        def done(ok: bool, value: Any) -> None:
+            if not ok:
+                self._inform("Config folder", str(folder))
+
+        self._async(work, done)
+
+    def _persist_settings(self) -> bool:
+        try:
+            save_settings(self.settings_path, self.settings)
+            return True
+        except (OSError, ValueError) as exc:
+            self.error = str(exc)
+            return False
+
+    def _on_settings(self, item: Any) -> None:
+        gtk = self.gtk
+        dialog = gtk.Dialog(title="Jev desktop tray settings")
+        dialog.add_buttons("Cancel", gtk.ResponseType.CANCEL, "Save", gtk.ResponseType.OK)
+        area = dialog.get_content_area()
+        grid = gtk.Grid(column_spacing=12, row_spacing=8)
+        area.add(grid)
+
+        autonomy = gtk.ComboBoxText()
+        for value in VALID_AUTONOMY:
+            autonomy.append_text(value)
+        autonomy.set_active(VALID_AUTONOMY.index(self.settings["autonomy_mode"]))
+        desktop = gtk.ComboBoxText()
+        for value in VALID_MODES:
+            desktop.append_text(value)
+        desktop.set_active(VALID_MODES.index(self.settings["desktop_mode"]))
+        poll = gtk.SpinButton.new_with_range(1, 30, 1)
+        poll.set_value(float(self.settings["poll_seconds"]))
+        confirm_kill = gtk.CheckButton(label="Confirm stop-all and shutdown")
+        confirm_kill.set_active(bool(self.settings["confirm_kill_switch"]))
+        confirm_cleanup = gtk.CheckButton(label="Confirm session cleanup")
+        confirm_cleanup.set_active(bool(self.settings["confirm_cleanup"]))
+
+        for row, (label, widget) in enumerate((
+                ("Autonomy for tray-started tasks", autonomy),
+                ("Desktop mode preference", desktop),
+                ("Status refresh seconds", poll),
+                ("", confirm_kill),
+                ("", confirm_cleanup))):
+            if label:
+                grid.attach(gtk.Label(label=label), 0, row, 1, 1)
+            grid.attach(widget, 1, row, 1, 1)
+        area.add(gtk.Label(label="Live tasks always require a per-task confirmation dialog."))
+        dialog.show_all()
+        response = dialog.run()
+        if response == gtk.ResponseType.OK:
+            self.settings.update(
+                autonomy_mode=VALID_AUTONOMY[autonomy.get_active()],
+                desktop_mode=VALID_MODES[desktop.get_active()],
+                poll_seconds=float(poll.get_value()),
+                confirm_kill_switch=bool(confirm_kill.get_active()),
+                confirm_cleanup=bool(confirm_cleanup.get_active()))
+            self._persist_settings()
+        dialog.destroy()
+        self._refresh_labels()
 
     def _on_quit(self, item: Any) -> None:
         self._stop.set()
@@ -421,7 +540,8 @@ class DesktopTray:
         return 0
 
 
-def tray_main(*, socket: Path | None = None, unit: str = "jev-desktop") -> int:
+def tray_main(*, socket: Path | None = None, unit: str = "jev-desktop",
+              settings_path: Path | None = None) -> int:
     try:
         import gi
 
@@ -432,7 +552,8 @@ def tray_main(*, socket: Path | None = None, unit: str = "jev-desktop") -> int:
         print("tray_unavailable: PyGObject and libayatana-appindicator are required "
               f"({type(exc).__name__})", file=sys.stderr)
         return 2
-    tray = DesktopTray(socket=socket, unit=unit, gtk=Gtk, glib=GLib, appindicator=AyatanaAppIndicator3)
+    tray = DesktopTray(socket=socket, unit=unit, gtk=Gtk, glib=GLib, appindicator=AyatanaAppIndicator3,
+                       settings_path=settings_path)
     return tray.run()
 
 
@@ -441,8 +562,10 @@ def main(argv: list[str] | None = None) -> int:
                                      description="Tray indicator for the local Jev desktop owner.")
     parser.add_argument("--socket", type=Path, default=None, help="owner Unix socket path")
     parser.add_argument("--unit", default="jev-desktop", help="systemd --user unit name the tray controls")
+    parser.add_argument("--settings", type=Path, default=None,
+                        help="tray settings file (default: ~/.config/jev-desktop/tray.json)")
     args = parser.parse_args(argv)
-    return tray_main(socket=args.socket, unit=args.unit)
+    return tray_main(socket=args.socket, unit=args.unit, settings_path=args.settings)
 
 
 if __name__ == "__main__":  # pragma: no cover

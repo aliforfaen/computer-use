@@ -127,7 +127,12 @@ preserve the owner's `isError` result. Client disconnect does not implicitly
 cancel an owner operation; use `desktop_cancel`, `desktop_session_stop` or
 `desktop_stop_all` explicitly.
 
-`desktop_wait` is a bounded read-only screenshot heartbeat. It takes a
+`desktop_wait` is a bounded read-only screenshot heartbeat and is
+**experimental**: both recorded trials returned `invalid_judgment` while ordinary
+polling completed the same tasks, so `capabilities` reports
+`wait.status = "experimental"` and the CLI/MCP descriptions recommend polling
+`candidates`/`observe` instead ([doc 24](24-primary-agent-wait-comparison.md),
+[doc 29](29-verification-runbook.md)). It takes a
 caller-authored visual condition and a deadline up to 120 seconds. The owner
 captures the complete app window with at least a 500 ms interval, coalesces
 while one reader judgment is in flight, and requires the same positive
@@ -155,21 +160,30 @@ Settings resolve with CLI > `JEV_DESKTOP_*` env > config file > built-in
 default. The config path is `--config`, else `$JEV_DESKTOP_CONFIG`, else
 `${XDG_CONFIG_HOME:-~/.config}/jev-desktop/config.json`; unknown keys and wrong
 types are rejected, and the file never holds secret values (a reader key stays
-in the environment or `dotenv`). See [doc 28](28-tray-and-user-service.md).
+in the environment or `dotenv`). Besides `allowed_apps`, limits and reader
+names, the config tunes audit retention (`audit_max_bytes`, `audit_backups`,
+`audit_max_age_days`). The audit itself is durable at
+`~/.config/jev-desktop/audit.jsonl`, size-rotated and age-pruned, with stale
+session journals swept at startup; the socket and live session journals stay in
+the private runtime directory. See [doc 28](28-tray-and-user-service.md) and
+ADR-021.
 
 `jev-desktop service install|status|uninstall` renders and manages the
-`systemd --user` unit around `daemon --foreground --config <config>`. The
-installer seeds a `0600` starter config only when none exists, never enables the
-unit, and `uninstall` refuses an active unit without `--stop`. Stopping the unit
-uses the daemon's existing SIGTERM cleanup, so focus/accessibility restoration
-and owned-app cleanup still run; the simple kill switch is unchanged.
+`systemd --user` unit around `daemon --foreground --config <config>`.
+`--tray` also writes `jev-desktop-tray.service`. The installer seeds a `0600`
+starter config only when none exists, never enables a unit, and `uninstall`
+refuses an active unit without `--stop`. Stopping a unit uses the daemon's
+existing SIGTERM cleanup, so focus/accessibility restoration and owned-app
+cleanup still run; the simple kill switch is unchanged.
 
 `jev-desktop tray` runs a KDE StatusNotifierItem client of the same socket with
 status lines, a virtual/physical **preference**, per-app task start, session
 cleanup (with the cleanup confirmation surfaced), service start/stop/enable and
-the stop-all-and-shutdown kill switch. The mode preference is not authorization:
-a live start always opens a per-task dialog confirming owner presence and
-temporary accessibility, so ADR-018 is preserved.
+the stop-all-and-shutdown kill switch. Tray behaviour is configurable in
+`~/.config/jev-desktop/tray.json` (desktop mode, autonomy mode, poll interval,
+confirmation toggles) through a Settings dialog. The mode preference is not
+authorization: a live start always opens a per-task dialog confirming owner
+presence and temporary accessibility, so ADR-018 is preserved.
 
 ## Cancellation and cleanup limits
 

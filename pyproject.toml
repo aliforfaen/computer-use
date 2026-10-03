@@ -23,7 +23,7 @@ jev-desktop-tray = "desktop_tray:main"
 [tool.setuptools]
 py-modules = [
     "benchmark_capture",
-    "agent_wait_trial_fixture",
+    "audit_log",
     "desktop_cli",
     "desktop_daemon",
     "desktop_mcp",
@@ -32,6 +32,7 @@ py-modules = [
     "desktop_tray",
     "desktop_worker",
     "jev_accessibility_worker",
+    "jev_selector",
     "live_desktop_probe",
     "observation",
     "owner_wait",

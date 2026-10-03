@@ -14,8 +14,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from desktop_daemon import _apply_config, _make_service, load_config
-from desktop_service_unit import UNIT_NAME, _install, _status, _uninstall, render_unit
-from desktop_tray import DesktopTray, MODE_LIVE, MODE_VIRTUAL, load_preference, save_preference
+from desktop_service_unit import UNIT_NAME, TRAY_UNIT_NAME, _install, _status, _uninstall, render_tray_unit, render_unit
+from desktop_tray import (DesktopTray, DEFAULT_SETTINGS, MODE_LIVE, MODE_VIRTUAL, load_settings,
+                          save_settings)
 
 
 def _args(**overrides) -> Namespace:
@@ -23,7 +24,7 @@ def _args(**overrides) -> Namespace:
                 idle_timeout=None, max_session_lifetime=None, max_actions=None, max_observations=None,
                 reader_provider=None, reader_base_url=None, reader_model=None, reader_key_env=None,
                 reader_timeout=None, reader_total_timeout=None, max_reader_calls=None,
-                allowed_apps=None, unit_dir=None, service_command=None, stop=False)
+                allowed_apps=None, unit_dir=None, service_command=None, stop=False, tray=False)
     base.update(overrides)
     return Namespace(**base)
 
@@ -90,6 +91,9 @@ class ServiceUnitTests(unittest.TestCase):
         self.assertIn("PartOf=graphical-session.target", rendered)
         self.assertIn("NoNewPrivileges=yes", rendered)
         self.assertIn("EnvironmentFile=-%h/.config/jev-desktop/daemon.env", rendered)
+        tray = render_tray_unit()
+        self.assertIn(" tray", tray)
+        self.assertIn("ConditionEnvironment=WAYLAND_DISPLAY", tray)
 
     def test_install_seeds_private_config_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -113,6 +117,30 @@ class ServiceUnitTests(unittest.TestCase):
                 with contextlib.redirect_stdout(buffer):
                     self.assertEqual(_install(_args(allow_app=["kcalc"], config=config), units), 2)
                 self.assertEqual(json.loads(config.read_text())["allowed_apps"], ["kate", "firefox"])
+
+    def test_install_with_tray_writes_both_units_and_uninstall_removes_them(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "config.json"
+            units = root / "units"
+            with patch("desktop_service_unit._systemctl", return_value=None):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    self.assertEqual(_install(_args(allow_app=["kate"], config=config, tray=True), units), 0)
+                self.assertEqual(json.loads(buffer.getvalue())["units"].keys(),
+                                 {UNIT_NAME, TRAY_UNIT_NAME})
+                self.assertTrue((units / TRAY_UNIT_NAME).exists())
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    self.assertEqual(_status(_args(config=config), units), 0)
+                report = json.loads(buffer.getvalue())
+                self.assertTrue(report["tray"]["installed"])
+                self.assertFalse(report["tray"]["drift"])
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    self.assertEqual(_uninstall(_args(), units), 0)
+                self.assertFalse((units / UNIT_NAME).exists())
+                self.assertFalse((units / TRAY_UNIT_NAME).exists())
 
     def test_install_requires_an_allowlist_when_no_config_exists(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -158,21 +186,28 @@ class ServiceUnitTests(unittest.TestCase):
                     self.assertFalse((units / UNIT_NAME).exists())
 
 
-class TrayPreferenceTests(unittest.TestCase):
-    def test_preference_roundtrip_is_private_and_fails_closed(self):
+class TraySettingsTests(unittest.TestCase):
+    def test_settings_roundtrip_is_private_and_fails_closed(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "nested" / "tray.json"
-            self.assertEqual(load_preference(path), {"desktop_mode": MODE_VIRTUAL})
-            save_preference(path, MODE_LIVE)
-            self.assertEqual(load_preference(path), {"desktop_mode": MODE_LIVE})
+            self.assertEqual(load_settings(path), DEFAULT_SETTINGS)
+            save_settings(path, {"desktop_mode": MODE_LIVE, "autonomy_mode": "yolo", "poll_seconds": 7,
+                                 "confirm_kill_switch": False, "confirm_cleanup": False})
+            loaded = load_settings(path)
+            self.assertEqual(loaded["desktop_mode"], MODE_LIVE)
+            self.assertEqual(loaded["autonomy_mode"], "yolo")
+            self.assertEqual(loaded["poll_seconds"], 7.0)
+            self.assertFalse(loaded["confirm_kill_switch"])
+            self.assertFalse(loaded["confirm_cleanup"])
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
-            path.write_text('{"desktop_mode": "sideways"}', encoding="utf-8")
-            self.assertEqual(load_preference(path), {"desktop_mode": MODE_VIRTUAL})
+
+            path.write_text('{"desktop_mode": "sideways", "autonomy_mode": "chaos", "poll_seconds": 900}',
+                            encoding="utf-8")
+            self.assertEqual(load_settings(path), DEFAULT_SETTINGS)
             path.write_text("not json", encoding="utf-8")
-            self.assertEqual(load_preference(path), {"desktop_mode": MODE_VIRTUAL})
+            self.assertEqual(load_settings(path), DEFAULT_SETTINGS)
             with self.assertRaises(ValueError):
-                save_preference(path, "sideways")
-            self.assertEqual(load_preference(path), {"desktop_mode": MODE_VIRTUAL})
+                save_settings(path, {"desktop_mode": "sideways"})
 
 
 class _FakeWidget:
@@ -298,8 +333,9 @@ class TrayLogicTests(unittest.TestCase):
         tray.glib = types.SimpleNamespace(idle_add=lambda fn, *a: (fn(*a), False)[1])
         tray.socket = None
         tray.unit = "jev-desktop"
-        tray.preference_path = Path("/nonexistent/tray.json")
-        tray.preference = {"desktop_mode": MODE_VIRTUAL}
+        tray.settings_path = Path("/nonexistent/tray.json")
+        tray.settings = dict(DEFAULT_SETTINGS)
+        tray._persist_settings = lambda: True
         tray.status = None
         tray.capabilities = {"allowed_apps": ["kate"]}
         tray.service_state = ("inactive", "disabled")
@@ -328,13 +364,13 @@ class TrayLogicTests(unittest.TestCase):
 
     def test_live_start_requires_the_per_task_confirmation(self):
         tray = self._tray()
-        tray.preference["desktop_mode"] = MODE_LIVE
+        tray.settings["desktop_mode"] = MODE_LIVE
         tray._confirm_live = lambda app: False
         tray._on_start(None, "kate")
         self.assertEqual([call for call in tray.calls if call[0] == "session_start"], [])
 
         tray = self._tray()
-        tray.preference["desktop_mode"] = MODE_LIVE
+        tray.settings["desktop_mode"] = MODE_LIVE
         tray._confirm_live = lambda app: True
         tray._on_start(None, "kate")
         method, params = tray.calls[0]
@@ -351,6 +387,24 @@ class TrayLogicTests(unittest.TestCase):
         tray._confirm = lambda *_: True
         tray._on_kill_switch(None)
         self.assertEqual([call[0] for call in tray.calls][:2], ["stop_all", "shutdown"])
+
+    def test_autonomy_and_confirmation_settings_reach_the_actions(self):
+        tray = self._tray()
+        tray.settings["autonomy_mode"] = "supervised"
+        tray._on_start(None, "kate")
+        self.assertEqual(tray.calls[0][1]["mode"], "supervised")
+
+        tray = self._tray()
+        tray.settings["confirm_kill_switch"] = False
+        tray._confirm = lambda *_: (_ for _ in ()).throw(AssertionError("must not prompt"))
+        tray._on_kill_switch(None)
+        self.assertEqual([call[0] for call in tray.calls][:2], ["stop_all", "shutdown"])
+
+        tray = self._tray()
+        tray.settings["confirm_cleanup"] = False
+        tray._confirm = lambda *_: (_ for _ in ()).throw(AssertionError("must not prompt"))
+        tray._on_cleanup(None)
+        self.assertEqual([call[0] for call in tray.calls], ["stop_all", "status"])
 
     def test_labels_reflect_owner_state(self):
         tray = self._tray()

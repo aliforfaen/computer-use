@@ -53,7 +53,7 @@ def _tools() -> list[types.Tool]:
             "capture_id": _string("Reuse an unexpired capture ID from the same session."),
             "questions": {"type": "array", "items": _obj({"field": {"type": "string", "maxLength": 80}, "type": _string(enum=["string", "number", "integer", "boolean", "array", "object"]), "description": {"type": "string", "maxLength": 500}, "nullable": {"type": "boolean"}}, ["field", "type", "description"]), "maxItems": 8},
         }, ["app"]), True, False),
-        ("desktop_wait", "Wait for a bounded screenshot condition using the configured reader. Returns a fresh final app image; this never performs an action.", _obj({
+        ("desktop_wait", "EXPERIMENTAL heartbeat: wait for a bounded screenshot condition using the configured reader. Prefer polling desktop_observe/desktop_candidates. Returns a fresh final app image; this never performs an action.", _obj({
             "app": app,
             "expected": {"type": "string", "minLength": 1, "maxLength": 500,
                 "description": "Caller-authored visual condition. The reader can only return wait, wake, error or unexpected; it cannot act."},

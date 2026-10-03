@@ -4,7 +4,21 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**Latest work (2026-10-03):** scrolling is fixed and host-verified in both
+**Latest work (2026-10-03, later session):** the testing pit was closed and the
+owner surfaces finished. The suite went 190 → 177 cases by collapsing historical
+harness matrices; `uv run python -m tools.check` is the 96-case core set (~4 s)
+and [doc 29](docs/29-verification-runbook.md) maps a change to its cheapest
+check. The heartbeat wait is reported `experimental` in `capabilities`, the CLI
+help and the MCP description, with polling named as the recommended loop. The
+audit is durable at `~/.config/jev-desktop/audit.jsonl` with size/age rotation
+and journal pruning (ADR-021). Tray settings live in `tray.json`
+(ADR-022) and `service install --tray` can add the indicator unit without ever
+enabling it. `jev_selector.py` + `tools/jev_selector_probe.py` implement the
+enumerated-options Jev selector offline-first, unwired, for the owner's
+decision-model experiment ([doc 30](docs/30-jev-selector-experiment.md)); ADR-011
+stays proposed.
+
+**Previous work (2026-10-03):** scrolling is fixed and host-verified in both
 directions. Firefox exposes a hidden second `scroll pane` with the same
 role/label/bounds as the live one; the verifier now resolves the live element
 and failed verifications keep their evidence in the audit. Owner surfaces were
@@ -43,9 +57,10 @@ request processes. The current reader authorization superseded the older
 consumed paid-probe cap and dollar-reservation refusal.
 
 **Testing preference:** this is the owner's small personal tool. Use targeted
-checks for changed behavior and small useful host probes. Avoid repeated full
-suites and large matrices unless a concrete failure or broad change requires
-one. The owner reduced this session's comparison from eight to four trials.
+checks for changed behavior and small useful host probes; `tools.check` first.
+Avoid repeated full suites and large matrices unless a concrete failure or broad
+change requires one. The owner reduced this session's comparison from eight to
+four trials.
 
 ## Start here
 

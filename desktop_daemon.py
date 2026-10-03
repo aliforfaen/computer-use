@@ -27,6 +27,7 @@ ALLOW_APPS_ENV = "JEV_DESKTOP_ALLOW_APPS"
 _CONFIG_KEYS = frozenset({
     "allowed_apps", "run_dir", "audit", "socket", "dotenv",
     "idle_timeout", "max_session_lifetime", "max_actions", "max_observations", "reader",
+    "audit_max_bytes", "audit_backups", "audit_max_age_days",
 })
 _READER_KEYS = frozenset({
     "provider", "base_url", "model", "key_env", "timeout_seconds",
@@ -52,10 +53,19 @@ def default_socket_path() -> Path:
     return Path(configured) if configured else default_run_dir() / "owner.sock"
 
 
-def default_config_path() -> Path:
+def default_config_dir() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME")
     root = Path(base) if base else Path.home() / ".config"
-    return root / "jev-desktop" / "config.json"
+    return root / "jev-desktop"
+
+
+def default_config_path() -> Path:
+    return default_config_dir() / "config.json"
+
+
+def default_audit_path() -> Path:
+    """The audit log is durable state, so it lives in the config directory."""
+    return default_config_dir() / "audit.jsonl"
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -87,7 +97,8 @@ def load_config(path: Path) -> dict[str, Any]:
             raise RuntimeError(f"config reader has unknown keys: {', '.join(unknown_reader)}")
         if reader.get("provider") not in (None, "deepseek", "mimo", "generic"):
             raise RuntimeError("config reader provider must be deepseek, mimo or generic")
-    for key in _NUMBER_DEFAULTS:
+    for key in ("idle_timeout", "max_session_lifetime", "max_actions", "max_observations",
+                "audit_max_bytes", "audit_backups", "audit_max_age_days"):
         value = data.get(key)
         if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
             raise RuntimeError(f"config {key} must be a number")
@@ -125,6 +136,10 @@ def _apply_config(args: argparse.Namespace, config: dict[str, Any]) -> None:
         value = getattr(args, key)
         if value is None:
             setattr(args, key, config.get(key, fallback))
+    for key in ("audit_max_bytes", "audit_backups", "audit_max_age_days"):
+        value = config.get(key)
+        if value is not None:
+            setattr(args, key, value)
     reader = config.get("reader") or {}
     if args.reader_provider is None:
         args.reader_provider = reader.get("provider")
@@ -257,7 +272,18 @@ def _remove_own_socket(server: DesktopSocketServer) -> None:
 
 
 def _make_service(args: argparse.Namespace) -> Any:
+    from audit_log import DEFAULT_ROTATION, AuditRotation
     from desktop_service import DesktopService
+
+    rotation = DEFAULT_ROTATION
+    if any(getattr(args, key, None) is not None for key in ("audit_max_bytes", "audit_backups", "audit_max_age_days")):
+        try:
+            rotation = AuditRotation(
+                max_bytes=getattr(args, "audit_max_bytes", None) or DEFAULT_ROTATION.max_bytes,
+                backups=getattr(args, "audit_backups", None) or DEFAULT_ROTATION.backups,
+                max_age_days=getattr(args, "audit_max_age_days", None) or DEFAULT_ROTATION.max_age_days)
+        except ValueError as exc:
+            raise RuntimeError(f"audit rotation is invalid: {exc}") from None
 
     allowed = getattr(args, "allowed_apps", None)
     if allowed is None:
@@ -265,7 +291,7 @@ def _make_service(args: argparse.Namespace) -> Any:
     allowed_apps = frozenset(app.casefold() for app in allowed)
     if not allowed_apps:
         raise RuntimeError("an explicit allowlist is required: use --allow-app, JEV_DESKTOP_ALLOW_APPS or allowed_apps in the config file")
-    audit_path = args.audit or str((args.run_dir or default_run_dir()) / "audit.jsonl")
+    audit_path = args.audit or str(default_audit_path())
     reader = None
     if args.reader_provider:
         if args.max_reader_calls is None or args.max_reader_calls <= 0:
@@ -303,7 +329,8 @@ def _make_service(args: argparse.Namespace) -> Any:
                           idle_timeout=args.idle_timeout,
                           max_session_lifetime=args.max_session_lifetime,
                           max_actions=args.max_actions,
-                          max_observations=args.max_observations)
+                          max_observations=args.max_observations,
+                          audit_rotation=rotation)
 
 
 def _load_dotenv_key(path: Path | None, key_name: str) -> None:

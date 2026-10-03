@@ -1,4 +1,8 @@
-"""Single-owner, virtual-only computer-use service over a private kwin-mcp child."""
+"""Single-owner computer-use service over a private kwin-mcp child.
+
+Virtual sessions are the default; explicit live sessions are gated by an
+owner-present override and task-scoped AT-SPI opt-in (see doc 26/28).
+"""
 
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from observation import ObservationAdapter, ObservationError
+from audit_log import DEFAULT_ROTATION, AuditRotation, append_jsonl, prune_directory
 from owner_wait import run_owner_wait
 from vision_reader import BoundedReader, ReaderResult, _usage_totals
 from transactions import (Action, AuditLog, AutonomyMode, Candidate, KwinMcpBackend,
@@ -43,9 +48,9 @@ def _safe_error(value: str) -> dict[str, str]:
         "invalid_params": "Request parameters are invalid.",
         "unsupported_verification": "The requested verification is not supported.",
         "approval_required": "This action requires explicit approval.",
-        "worker_failed": "The virtual session worker failed.",
-        "worker_timeout": "The virtual session worker timed out.",
-        "worker_protocol_error": "The virtual session worker returned an invalid response.",
+        "worker_failed": "The session worker failed.",
+        "worker_timeout": "The session worker timed out.",
+        "worker_protocol_error": "The session worker returned an invalid response.",
         "virtual_session_unavailable": "The virtual desktop session could not be started.",
         "atspi_setup_failed": "Accessibility setup for the virtual session failed.",
         "document_create_failed": "The task document could not be created safely.",
@@ -383,12 +388,14 @@ def _readline_timeout(stream, timeout):
 class _Session:
     def __init__(self, app, mode, worker, session_id, reader=None, audit_path=None, max_reader_calls=0,
                  *, idle_timeout=180.0, max_session_lifetime=1800.0, max_actions=64,
-                 max_observations=256, monotonic=time.monotonic, desktop_mode="virtual"):
+                 max_observations=256, monotonic=time.monotonic, desktop_mode="virtual",
+                 audit_rotation: AuditRotation = DEFAULT_ROTATION):
         self.app = app
         self.desktop_mode = desktop_mode
         self.mode = mode
         self.worker = worker
         self.session_id = session_id
+        self.audit_rotation = audit_rotation
         self.audit_path = Path(audit_path) if audit_path is not None else Path(__file__).parent / "run" / "desktop-service" / "actions.jsonl"
         self.started_at = datetime.now(timezone.utc).isoformat()
         self.started_clock = monotonic()
@@ -412,7 +419,7 @@ class _Session:
                               if reader is not None and max_reader_calls > 0 else None)
         self.max_reader_calls = self.reader_budget.max_calls if self.reader_budget else 0
         self.adapter = ObservationAdapter(worker, session_id, reader=self.reader_budget, allowed_apps={app})
-        self.tx = TransactionEngine(KwinMcpBackend(worker), audit=AuditLog(audit_path),
+        self.tx = TransactionEngine(KwinMcpBackend(worker), audit=AuditLog(audit_path, rotation=self.audit_rotation),
                                     policy=Policy(allowed_apps=APPS, max_actions=max_actions,
                                                   max_observations=max_observations,
                                                   max_duration_seconds=max_session_lifetime,
@@ -444,28 +451,20 @@ class _Session:
                                            and not isinstance(result.owner_elapsed_ms, bool) and 0 <= result.owner_elapsed_ms < 1e9 else None)
             payload["reported_usage"] = _usage_totals(result.usage)
         data = (json.dumps(payload, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
-        self.audit_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd = os.open(self.audit_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-            remaining = memoryview(data)
-            while remaining:
-                written = os.write(fd, remaining)
-                remaining = remaining[written:]
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        append_jsonl(self.audit_path, data, rotation=self.audit_rotation)
 
 
 class DesktopService:
-    """Own one active virtual session and serialize all stateful operations."""
+    """Own one active session and serialize all stateful operations."""
 
     def __init__(self, audit_path: str | os.PathLike[str] | None = None, *, allowed_apps=(), worker_factory=None,
                  reader=None, max_reader_calls: int = 0, request_timeout: float = 20.0, stop_timeout: float = 3.0,
                  idle_timeout: float = 180.0, max_session_lifetime: float = 1800.0,
                  max_actions: int = 64, max_observations: int = 256,
-                 monotonic=time.monotonic, watchdog_interval: float = 1.0):
+                 monotonic=time.monotonic, watchdog_interval: float = 1.0,
+                 audit_rotation: AuditRotation = DEFAULT_ROTATION):
         self.audit_path = Path(audit_path or Path(__file__).parent / "run" / "desktop-service" / "actions.jsonl")
+        self.audit_rotation = audit_rotation
         self.worker_factory = worker_factory or (lambda: DesktopWorkerClient(timeout=request_timeout))
         self._worker = None
         if reader is not None and (type(max_reader_calls) is not int or max_reader_calls <= 0):
@@ -501,6 +500,10 @@ class DesktopService:
         self._session: _Session | None = None
         self._watchdog = threading.Thread(target=self._watchdog_loop, name="jev-desktop-watchdog", daemon=True)
         self._watchdog.start()
+        # Startup is the only safe moment: no session can be live yet, so any
+        # session journal on disk is stale cleanup-recovery state.
+        prune_directory(self.audit_path.parent / "sessions", pattern="*.json",
+                        max_age_days=audit_rotation.max_age_days)
 
     def _watchdog_loop(self):
         while not self._watchdog_stop.wait(self._watchdog_interval):
@@ -544,10 +547,7 @@ class DesktopService:
                   "request_id": request_id,
                   "duration_ms": round(max(0.0, duration_ms), 3) if duration_ms is not None else None}
         data = (json.dumps(record, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
-        self.audit_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(self.audit_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        try: os.write(fd, data)
-        finally: os.close(fd)
+        append_jsonl(self.audit_path, data, rotation=self.audit_rotation)
 
     def _status(self, s):
         if s is None: return None
@@ -612,7 +612,13 @@ class DesktopService:
                           "reader": {"available": self.reader is not None and self.max_reader_calls > 0,
                                      "max_calls_per_session": self.max_reader_calls if self.reader else 0,
                                      "configuration": self.reader.capabilities() if self.reader else None,
-                                     "accounting": "reported_usage_and_latency_only; provider billing is not measured"}}
+                                     "accounting": "reported_usage_and_latency_only; provider billing is not measured"},
+                          "wait": {"status": "experimental",
+                                   "recommended": "poll observe/candidates and re-read state",
+                                   "reason": "both recorded reader-wait trials returned invalid_judgment; polling completed the same tasks",
+                                   "evidence": "docs/24-primary-agent-wait-comparison.md"},
+                          "audit": {"path": str(self.audit_path), "rotation": self.audit_rotation.summary(),
+                                    "retention": "size-based backups pruned by age"}}
             elif method == "status":
                 self._expire_if_needed()
                 with self._lock: current = self._session
@@ -638,7 +644,7 @@ class DesktopService:
                                  max_reader_calls=self.max_reader_calls, idle_timeout=self.idle_timeout,
                                  max_session_lifetime=self.max_session_lifetime, max_actions=self.max_actions,
                                  max_observations=self.max_observations, monotonic=self._monotonic,
-                                 desktop_mode=desktop_mode)
+                                 desktop_mode=desktop_mode, audit_rotation=self.audit_rotation)
                     s.state = "starting"
                     self._last_stop_reason = None
                     self._last_stop_at = None
