@@ -1,5 +1,8 @@
 # 25 — Next phases
 
+Updated 2026-10-03 after live Kate acceptance and repository cleanup.
+See [the handoff](HANDOFF.md) for the current working surfaces and commands.
+
 ## Small local follow-ups
 
 1. Fix scroll effect grounding with one concrete before/after example.

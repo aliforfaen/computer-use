@@ -235,7 +235,7 @@ MCP protocol.
 - `uv run python -m unittest discover -q`: **59 tests passed**. Tests cover
   competing requests, cancellation during a blocked read, failed-start
   ownership, unchanged-effect refusal and replacement after worker recovery.
-- `uv run python local_service_probe.py`: **passed**. Independent CLI, Unix
+- `uv run python -m tools.local_service_probe`: **passed**. Independent CLI, Unix
   client and official SDK stdio client reached one owner. MCP observed the
   session started over Unix IPC; retained metadata/image capture IDs and
   SHA-256 hashes matched. CLI verified KCalc blank→1. The reported worker was

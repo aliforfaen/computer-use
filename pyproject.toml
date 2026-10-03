@@ -44,7 +44,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 namespaces = true
-include = ["benchmark_fixtures*"]
+include = ["benchmark_fixtures*", "tools*"]
 
 [tool.setuptools.package-data]
 benchmark_fixtures = ["*.html"]

@@ -27,7 +27,7 @@ from observation import ObservationAdapter
 from vision_reader import ReaderConfig, ReaderResult, VisionReader, _question_prompt
 from wait_watcher import AdapterFrameSource, ReaderJudge, WaitSpec, WaitWatcher
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "run" / "vision-wait-probe"
 MODEL = "deepseek-flash"
 BASE_URL = "https://api.deepseek.com"

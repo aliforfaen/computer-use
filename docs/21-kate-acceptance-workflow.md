@@ -65,7 +65,7 @@ since the owner-call span alone is not prompt-to-save latency.
   the old `desktop_act` enum, refresh tool discovery/reconnect before sending
   the action; do not infer that schema changes are active from source files.
   For a temporary fresh-schema acceptance call through the official stdio
-  server, use `uv run python mcp_trial_client.py TOOL --params-file FILE
+  server, use `uv run python -m tools.mcp_trial_client TOOL --params-file FILE
   --output-dir DIR`. It initializes, discovers and validates the live server
   schema, saves image blocks and structured output under `DIR`, and prints
   paths/status only. It exercises the official local MCP server and owner;

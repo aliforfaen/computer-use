@@ -31,40 +31,20 @@ checks for changed behavior and small useful host probes. Avoid repeated full
 suites and large matrices unless a concrete failure or broad change requires
 one. The owner reduced this session's comparison from eight to four trials.
 
-Historical checkpoint below:
+## Start here
 
-**2026-10-02: M1–M4a are implemented and host-validated; the M4b DeepSeek
-heartbeat was reviewed, fixed, tested and completed one bounded follow-up
-request.** CLI/MCP share a virtual session; KCalc, Kate and Firefox effects and
-cleanup passed. The no-provider M4a baseline classified ten polling/watcher
-fixture outcomes with cleanup; it does not establish acceleration. The M4b
-follow-up returned one `deepseek-flash` structured judgment in 1.41 s with
-reported usage, no rate limit and confirmed session/profile cleanup. There is
-no remote HTTP surface, live desktop mode or general planner. Start with
-`docs/HANDOFF.md`, `docs/17-dynamic-wait-baseline.md`,
-`docs/15-virtual-session-slice.md` and `docs/16-local-owner-and-mcp.md`.
+Read `docs/HANDOFF.md` for current status and next work, then
+`docs/16-local-owner-and-mcp.md` for supported commands and
+`docs/26-live-owner.md` for the live contract and host evidence.
+Earlier milestone/test counts in numbered docs are historical checkpoints.
+Current reader authorization supersedes the consumed one-request probe cap;
+keep explicit per-session limits and accounting. M1–M3 local work is already
+authorized. Tailnet deployment and general planning remain later gates.
 
-The current owner-supported direction is screenshot-driven computer use over
-`kwin-mcp`, with Jev as an optional accelerator. ADR-011 remains proposed;
-ADR-012 requires images or interpreted data, and ADR-013 makes app capture
-the default. DeepSeek Flash is the provisional reader; MiMo is configurable.
-
-The owner authorized benchmark implementation, the M1–M2 observation and
-verified virtual-task slice, the M3 local owner/CLI/MCP implementation, and one
-bounded DeepSeek heartbeat probe under $1 (all 2026-10-01). Those local virtual
-slices may proceed without further approval. On 2026-10-02 the owner resumed
-work; the frozen M4b timeout/journal/interrupt changes were independently
-reviewed, and a second-pass review corrected the deadline guarantee (time and
-size are now bounded per raw response chunk, including partial lines; no bound
-is claimed across header reception). Fourteen new offline tests cover these
-paths (111 total, all passing), and the probe refuses to overwrite existing
-evidence. The probe's single configured follow-up request was then made and
-completed. That
-historical follow-up cap was consumed; the newer explicit owner authorization
-above permits the current bounded reader/comparison work. General planning, tailnet deployment and live
-tasks remain later gates; do not repeat authorization questions for M1–M3.
-Remaining P0 measurements are in `docs/05-open-questions.md`, not the entire
-next-work plan.
+Screenshot-driven computer use uses `kwin-mcp`; Jev is an optional accelerator.
+ADR-011 remains proposed; ADR-012 requires images or interpreted data and
+ADR-013 makes app capture the default. DeepSeek Flash is the provisional
+reader; MiMo is configurable.
 
 ## Owner context
 
@@ -147,7 +127,9 @@ docs/14-app-build-plan.md       staged app plan and worker handoffs
 docs/15-virtual-session-slice.md reusable observation and verified actions
 docs/16-local-owner-and-mcp.md local owner, CLI/MCP and lifecycle limits
 docs/17-dynamic-wait-baseline.md local M4a wait implementation, host baseline and limits
-benchmark_capture.py        isolated fixture capture; benchmark_fixtures/
+tests/                      offline tests; run as tests.test_MODULE
+tools/                      standalone probes; run as python -m tools.MODULE
+benchmark_capture.py        shared fixture capture; benchmark_fixtures/
 vision_benchmark.py         configurable image-reader benchmark
 ```
 

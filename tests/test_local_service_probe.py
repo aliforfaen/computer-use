@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from desktop_service import DesktopService
-from local_service_probe import ProbeError, _mcp_observation_ok, _socket_request
+from tools.local_service_probe import ProbeError, _mcp_observation_ok, _socket_request
 
 
 class _FakeWorker:

@@ -14,7 +14,7 @@ from PIL import Image
 import wait_benchmark
 from vision_reader import ReaderResult
 from wait_watcher import ReaderJudge, WaitFrame, WaitSpec
-from vision_wait_probe import (
+from tools.vision_wait_probe import (
     BudgetedReader,
     FOLLOWUP_MAX_CALLS,
     MAX_CASE_CALLS,
@@ -245,7 +245,7 @@ class VisionWaitProbeTests(unittest.TestCase):
 
     def test_interrupted_case_stops_owned_session_and_removes_profile(self):
         import kwin_mcp.core as kwin_core
-        import vision_wait_probe as probe
+        import tools.vision_wait_probe as probe
 
         engines = []
         profiles = []
@@ -308,7 +308,7 @@ class VisionWaitProbeTests(unittest.TestCase):
         self.assertEqual(budget_reader.attempts[0]["status"], "in_flight")
 
     def _case_dir_tracker(self):
-        import vision_wait_probe as probe
+        import tools.vision_wait_probe as probe
 
         real_mkdtemp = tempfile.mkdtemp
         profiles = []
@@ -442,7 +442,7 @@ class VisionWaitProbeTests(unittest.TestCase):
         self.assertTrue(profiles and not profiles[0].exists())
 
     def _run_setup_failure(self, *, versions, server_factory):
-        import vision_wait_probe as probe
+        import tools.vision_wait_probe as probe
 
         tmp = Path(tempfile.mkdtemp())
         closed = []
@@ -497,7 +497,7 @@ class VisionWaitProbeTests(unittest.TestCase):
         self.assertEqual(server.closed, 1)
 
     def test_run_refuses_to_overwrite_existing_evidence(self):
-        import vision_wait_probe as probe
+        import tools.vision_wait_probe as probe
 
         tmp = Path(tempfile.mkdtemp())
         prior = tmp / "progress.jsonl"
@@ -512,7 +512,7 @@ class VisionWaitProbeTests(unittest.TestCase):
         self.assertEqual(after, before)
 
     def test_interrupted_run_persists_pre_call_journal_and_does_not_retry(self):
-        import vision_wait_probe as probe
+        import tools.vision_wait_probe as probe
 
         tmp = Path(tempfile.mkdtemp())
         observed = {}

@@ -30,6 +30,7 @@ build/
 # local opencode / MCP client config
 /opencode.json
 /opencode.jsonc
+/.pi/mcp.json
 
 # editor / os
 .DS_Store

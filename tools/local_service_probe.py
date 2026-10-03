@@ -2,7 +2,7 @@
 """Exercise the local owner daemon through independent clients.
 
 Run inside the pinned environment, for example:
-    uv run python local_service_probe.py
+    uv run python -m tools.local_service_probe
 
 This is a local integration probe. It starts one disposable daemon and virtual
 KCalc session, then uses the CLI, the JSONL Unix socket protocol, and the MCP
@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 MAX_FRAME = 2 * 1024 * 1024
 READY_SECONDS = 20.0
 CLIENT_TIMEOUT = 30.0

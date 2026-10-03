@@ -74,7 +74,7 @@ live content. Ctrl+C cancels a run; capture sessions are stopped in `finally`.
 Validation without model calls:
 
 ```bash
-uv run --with httpx python -m unittest -v test_vision_benchmark.py
+uv run --with httpx python -m unittest -v tests.test_vision_benchmark
 ```
 
 ## First baseline and MiMo comparison

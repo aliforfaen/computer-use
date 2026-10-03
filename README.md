@@ -61,6 +61,30 @@ per-session call limit. Use `image` for screenshots; `data` or `both` also
 requires reader questions. Provider usage and caller inference billing are distinct. See [doc 16](docs/16-local-owner-and-mcp.md)
 for actions, reader configuration and lifecycle limits.
 
+## Repository layout
+
+| Location | Contents |
+| --- | --- |
+| Root Python modules | Service, clients, workers and shared capture/benchmark code. |
+| `tests/` | Offline unit tests, grouped by module. |
+| `tools/` | Standalone service probe, MCP trial client and vision-wait probe. |
+| `benchmark_fixtures/` | Reusable local HTML fixtures. |
+| `docs/` | Current handoff, contracts, decisions and historical results. |
+| `run/` (ignored) | Captures, documents, timelines and trial evidence. |
+
+Run a targeted check from the repo root:
+
+```bash
+uv run python -m unittest -v tests.test_live_owner
+uv run python -m tools.mcp_trial_client --help
+```
+
+Full offline discovery, when a broad change warrants it:
+`uv run python -m unittest discover -s tests -v`.
+Probe commands can launch apps or call a provider; read their documented limits
+before running them. Shared benchmark modules remain at root because the
+runtime imports them.
+
 ## Benchmarks and design
 
 - [Vision benchmark](docs/13-runnable-vision-benchmark.md): saved screenshots,
@@ -72,6 +96,5 @@ for actions, reader configuration and lifecycle limits.
 - [Prior art](docs/02-prior-art.md): the projects we reuse.
 
 Credentials stay in ignored `.env`; captures, results and interrupted-run
-records stay in ignored `run/`. Neither is published. The single M4b follow-up
-request has been made and its cap is consumed; do not make further provider
-requests without fresh authorization.
+records stay in ignored `run/`. Neither is published. Small provider tests are
+owner-authorized; keep explicit call limits and usage accounting. Historical single-probe caps do not describe the current reader policy.
