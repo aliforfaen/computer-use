@@ -10,15 +10,35 @@ Numbered docs retain earlier experiments; this page is the current summary.
 | Surface | Confirmed scope |
 | --- | --- |
 | Virtual sessions | Firefox, Kate and KCalc; shared CLI/MCP owner; app capture, semantic actions and cleanup. |
-| Browser actions | Navigation, links and text entry, including recovery from failed navigation. Scrolling is unresolved. |
+| Browser actions | Navigation, links and text entry, including recovery from failed navigation. Scrolling now verifies in both directions on the offline fixture; nested/live scroll untested. |
 | Kate documents | Draft/save/revise/save with exact editor and saved-file verification; output survives cleanup. |
 | Observation | Explicit app images for vision agents; optional interpreted data from a bounded, cancellable reader. DeepSeek is provisional, MiMo configurable. |
 | Lifecycle | Idle/lifetime/read/action caps, watchdog teardown, owned-app cleanup and recovery journals. |
 | Local live Kate | Owner-watched document workflow and app screenshot passed; exact focus and accessibility flags restored, zero Kate windows remaining. |
+| Owner surfaces | JSON config (CLI > env > file > default), `systemd --user` unit via `service install|status|uninstall`, and an AppIndicator tray with status, virtual/physical preference, session cleanup and the kill switch. |
 
 Useful agent acceptance: [Codex Luna workflow](20-codex-luna-workflow.md),
 [document workflow](21-kate-acceptance-workflow.md),
 [public webpage → Kate](23-public-browser-kate-agent-task.md).
+
+## Latest work — 2026-10-03
+
+Scroll effect verification is fixed. Firefox exposes a hidden second `scroll
+pane` with the same role/label/bounds as the live one, so the verifier's
+`(role, label)` lookup was ambiguous and never reached the semantic fallback.
+`_scroll_viewport` now resolves the live element and failed verifications keep
+their evidence in the audit. Host probe (virtual Firefox, no provider calls):
+scroll down and up both pass with `measurement: semantic_content_bounds`, 10
+negative and 0 opposing witness deltas, cleanup confirmed.
+[doc 27](27-scroll-effect-verification.md), `run/scroll-2026-10-03/`.
+
+Owner surfaces were added: a private JSON config (no secret values), a
+`systemd --user` unit with `service install|status|uninstall` that never
+auto-enables, and an AppIndicator tray. The tray's virtual/physical selection is
+a preference only — a live task still needs a per-task dialog confirming owner
+presence and temporary accessibility. The kill switch, loopback-only binding,
+deny-by-default allowlist and audit log are unchanged.
+[doc 28](28-tray-and-user-service.md).
 
 ## Latest live checkpoint
 
@@ -43,14 +63,15 @@ or physical cancellation/crash recovery.
 
 ## What remains
 
-1. **Scroll:** fix grounding/effect verification using one concrete before/after
-   example. Current host verifier fails; do not claim scrolling works.
-2. **Reader wait:** inspect one bounded retained invalid response. Both polling
+1. **Reader wait:** inspect one bounded retained invalid response. Both polling
    comparison tasks completed; both reader-wait trials returned
    `invalid_judgment`. Keep ordinary screenshots as the default and heartbeat
    waiting experimental. [Comparison](24-primary-agent-wait-comparison.md).
-3. **Optional watched live checks:** Firefox and cancellation/crash cleanup,
+2. **Optional watched live checks:** Firefox and cancellation/crash cleanup,
    when the owner is present. Keep each check small and useful.
+3. **Optional owner surfaces:** enable the user unit at login and click through
+   the tray menu while watched; this session proved SNI registration and logic
+   but did not enable or click the menu.
 4. **Tailnet:** requires a real peer and approval to change Serve routes.
    Preserve existing routes, bind loopback, reuse official MCP transport.
 5. **Planning/replay:** resolve ADR-011 and broader visual grounding before
@@ -72,14 +93,23 @@ uv run jev-desktop session stop
 uv run jev-desktop shutdown
 ```
 
+The same daemon can run as a user service and the tray as its control panel:
+
+```bash
+uv run jev-desktop service install --allow-app kate --allow-app firefox  # seeds a 0600 config, never enables
+systemctl --user enable --now jev-desktop.service                       # opt in explicitly
+uv run jev-desktop tray                                                 # status, mode, cleanup, kill switch
+```
+
 MCP host command: `uv run jev-desktop-mcp`; it connects to the same owner.
 See [doc 16](16-local-owner-and-mcp.md) for sockets, actions, images, readers,
 lifecycle and live opt-in. Changes to tool schemas require a host refresh.
 
 Use targeted offline checks and small host probes for changed behavior.
-The last broad historical run passed 172 tests and built a wheel; later live
-fixes received focused checks and actual watched acceptance. Do not rerun a
-large matrix solely to reproduce an old test count.
+The last broad historical run passed 172 tests and built a wheel; the
+2026-10-03 surfaces received 77 focused cases across the daemon, service, tray,
+service unit, transaction and service modules plus one watched host probe. Do
+not rerun a large matrix solely to reproduce an old test count.
 
 ## Cleanup checkpoint
 

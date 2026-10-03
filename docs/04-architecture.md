@@ -318,3 +318,29 @@ recovery close only the journaled task app and restore focus/accessibility
 state; failed restoration remains a cleanup failure. No remote transport is
 added. Focused tests pass, but the owner-watched physical workflow remains
 pending; see doc 26.
+
+### ADR-019 — Scroll effect verification resolves the live viewport element
+**2026-10-03 · supersedes ADR-017's unresolved scroll note.** Firefox exposes a
+hidden second AT-SPI `scroll pane` with the same role, empty label and identical
+bounds as the live one, so a `(role, label)` or bounds lookup is ambiguous. The
+scroll verifier now resolves each viewport through `transactions._scroll_viewport`
+(exact fingerprint match, else the unique usable candidate) and keeps the
+existing conservative witness rule (unique in-viewport link/button bounds moving
+in one direction, zero opposing). A failed `act` also retains the bounded
+verifier evidence in the audit instead of dropping it. Host evidence and the
+reusable offline fixture are in doc 27. One fixture page, one window size and
+two directions are verified; nested or live scroll remains unvalidated.
+
+### ADR-020 — Tray and systemd --user lifecycle with a private config file
+**2026-10-03 · owner-facing surfaces only.** Add two clients/lifecycles around
+the unchanged local owner: a KDE StatusNotifierItem tray (GTK3 +
+`AyatanaAppIndicator3`, `pygobject` now explicit) and a systemd --user unit
+managed by `jev-desktop service install|status|uninstall`. The daemon reads
+settings from a JSON config (`allowed_apps`, limits, reader names) with
+CLI > env > config > default precedence; the file holds no secrets and an empty
+allowlist still fails closed. The unit keeps the daemon's existing SIGTERM
+cleanup and does not change the simple kill switch, loopback-only binding,
+deny-by-default allowlist or audit logging. The tray may select virtual or
+physical mode as a **preference**, but a live task is still started only after a
+per-task dialog confirms owner presence and temporary accessibility, preserving
+ADR-018. See doc 28.

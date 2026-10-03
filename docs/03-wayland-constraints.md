@@ -114,3 +114,24 @@ on a 2560×1440 scale-1, origin-(0,0) display; app crops were 355×554. Both
 accessibility flags were temporarily enabled and restored to their original
 false values. This is evidence for that layout/fallback, not other layouts or
 an implemented physical-input idle detector. See [doc 22](22-live-desktop-smoke.md).
+
+## Session integration — tray and user service (2026-10-03)
+
+- **systemd --user units need the graphical session.** The shipped unit uses
+  `PartOf=`/`WantedBy=graphical-session.target` plus
+  `ConditionEnvironment=WAYLAND_DISPLAY`. Checked on this host:
+  `graphical-session.target` is active and the user manager environment carries
+  `WAYLAND_DISPLAY=wayland-0`, so `systemctl --user enable --now` starts with
+  Plasma. A non-Plasma or non-systemd session would need an autostart instead.
+- **The tray is a StatusNotifierItem.** Plasma 6 hosts it through
+  `org.kde.StatusNotifierWatcher`; `AyatanaAppIndicator3` (GTK3) is the binding
+  that builds here and it emits a deprecation notice recommending
+  `libayatana-appindicator-glib`. Registration was confirmed by watching
+  `RegisteredStatusNotifierItems` grow by one and return after exit.
+- **Tray menus are compositor-rendered.** On Wayland the indicator does not own
+  its popup surface, so menu items cannot be scripted the way an X11 tray could.
+  Tray behaviour is covered by logic tests with a stub toolkit plus the
+  registration check, not by clicking items on screen.
+- **No new input or focus path.** Neither the tray nor the service adds an input
+  backend; both go through the same owner, focus save → act → restore and AT-SPI
+  opt-in described above and in [doc 26](26-live-owner.md).

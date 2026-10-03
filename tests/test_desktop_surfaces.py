@@ -96,10 +96,15 @@ class DesktopSurfaceTests(unittest.TestCase):
 
     def test_cli_exposes_lifecycle_caps_and_kate_document_actions(self):
         daemon = _build_parser().parse_args(["daemon", "--foreground", "--allow-app", "kate"])
-        self.assertEqual(daemon.idle_timeout, 180.0)
-        self.assertEqual(daemon.max_session_lifetime, 1800.0)
-        self.assertEqual(daemon.max_actions, 64)
-        self.assertEqual(daemon.max_observations, 256)
+        # Unset limits stay unset so the config file or the daemon defaults apply.
+        self.assertIsNone(daemon.idle_timeout)
+        self.assertIsNone(daemon.max_session_lifetime)
+        self.assertIsNone(daemon.max_actions)
+        self.assertIsNone(daemon.max_observations)
+        explicit = _build_parser().parse_args([
+            "daemon", "--foreground", "--allow-app", "kate", "--idle-timeout", "30", "--max-actions", "7"])
+        self.assertEqual(explicit.idle_timeout, 30.0)
+        self.assertEqual(explicit.max_actions, 7)
         replacement = _build_parser().parse_args([
             "act", "kate", "replace_document", "ref-1", "--verification", "target_text", "--text-file", "-"
         ])

@@ -12,11 +12,13 @@ dependencies = [
     "mcp==2.2.0",
     "Pillow>=11,<13",
     "httpx>=0.28,<1",
+    "pygobject>=3.42.0",
 ]
 
 [project.scripts]
 jev-desktop = "desktop_cli:main"
 jev-desktop-mcp = "desktop_mcp:main"
+jev-desktop-tray = "desktop_tray:main"
 
 [tool.setuptools]
 py-modules = [
@@ -26,6 +28,8 @@ py-modules = [
     "desktop_daemon",
     "desktop_mcp",
     "desktop_service",
+    "desktop_service_unit",
+    "desktop_tray",
     "desktop_worker",
     "jev_accessibility_worker",
     "live_desktop_probe",

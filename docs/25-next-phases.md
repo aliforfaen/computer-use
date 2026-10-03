@@ -1,14 +1,23 @@
 # 25 — Next phases
 
-Updated 2026-10-03 after live Kate acceptance and repository cleanup.
+Updated 2026-10-03 after the scroll fix and the tray/user-service work.
 See [the handoff](HANDOFF.md) for the current working surfaces and commands.
+
+## Done 2026-10-03
+
+1. Scroll effect grounding: fixed and host-verified in both directions with a
+   reusable offline fixture. [doc 27](27-scroll-effect-verification.md).
+2. Owner surfaces: JSON config with CLI/env precedence, `systemd --user` unit
+   and `service install|status|uninstall`, and an AppIndicator tray whose live
+   mode stays behind a per-task confirmation. [doc 28](28-tray-and-user-service.md).
 
 ## Small local follow-ups
 
-1. Fix scroll effect grounding with one concrete before/after example.
-2. Diagnose the wait reader's invalid enum response with one retained, bounded
+1. Diagnose the wait reader's invalid enum response with one retained, bounded
    example when useful. Keep ordinary screenshots as the default meanwhile.
-3. Use targeted checks; avoid another broad test matrix for this personal tool.
+2. Use targeted checks; avoid another broad test matrix for this personal tool.
+3. Optional: enable the user unit at login and click through the tray menu with
+the owner watching; neither was done by this session.
 
 ## Local live support — Kate host check passed
 

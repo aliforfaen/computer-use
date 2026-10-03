@@ -24,7 +24,8 @@ from observation import ObservationAdapter, ObservationError
 from owner_wait import run_owner_wait
 from vision_reader import BoundedReader, ReaderResult, _usage_totals
 from transactions import (Action, AuditLog, AutonomyMode, Candidate, KwinMcpBackend,
-                          Policy, TransactionEngine, TransactionError, Verification, _scroll_witnesses)
+                          Policy, TransactionEngine, TransactionError, Verification, _scroll_viewport,
+                          _scroll_witnesses)
 
 
 APPS = frozenset({"kate", "firefox", "kcalc"})
@@ -878,8 +879,14 @@ class DesktopService:
                    "operation_failed")
             code = raw if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", raw or "") else "operation_failed"
             err = _safe_error(code)
+            # A failed verification keeps its bounded evidence (for example the
+            # scroll measurement name) in the audit instead of dropping it.
+            failure_evidence = None
+            if code == "verification_failed" and s is not None and isinstance(
+                    s.tx.last_verification_evidence, (dict, list, str, int, float, bool)):
+                failure_evidence = s.tx.last_verification_evidence
             self._audit(method if isinstance(method, str) else "unknown", context, app,
-                        s.mode.value if s else "guarded", "failed", err["code"],
+                        s.mode.value if s else "guarded", "failed", err["code"], verification=failure_evidence,
                         duration_ms=(self._monotonic() - dispatch_started) * 1000, request_id=request_id,
                         desktop_mode=s.desktop_mode if s else params.get("desktop_mode", "virtual"))
             return {"ok": False, "error": err}
@@ -1097,12 +1104,10 @@ class DesktopService:
                                 return Verification(True, {"scroll_position_changed_in_requested_direction": True,
                                                            "measurement": measurement,
                                                            "verification_reads": attempts})
-                    before_viewport = next((c for c in (before_snapshot.candidates if before_snapshot else ())
-                                            if (c.role, c.label) == (candidate.role, candidate.label)), None)
-                    after_viewports = [c for c in current.candidates
-                                       if (c.role, c.label) == (candidate.role, candidate.label)]
-                    if before_snapshot is not None and before_viewport is not None and len(after_viewports) == 1:
-                        after_viewport = after_viewports[0]
+                    before_viewport = (_scroll_viewport(before_snapshot.candidates, candidate)
+                                       if before_snapshot is not None else candidate)
+                    after_viewport = _scroll_viewport(current.candidates, candidate)
+                    if before_snapshot is not None and before_viewport is not None and after_viewport is not None:
                         if before_viewport.bounds == after_viewport.bounds:
                             before_positions = _scroll_witnesses(before_snapshot, before_viewport)
                             after_positions = _scroll_witnesses(current, after_viewport)

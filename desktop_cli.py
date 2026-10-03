@@ -82,23 +82,39 @@ def _build_parser() -> argparse.ArgumentParser:
     daemon.add_argument("--socket", type=Path, default=argparse.SUPPRESS)
     daemon.add_argument("--run-dir", type=Path, default=None)
     daemon.add_argument("--audit", type=Path, default=None)
-    daemon.add_argument("--allow-app", action="append", default=[], required=True, help="explicit allowlist app identity (repeatable)")
+    daemon.add_argument("--allow-app", action="append", default=[], help="explicit allowlist app identity (repeatable); config/env may supply it instead")
+    daemon.add_argument("--config", type=Path, default=None, help="private JSON config; CLI flags win")
     daemon.add_argument("--reader-provider", choices=("deepseek", "mimo", "generic"), default=None)
     daemon.add_argument("--reader-base-url", default=None)
     daemon.add_argument("--reader-model", default=None)
     daemon.add_argument("--reader-key-env", default=None, help="environment variable name, never a key value")
-    daemon.add_argument("--dotenv", type=Path, default=Path(".env"), help="optional private dotenv file for the configured reader key")
-    daemon.add_argument("--reader-timeout", type=float, default=10.0, help="reader HTTP connect/read idle timeout in seconds")
-    daemon.add_argument("--reader-total-timeout", type=float, default=15.0, help="reader response-body deadline in seconds")
+    daemon.add_argument("--dotenv", type=Path, default=None, help="optional private dotenv file for the configured reader key")
+    daemon.add_argument("--reader-timeout", type=float, default=None, help="reader HTTP connect/read idle timeout in seconds")
+    daemon.add_argument("--reader-total-timeout", type=float, default=None, help="reader response-body deadline in seconds")
     daemon.add_argument("--max-reader-calls", type=int, default=None)
-    daemon.add_argument("--idle-timeout", type=float, default=180.0,
-                        help="stop the session after this many inactive seconds")
-    daemon.add_argument("--max-session-lifetime", type=float, default=1800.0,
-                        help="maximum session age in seconds")
-    daemon.add_argument("--max-actions", type=int, default=64,
-                        help="maximum input actions per session")
-    daemon.add_argument("--max-observations", type=int, default=256,
-                        help="maximum observations and candidate reads per session")
+    daemon.add_argument("--idle-timeout", type=float, default=None,
+                        help="stop the session after this many inactive seconds (default 180)")
+    daemon.add_argument("--max-session-lifetime", type=float, default=None,
+                        help="maximum session age in seconds (default 1800)")
+    daemon.add_argument("--max-actions", type=int, default=None,
+                        help="maximum input actions per session (default 64)")
+    daemon.add_argument("--max-observations", type=int, default=None,
+                        help="maximum observations and candidate reads per session (default 256)")
+    service = commands.add_parser("service", help="manage the jev-desktop systemd --user unit")
+    service_commands = service.add_subparsers(dest="service_command", required=True)
+    install = service_commands.add_parser("install", help="write the unit and a starter config, then daemon-reload")
+    install.add_argument("--allow-app", action="append", default=[], help="seed the starter config allowlist (repeatable)")
+    install.add_argument("--config", type=Path, default=None, help="config path to seed and reference")
+    install.add_argument("--unit-dir", type=Path, default=None, help="override the systemd user unit directory")
+    uninstall = service_commands.add_parser("uninstall", help="stop, disable and remove the unit")
+    uninstall.add_argument("--stop", action="store_true", help="allow stopping an active unit")
+    uninstall.add_argument("--unit-dir", type=Path, default=None)
+    status = service_commands.add_parser("status", help="show unit state and configuration drift")
+    status.add_argument("--config", type=Path, default=None)
+    status.add_argument("--unit-dir", type=Path, default=None)
+    tray = commands.add_parser("tray", help="run the desktop tray indicator in foreground")
+    tray.add_argument("--socket", type=Path, default=argparse.SUPPRESS)
+    tray.add_argument("--unit", default="jev-desktop", help="systemd --user unit name the tray controls")
     for name, help_text in (("capabilities", "show owner capabilities"), ("status", "show owner/session status")):
         sub = commands.add_parser(name, help=help_text)
         _add_socket(sub)
@@ -178,52 +194,41 @@ def main(argv: list[str] | None = None) -> int:
         args.socket = None
     if args.command == "daemon":
         from desktop_daemon import main as daemon_main
-        daemon_args = ["--foreground", "--run-dir", str(args.run_dir or "")]
+        # Only forward options the caller actually set so the daemon's config
+        # file can supply the rest. Do not duplicate this list anywhere else.
+        daemon_args = ["--foreground"]
+        if args.config is not None:
+            daemon_args += ["--config", str(args.config)]
+        if args.run_dir is not None:
+            daemon_args += ["--run-dir", str(args.run_dir)]
         if args.socket:
             daemon_args += ["--socket", str(args.socket)]
         if args.audit:
             daemon_args += ["--audit", str(args.audit)]
         for app in args.allow_app:
             daemon_args += ["--allow-app", app]
-        if args.reader_provider:
-            daemon_args += ["--reader-provider", args.reader_provider]
-        if args.reader_base_url:
-            daemon_args += ["--reader-base-url", args.reader_base_url]
-        if args.reader_model:
-            daemon_args += ["--reader-model", args.reader_model]
-        if args.reader_key_env:
-            daemon_args += ["--reader-key-env", args.reader_key_env]
-        daemon_args += ["--dotenv", str(args.dotenv), "--reader-timeout", str(args.reader_timeout),
-                        "--reader-total-timeout", str(args.reader_total_timeout)]
-        if args.max_reader_calls is not None:
-            daemon_args += ["--max-reader-calls", str(args.max_reader_calls)]
-        daemon_args += ["--idle-timeout", str(args.idle_timeout),
-                        "--max-session-lifetime", str(args.max_session_lifetime),
-                        "--max-actions", str(args.max_actions),
-                        "--max-observations", str(args.max_observations)]
-        if args.run_dir is None:
-            daemon_args = ["--foreground"] + (["--socket", str(args.socket)] if args.socket else [])
-            if args.audit:
-                daemon_args += ["--audit", str(args.audit)]
-            for app in args.allow_app:
-                daemon_args += ["--allow-app", app]
-            if args.reader_provider:
-                daemon_args += ["--reader-provider", args.reader_provider]
-            if args.reader_base_url:
-                daemon_args += ["--reader-base-url", args.reader_base_url]
-            if args.reader_model:
-                daemon_args += ["--reader-model", args.reader_model]
-            if args.reader_key_env:
-                daemon_args += ["--reader-key-env", args.reader_key_env]
-            daemon_args += ["--dotenv", str(args.dotenv), "--reader-timeout", str(args.reader_timeout),
-                            "--reader-total-timeout", str(args.reader_total_timeout)]
-            if args.max_reader_calls is not None:
-                daemon_args += ["--max-reader-calls", str(args.max_reader_calls)]
-            daemon_args += ["--idle-timeout", str(args.idle_timeout),
-                            "--max-session-lifetime", str(args.max_session_lifetime),
-                            "--max-actions", str(args.max_actions),
-                            "--max-observations", str(args.max_observations)]
+        for flag, value in (("--reader-provider", args.reader_provider),
+                            ("--reader-base-url", args.reader_base_url),
+                            ("--reader-model", args.reader_model),
+                            ("--reader-key-env", args.reader_key_env)):
+            if value:
+                daemon_args += [flag, value]
+        for flag, value in (("--dotenv", args.dotenv), ("--reader-timeout", args.reader_timeout),
+                            ("--reader-total-timeout", args.reader_total_timeout),
+                            ("--max-reader-calls", args.max_reader_calls),
+                            ("--idle-timeout", args.idle_timeout),
+                            ("--max-session-lifetime", args.max_session_lifetime),
+                            ("--max-actions", args.max_actions),
+                            ("--max-observations", args.max_observations)):
+            if value is not None:
+                daemon_args += [flag, str(value)]
         return daemon_main(daemon_args)
+    if args.command == "service":
+        from desktop_service_unit import service_command
+        return service_command(args)
+    if args.command == "tray":
+        from desktop_tray import tray_main
+        return tray_main(socket=args.socket, unit=args.unit)
     method_params: dict[str, Any]
     method = args.command
     if method in {"capabilities", "status"}:

@@ -7,7 +7,17 @@ client. Jev is an optional future accelerator.
 ## Where things stand — 2026-10-03
 
 - **Working:** virtual Firefox/Kate/KCalc, app screenshots, grounded navigation,
-  links and text entry, saved Kate documents, automatic cleanup, CLI and MCP.
+  links, text entry and scrolling, saved Kate documents, automatic cleanup,
+  CLI and MCP.
+- **Owner surfaces:** a private JSON config (CLI > env > file > default), a
+  `systemd --user` unit with `service install|status|uninstall`, and an
+  AppIndicator tray with status, a virtual/physical **preference**, session
+  cleanup and the kill switch. The tray never pre-authorizes live mode.
+  [Tray, service and config](docs/28-tray-and-user-service.md).
+- **Scroll fixed:** the verifier now resolves the live scroll pane instead of an
+  ambiguous `(role, label)` match, and failed verifications keep their evidence.
+  Host-verified down and up on an offline fixture.
+  [Evidence](docs/27-scroll-effect-verification.md).
 - **Useful Luna task passed:** read Python.org, recover from a failed navigation,
   draft/revise/save a sourced Kate note. [Workflow](docs/23-public-browser-kate-agent-task.md).
 - **DeepSeek:** explicit image interpretation is enabled with call limits and
@@ -22,9 +32,9 @@ client. Jev is an optional future accelerator.
   AT-SPI flags and app cleanup were independently confirmed. Physical-input
   idle detection remains unavailable on this host.
   [Contract and evidence](docs/26-live-owner.md).
-- **Still pending:** scrolling fails host effect verification. Live Firefox,
-  forced cancellation/crash recovery, tailnet deployment and Jev replay have
-  not been validated.
+- **Still pending:** live Firefox, forced cancellation/crash recovery, tailnet
+  deployment and Jev replay have not been validated. Nested/live scrolling,
+  tray menu clicks and enabling the unit at login are untested.
 
 Start with [the handoff](docs/HANDOFF.md). [Local commands](docs/16-local-owner-and-mcp.md)
 · [next phases](docs/25-next-phases.md). A fixed physical KCalc smoke test passed
@@ -61,13 +71,22 @@ per-session call limit. Use `image` for screenshots; `data` or `both` also
 requires reader questions. Provider usage and caller inference billing are distinct. See [doc 16](docs/16-local-owner-and-mcp.md)
 for actions, reader configuration and lifecycle limits.
 
+As a user service plus tray (the installer seeds a private config, never enables
+anything, and does not change the kill switch):
+
+```bash
+uv run jev-desktop service install --allow-app kate --allow-app firefox
+systemctl --user enable --now jev-desktop.service
+uv run jev-desktop tray
+```
+
 ## Repository layout
 
 | Location | Contents |
 | --- | --- |
 | Root Python modules | Service, clients, workers and shared capture/benchmark code. |
 | `tests/` | Offline unit tests, grouped by module. |
-| `tools/` | Standalone service probe, MCP trial client and vision-wait probe. |
+| `tools/` | Standalone probes: service probe, MCP trial client, vision-wait probe, scroll-effect probe. |
 | `benchmark_fixtures/` | Reusable local HTML fixtures. |
 | `docs/` | Current handoff, contracts, decisions and historical results. |
 | `run/` (ignored) | Captures, documents, timelines and trial evidence. |

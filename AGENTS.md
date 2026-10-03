@@ -4,7 +4,21 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**Latest checkpoint (2026-10-03):** the owner-watched local live Kate workflow
+**Latest work (2026-10-03):** scrolling is fixed and host-verified in both
+directions. Firefox exposes a hidden second `scroll pane` with the same
+role/label/bounds as the live one; the verifier now resolves the live element
+and failed verifications keep their evidence in the audit. Owner surfaces were
+added: a private JSON config (CLI > env > file > default, never holding secret
+values), a `systemd --user` unit with `service install|status|uninstall` that
+never auto-enables, and an AppIndicator tray. The tray's virtual/physical
+selection is a **preference only**: a live task still opens a per-task dialog
+confirming owner presence and temporary accessibility, so the local-live gate is
+preserved, not relaxed. The kill switch, loopback-only binding,
+deny-by-default allowlist and audit logging are unchanged. Evidence:
+[doc 27](docs/27-scroll-effect-verification.md),
+[doc 28](docs/28-tray-and-user-service.md), `run/scroll-2026-10-03/`.
+
+**Latest live checkpoint (2026-10-03):** the owner-watched local live Kate workflow
 passed draft/save/revise/save with four verified actions, plus a follow-up
 screenshot visibly showing Kate text and its Save control. Both sessions
 independently confirmed original Codex focus and AT-SPI flags restored and zero
@@ -14,12 +28,14 @@ process/window ownership. Live `candidates`, `observe`, `wait` and `act` calls
 focus the task app for matching AT-SPI state and correct screenshots, then
 restore exact prior focus. The daemon is shut down. Physical-input idle
 detection remains unavailable; live Firefox, cancellation/crash recovery,
-scrolling, tailnet deployment and general planning remain unvalidated or out of
+tailnet deployment and general planning remain unvalidated or out of
 scope. Do not call the Kate check general live-task validation.
 
 Virtual navigation, links and text entry passed host checks; Luna completed
 public webpage → Kate save/revise/save with exact file verification and cleanup
-(doc 23). Scrolling still fails host effect verification. The four-trial
+(doc 23). Scrolling now verifies in a virtual session on the offline scroll
+fixture (doc 27); nested scroll regions and live-desktop scrolling remain
+untested. The four-trial
 comparison (doc 24) found polling completed both tasks while both wait trials
 returned `invalid_judgment`; keep heartbeat waiting experimental. Explicit
 readers retain per-session call limits, numeric usage accounting and killable

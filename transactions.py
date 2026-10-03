@@ -421,6 +421,7 @@ class TransactionEngine:
         self._blocked: dict[str, str] = {}
         self._session_id: str | None = None
         self._binding_lock = threading.Lock()
+        self.last_verification_evidence: Any = None
 
     def _bind_session(self, session_id: str) -> None:
         if not isinstance(session_id, str) or not session_id:
@@ -731,6 +732,7 @@ class TransactionEngine:
             self._last[(session_id, app)] = after
             if not verification.passed:
                 self._blocked[session_id] = "verification_failed"
+                self.last_verification_evidence = verification.evidence
                 raise TransactionError("verification_failed")
             result = ActionResult(
                 status="ok",
@@ -812,6 +814,22 @@ def _scroll_witnesses(snapshot: Snapshot, viewport: Candidate) -> dict[tuple[str
             and candidate.bounds.x + candidate.bounds.width <= viewport.bounds.x + viewport.bounds.width
             and candidate.bounds.y >= viewport.bounds.y
             and candidate.bounds.y + candidate.bounds.height <= viewport.bounds.y + viewport.bounds.height}
+
+
+def _scroll_viewport(candidates: tuple[Candidate, ...], target: Candidate) -> Candidate | None:
+    """Resolve the live viewport element behind a scroll target.
+
+    Firefox exposes a hidden second scroll pane with the same role, label and
+    bounds as the visible one, so a (role, label) lookup is ambiguous and a
+    bounds lookup cannot separate them. Prefer an exact fingerprint match,
+    otherwise the unique usable element.
+    """
+    exact = [item for item in candidates if _fingerprint(item) == _fingerprint(target)]
+    if len(exact) == 1:
+        return exact[0]
+    usable = [item for item in candidates
+              if (item.role, item.label) == (target.role, target.label) and _usable(item)]
+    return usable[0] if len(usable) == 1 else None
 
 
 def _unique_matching(prior: Snapshot, candidate: Candidate, fresh: Snapshot) -> Candidate | None:

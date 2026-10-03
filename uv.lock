@@ -290,6 +290,7 @@ dependencies = [
     { name = "kwin-mcp" },
     { name = "mcp" },
     { name = "pillow" },
+    { name = "pygobject" },
 ]
 
 [package.metadata]
@@ -298,6 +299,7 @@ requires-dist = [
     { name = "kwin-mcp", specifier = "==0.10.0" },
     { name = "mcp", specifier = "==2.2.0" },
     { name = "pillow", specifier = ">=11,<13" },
+    { name = "pygobject", specifier = ">=3.42.0" },
 ]
 
 [[package]]

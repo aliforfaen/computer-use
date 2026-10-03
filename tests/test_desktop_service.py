@@ -278,6 +278,54 @@ class DesktopServiceTests(unittest.TestCase):
                                                "measurement": "semantic_content_bounds",
                                                "verification_reads": 1})
 
+    def test_firefox_scroll_resolves_visible_pane_when_a_hidden_duplicate_exists(self):
+        # Regression: Firefox exposes a hidden second scroll pane with the same
+        # role, label and bounds as the visible one, so a (role, label) or bounds
+        # lookup is ambiguous and the semantic fallback must still resolve it.
+        self.start_firefox()
+        self.worker.rows = [
+            {"role": "scroll pane", "name": "", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": [], "x": 0, "y": 40, "width": 640, "height": 360, "mapped": True, "text": ""},
+            {"role": "scroll pane", "name": "", "states": ["enabled", "sensitive", "visible"],
+             "actions": [], "x": 0, "y": 40, "width": 640, "height": 360, "mapped": True, "text": ""},
+            {"role": "link", "name": "First section", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": ["Jump"], "x": 30, "y": 180, "width": 120, "height": 24, "mapped": True, "text": ""},
+            {"role": "link", "name": "Second section", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": ["Jump"], "x": 30, "y": 220, "width": 130, "height": 24, "mapped": True, "text": ""},
+        ]
+        candidates = self.service.dispatch("candidates", {"app": "firefox"})["candidates"]
+        panes = [candidate for candidate in candidates if candidate["role"] == "scroll pane"]
+        visible = [pane for pane in panes if not pane.get("unavailable_reason")]
+        self.assertEqual(len(panes), 2)
+        self.assertEqual(len(visible), 1)
+        result = self.service.dispatch("act", {"app": "firefox", "action": "scroll",
+            "target_ref": visible[0]["ref"], "verification": "scroll_changed",
+            "direction": "down", "steps": 1}, self.ctx)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["evidence"], {"scroll_position_changed_in_requested_direction": True,
+                                               "measurement": "semantic_content_bounds",
+                                               "verification_reads": 1})
+
+    def test_failed_verification_records_bounded_evidence_in_the_audit(self):
+        self.start_firefox()
+        self.worker.rows = [
+            {"role": "scroll pane", "name": "", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": [], "x": 0, "y": 40, "width": 640, "height": 360, "mapped": True, "text": ""},
+            {"role": "link", "name": "Only section", "states": ["enabled", "sensitive", "showing", "visible"],
+             "actions": ["Jump"], "x": 30, "y": 180, "width": 120, "height": 24, "mapped": True, "text": ""},
+        ]
+        candidates = self.service.dispatch("candidates", {"app": "firefox"})["candidates"]
+        pane = next(candidate for candidate in candidates if candidate["role"] == "scroll pane")
+        result = self.service.dispatch("act", {"app": "firefox", "action": "scroll", "target_ref": pane["ref"],
+            "verification": "scroll_changed", "direction": "down", "steps": 1}, self.ctx)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "verification_failed")
+        entries = [json.loads(line) for line in (Path(self.tmp.name) / "firefox-audit.jsonl").read_text().splitlines()]
+        failed = [entry for entry in entries if entry["status"] == "failed" and entry["tool"] == "act"]
+        self.assertTrue(failed)
+        self.assertEqual(failed[-1]["verification"]["measurement"], "semantic_content_bounds")
+        self.assertFalse(failed[-1]["verification"]["scroll_position_changed_in_requested_direction"])
+
     def test_firefox_scroll_waits_for_delayed_semantic_movement_within_bound(self):
         self.start_firefox()
         self.worker.rows = [

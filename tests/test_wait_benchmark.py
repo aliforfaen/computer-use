@@ -98,7 +98,7 @@ class WaitBenchmarkTests(unittest.TestCase):
             server.thread.join(timeout=2)
 
     def test_fixture_records_events_but_judge_does_not_accept_truth_data(self) -> None:
-        source = (Path(__file__).parent / "benchmark_fixtures" / "wait.html").read_text()
+        source = (Path(__file__).resolve().parents[1] / "benchmark_fixtures" / "wait.html").read_text()
         self.assertIn("send(state, performance.now())", source)
         self.assertIn("waitForArm();", source)
         self.assertIn("/armed?trial=", source)
