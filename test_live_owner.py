@@ -67,7 +67,8 @@ class _LiveEngine:
     def launch_app(self, command, extra_env=None):
         self.command = command
         self.env = extra_env
-        self.windows.append({"id": "owned", "app": "org.kde.kcalc", "caption": "KCalc"})
+        app = {"kate": ("org.kde.kate", "Kate"), "kcalc": ("org.kde.kcalc", "KCalc")}[command[0]]
+        self.windows.append({"id": "owned", "app": app[0], "caption": app[1]})
         return self.launched
 
     def _run_kwin_query(self, request):
@@ -80,6 +81,7 @@ class _LiveFakeWorker(FakeWorker):
     def __init__(self):
         super().__init__()
         self.live_calls = []
+        self.restore_results = [True, True, False]
 
     def focus_live_app(self):
         self.live_calls.append("focus")
@@ -87,7 +89,7 @@ class _LiveFakeWorker(FakeWorker):
 
     def restore_live_focus(self):
         self.live_calls.append("restore")
-        return False
+        return self.restore_results.pop(0)
 
 
 class LiveOwnerTests(unittest.TestCase):
@@ -117,7 +119,10 @@ class LiveOwnerTests(unittest.TestCase):
             worker = desktop_worker.Worker()
             journal = Path(folder) / "live.json"
             with self.assertRaisesRegex(ValueError, "live_app_not_owned"):
-                worker.start("kcalc", str(journal), "live", temporary_a11y=True)
+                worker.start("kate", str(journal), "live", temporary_a11y=True)
+            # A Kate launch must keep the window in the process whose PID the
+            # owner tracks; Kate otherwise detaches by default.
+            self.assertEqual(engine.command[:3], ["kate", "--new", "--block"])
             self.assertEqual(writes, [
                 {"IsEnabled": True, "ScreenReaderEnabled": True},
                 {"IsEnabled": False, "ScreenReaderEnabled": False},
@@ -231,12 +236,22 @@ class LiveOwnerTests(unittest.TestCase):
                     "owner_present_override": True, "temporary_a11y": True})
                 self.assertTrue(started["ok"], started)
                 candidate = service.dispatch("candidates", {"app": "kate"})["candidates"][0]
+                session = service._session
+                session.adapter.capture = lambda *args, **kwargs: types.SimpleNamespace(capture_id="capture")
+                session.adapter.observe = lambda *args, **kwargs: types.SimpleNamespace(
+                    metadata={"capture_id": "capture"}, image=None, data=None, reader=None, errors=())
+                observed = service.dispatch("observe", {"app": "kate"})
+                self.assertTrue(observed["ok"], observed)
                 acted = service.dispatch("act", {"app": "kate", "action": "type_text",
                     "target_ref": candidate["ref"], "text": "verified text",
                     "verification": "target_text", "expected": "verified text"})
                 self.assertFalse(acted["ok"])
                 self.assertEqual(acted["error"]["code"], "live_focus_restore_failed")
-                self.assertEqual(fake.live_calls, ["focus", "restore"])
+                self.assertEqual(fake.live_calls, [
+                    "focus", "restore",  # candidates
+                    "focus", "restore",  # screenshot observation
+                    "focus", "restore",  # action
+                ])
                 self.assertFalse(service._session.busy.locked())
                 records = [json.loads(line) for line in (Path(folder) / "audit.jsonl").read_text().splitlines()]
                 owner_records = [row for row in records if "desktop_mode" in row]

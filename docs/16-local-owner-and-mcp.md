@@ -72,15 +72,16 @@ uv run jev-desktop session start firefox --live --owner-present-override --tempo
 ```
 
 Live sessions launch one newly owned allowlisted app and refuse an existing
-window for that app. Each input action snapshots the currently focused window,
-focuses the task app, verifies the action and restores the exact prior focus
-before returning. Stop snapshots current focus when possible and restores it
+window for that app. Candidate, observation, wait and action calls snapshot
+current focus, then focus the task app for accurate accessibility state and
+visible captures. Actions verify their effect; every call restores exact prior
+focus before returning. Stop snapshots current focus when possible and restores it
 after closing the tracked app; if the owned app held focus, stop restores the
 session baseline instead. Stop also restores original accessibility flags.
 Failure recovery uses the task journal to terminate only the recorded app PID
-and independently retries focus and accessibility restoration. Live runtime
-behavior still needs the owner-watched host check; see [doc 26](26-live-owner.md).
-Do not treat the example as evidence that a live task has been run.
+and independently retries focus and accessibility restoration. The owner-watched
+Kate workflow and app screenshot passed on 2026-10-03; Firefox and physical
+failure/recovery remain unvalidated. See [doc 26](26-live-owner.md).
 
 Observation defaults to metadata for the app window. `--output image` and
 `--output both` explicitly request PNG data; `--output data` requests configured

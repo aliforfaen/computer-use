@@ -1,6 +1,6 @@
 # HANDOFF — start here for a fresh session
 
-**Updated 2026-10-02.** Repo: `/home/messhias/lamasync/projects/computer-use`.
+**Updated 2026-10-03.** Repo: `/home/messhias/lamasync/projects/computer-use`.
 Branch: `main`. GitHub/origin
 [aliforfaen/computer-use](https://github.com/aliforfaen/computer-use) is
 connected; earlier checkpoints were pushed. The current workflow checkpoint
@@ -10,7 +10,26 @@ covered by offline tests, then the probe's single configured follow-up request
 completed. Read `AGENTS.md`, this file, [the virtual slice](15-virtual-session-slice.md),
 then [the local owner surface](16-local-owner-and-mcp.md).
 
-## Latest checkpoint — broader actions and useful agent work
+## Latest checkpoint — owner-watched live Kate validation
+
+- Live Kate draft/save/revise/save passed with four verified actions. Exact
+  output: 270 bytes at `run/documents/handover-20591b45062d5e1e144ea06e.txt`,
+  SHA-256 `7d8415967f06e34ffd35239a594c2a57047a3e65c79a605fe703864f4c40b594`.
+- A follow-up live screenshot visibly showed Kate text and its Save control in
+  a 1318×810 image. Both sessions independently confirmed original Codex focus,
+  restored AT-SPI flags and zero Kate windows after cleanup. Evidence is in
+  `run/live-kate-2026-10-03/`; see [doc 26](26-live-owner.md).
+- Two failures were fixed before acceptance: Kate now launches with `--block`
+  so its window belongs to the tracked process; live `candidates`, `observe`,
+  `wait` and `act` calls focus the task app while reading/capturing, then
+  restore exact prior focus.
+- Scope: local owner-watched Kate only. Live Firefox, forced cancellation or
+  crash recovery, scrolling, tailnet deployment and general planning remain
+  unvalidated/out of scope. Physical-input idle detection remains unavailable.
+- No daemon is running. The owner shut it down after the checks. `.gitignore`
+  has a pre-existing user modification; preserve it.
+
+## Prior checkpoint — broader actions and useful agent work (2026-10-02)
 
 - Virtual navigation, link clicks and text entry passed real Firefox checks.
   Scrolling remains unresolved: its latest bounded effect verifier failed.
@@ -28,14 +47,14 @@ then [the local owner surface](16-local-owner-and-mcp.md).
 - Last full offline run: 172 tests passed; wheel build passed. Fixture signal
   handling was checked separately afterward. No larger matrix was run after
   the owner requested lighter testing. Use targeted checks going forward.
-- Local live CLI/MCP support is implemented and independently reviewed. Start
+- Local live CLI/MCP support was implemented and independently reviewed. Start
   requires both explicit owner-present override and temporary AT-SPI opt-in;
   each session owns one newly launched allowlisted app, snapshots/restores exact
   focus around each action, and cleans up only that app. Physical-input idle
   detection is unavailable, so the override is mandatory. Four focused owner
-  tests passed, with eleven earlier focused lifecycle/service tests; no live app
-  or physical input was used for this validation. The operator-watched desktop
-  check remains pending. See [live contract](26-live-owner.md) and
+  tests passed, with eleven earlier focused lifecycle/service tests. At that
+  checkpoint, the operator-watched desktop check remained pending. See
+  [live contract](26-live-owner.md) and
   [next phases](25-next-phases.md). No Serve changes.
 
 ## Earlier checkpoint notes (historical)
@@ -85,7 +104,7 @@ owners were shut down. Relaunch Codex to refresh the expanded MCP action schema.
 
 Historical M1–M4 validation below describes the earlier checkpoints.
 
-## Current state
+## Prior state snapshot — 2026-10-02 (historical)
 
 M1–M2 provide reusable app observation, semantic action transactions and a
 disposable virtual Kate/Firefox/KCalc task harness. M3 adds the single-owner

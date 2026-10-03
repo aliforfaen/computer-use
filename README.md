@@ -4,7 +4,7 @@ Screenshot-driven computer use for agents on **CachyOS, KDE Plasma and Wayland**
 Built on [kwin-mcp](https://github.com/isac322/kwin-mcp), with a local CLI and MCP
 client. Jev is an optional future accelerator.
 
-## Where things stand
+## Where things stand — 2026-10-03
 
 - **Working:** virtual Firefox/Kate/KCalc, app screenshots, grounded navigation,
   links and text entry, saved Kate documents, automatic cleanup, CLI and MCP.
@@ -16,17 +16,21 @@ client. Jev is an optional future accelerator.
   [Comparison](docs/24-primary-agent-wait-comparison.md).
 - **Local live mode:** implemented for one newly launched allowlisted app per
   session. It requires `--live --owner-present-override --temporary-a11y`,
-  restores the prior focused window after each action, and closes only its
-  owned app. Physical-input idle detection is unavailable on this host.
-  [Contract and pending watched check](docs/26-live-owner.md).
-- **Still pending:** scrolling fails host effect verification. The operator-
-  watched live desktop check, tailnet deployment and Jev replay have not been
-  completed.
+  focuses the task window for candidate, screenshot, wait and action calls,
+  restores exact prior focus, and closes only its owned app. The owner-watched
+  Kate draft/save/revise/save and screenshot checks passed; original focus,
+  AT-SPI flags and app cleanup were independently confirmed. Physical-input
+  idle detection remains unavailable on this host.
+  [Contract and evidence](docs/26-live-owner.md).
+- **Still pending:** scrolling fails host effect verification. Live Firefox,
+  forced cancellation/crash recovery, tailnet deployment and Jev replay have
+  not been validated.
 
 Start with [the handoff](docs/HANDOFF.md). [Local commands](docs/16-local-owner-and-mcp.md)
 · [next phases](docs/25-next-phases.md). A fixed physical KCalc smoke test passed
 previously; [its scope](docs/22-live-desktop-smoke.md) remains separate from the
-new local live-task service.
+new local live-task service. The owner-watched Kate service check is recorded in
+[doc 26](docs/26-live-owner.md).
 
 ## Local quick start
 

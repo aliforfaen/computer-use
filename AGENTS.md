@@ -4,24 +4,27 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**Latest checkpoint (2026-10-02):** owner authorized broader virtual actions,
-DeepSeek interpretation and a small primary-agent wait comparison. Navigation,
-links and text entry passed host checks; Luna completed public webpage → Kate
-save/revise/save with exact file verification and cleanup (doc 23). Scrolling
-still fails host effect verification; do not claim it is host-validated. The
-supported owner now permits explicit readers with per-session call limits,
-numeric usage accounting and killable request processes. This authorization
-supersedes the older consumed paid-probe cap and dollar-reservation refusal.
-The four-trial comparison (doc 24) found polling completed both tasks while
-both wait trials returned `invalid_judgment`; keep heartbeat waiting experimental.
-Local live CLI/MCP support is now implemented: each live session requires an
-explicit owner-present override and temporary AT-SPI opt-in; it starts one newly
-launched allowlisted app, snapshots/restores exact focus per action and stop,
-and verifies owned-app cleanup. Physical-input idle detection is unavailable
-on this host. Four focused `test_live_owner` tests passed (plus eleven earlier
-focused live/service tests); no live apps or physical input were used for these
-checks. The short owner-watched desktop check is still pending; tailnet
-deployment and general planning remain out of scope. See docs 25–26.
+**Latest checkpoint (2026-10-03):** the owner-watched local live Kate workflow
+passed draft/save/revise/save with four verified actions, plus a follow-up
+screenshot visibly showing Kate text and its Save control. Both sessions
+independently confirmed original Codex focus and AT-SPI flags restored and zero
+Kate windows after cleanup. Evidence and timing: [doc 26](docs/26-live-owner.md)
+and `run/live-kate-2026-10-03/`. Kate live launch now uses `--block` to retain
+process/window ownership. Live `candidates`, `observe`, `wait` and `act` calls
+focus the task app for matching AT-SPI state and correct screenshots, then
+restore exact prior focus. The daemon is shut down. Physical-input idle
+detection remains unavailable; live Firefox, cancellation/crash recovery,
+scrolling, tailnet deployment and general planning remain unvalidated or out of
+scope. Do not call the Kate check general live-task validation.
+
+Virtual navigation, links and text entry passed host checks; Luna completed
+public webpage → Kate save/revise/save with exact file verification and cleanup
+(doc 23). Scrolling still fails host effect verification. The four-trial
+comparison (doc 24) found polling completed both tasks while both wait trials
+returned `invalid_judgment`; keep heartbeat waiting experimental. Explicit
+readers retain per-session call limits, numeric usage accounting and killable
+request processes. The current reader authorization superseded the older
+consumed paid-probe cap and dollar-reservation refusal.
 
 **Testing preference:** this is the owner's small personal tool. Use targeted
 checks for changed behavior and small useful host probes. Avoid repeated full

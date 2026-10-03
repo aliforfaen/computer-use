@@ -745,11 +745,15 @@ class DesktopService:
                     self._expire_if_needed()
                     raise ValueError("session_expiring")
                 if not s.busy.acquire(blocking=False): raise ValueError("session_busy")
-                restore_live_after_action = s.desktop_mode == "live" and method == "act"
+                restore_live_focus_after_call = s.desktop_mode == "live" and method in {
+                    "observe", "wait", "candidates", "act"
+                }
                 try:
-                    if restore_live_after_action:
-                        # Wayland routes EIS to the focused surface. Re-focus the
-                        # task-owned window for this one input transaction only.
+                    if restore_live_focus_after_call:
+                        # Live AT-SPI fingerprints include state such as
+                        # focused, and compositor captures include the active
+                        # surface. Run desktop reads and actions with the task
+                        # window focused, then restore the exact caller window.
                         if not s.worker.focus_live_app():
                             raise ValueError("live_target_focus_failed")
                     s.cancel.clear()
@@ -839,7 +843,7 @@ class DesktopService:
                     raise
                 finally:
                     try:
-                        if restore_live_after_action:
+                        if restore_live_focus_after_call:
                             try:
                                 live_restore_failed = not s.worker.restore_live_focus()
                             except Exception:

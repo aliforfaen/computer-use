@@ -294,7 +294,11 @@ class Worker:
             self._write_journal()
             if app == "kate":
                 self.document_path = self._new_document()
-                command = ["kate", "--new", str(self.document_path)]
+                # Kate detaches by default, so launch_app() would track only
+                # the short-lived CLI process while the window belongs to an
+                # untracked child. --block keeps the owned window in the
+                # launched process for PID verification and exact cleanup.
+                command = ["kate", "--new", "--block", str(self.document_path)]
                 env = {"QT_ACCESSIBILITY": "1", "GTK_MODULES": "gail:atk-bridge"}
                 self.engine._ensure_atspi_worker = MethodType(_ensure_bounded_atspi_worker, self.engine)
             elif app == "firefox":
