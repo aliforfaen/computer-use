@@ -63,6 +63,37 @@ uv run python -m tools.jev_selector_probe --candidates-json /tmp/kcalc.json --go
 
 Record the returned model string, latency and usage. One call, one state.
 
+**Stage 1 result (2026-10-04, host `cachy`, kwin 6.7.5).** One virtual KCalc
+session, 23 enumerated options (22 buttons + 1 editable text). State 564 tokens,
+request 873 estimated. Four paid calls, one goal each:
+
+| goal | answer | confidence | target |
+| --- | --- | --- | --- |
+| enter the digit one | `click` | 0.99 | button `One` |
+| compute two plus two | `click` | 0.93 | button `Two` |
+| type 42 into the calculator display | `click` | 0.44 | button `Four` (`type_text` 0.48) |
+| the task is finished, report done | `done` | 0.98 | (targetless) |
+
+- `jev-latest` resolved to **`jev-1.13.0`**. Pin that alias for reproducible runs.
+- Reported usage was ~1496–1500 input / 258 output tokens per call. The local
+  873-token estimate omits the instructions and answer schema the provider adds,
+  so budget arithmetic has to use the reported number, not the estimate.
+- The first answer was executed through the existing path
+  (`act kcalc click <ref> --verification display_text --expected 1`) and the
+  code-owned verification passed, so an answer is actionable by today's tooling
+  with no new execution surface.
+- Confidence tracked ambiguity: 0.99 for an unambiguous goal, 0.44 for "type 42",
+  where the model nearly split between clicking digit buttons (a reasonable
+  calculator strategy that avoids free text) and typing into the field. Useful
+  signal, not a guarantee.
+- Every answer passed validation: the target was one of our own refs, and the
+  targetless `done` carried no target.
+
+Three findings bound the seam: a request is **stateless**, so multi-step goals
+need a driver loop; the state carries **no current values**, so "what does the
+display show now" is not answerable from candidates alone; and no answer can
+carry typed text, so `type_text` still needs a separate text-argument helper.
+
 **Stage 2 — bounded set (a few calls, still cents).** Fix 5–10 real states
 (simple: one obvious control; ambiguous: two plausible targets; targetless:
 goal already met, should be `done`; adversarial: an option list with near-
