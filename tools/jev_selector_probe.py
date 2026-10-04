@@ -15,19 +15,36 @@ spends at most `--max-calls` (default 1, hard cap 3) provider requests.
     uv run python -m tools.jev_selector_probe --candidates-json /tmp/kcalc.json --goal "enter 1" --call
 
 The probe selects only. It never performs an action and never sends typed text.
+The key comes from `JEV_API_KEY` in the environment, falling back to the private
+`~/.config/jev-desktop/jev.env` (0600). It is never placed in the request state,
+never echoed, and never written to a report.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
+from desktop_daemon import _load_dotenv_key, default_config_dir
 from jev_selector import (HttpSelector, JevConfig, MAX_OPTIONS, RecordedSelector, SelectorError,
                           build_request, estimate_tokens, render_state_text, state_from_candidates)
 
 MAX_PROBE_CALLS = 3
+KEY_NAME = "JEV_API_KEY"
+
+
+def _load_api_key(dotenv: Path | None, key_name: str = KEY_NAME) -> bool:
+    """Load the Jev key from the private dotenv file without printing it.
+
+    The environment wins, so an exported key still works. Reuses the daemon's
+    single dotenv loader rather than growing a second implementation.
+    """
+    if dotenv is not None and not os.environ.get(key_name):
+        _load_dotenv_key(dotenv, key_name)
+    return bool(os.environ.get(key_name))
 
 
 def _load_candidates(path: Path) -> tuple[str, str, list[dict]]:
@@ -53,11 +70,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--call", action="store_true", help="make one real provider request")
     parser.add_argument("--max-calls", type=int, default=1, help=f"provider call cap (maximum {MAX_PROBE_CALLS})")
     parser.add_argument("--save-request", type=Path, default=None, help="write the exact request body")
+    parser.add_argument("--dotenv", type=Path, default=default_config_dir() / "jev.env",
+                        help="private dotenv holding JEV_API_KEY; values are never printed")
     args = parser.parse_args(argv)
 
     if not 1 <= args.max_calls <= MAX_PROBE_CALLS:
         print(json.dumps({"ok": False, "error": "max_calls_out_of_range", "hard_cap": MAX_PROBE_CALLS}))
         return 2
+    api_key_present: bool | None = None
+    if args.call:
+        api_key_present = _load_api_key(args.dotenv)
+        if not api_key_present:
+            print(json.dumps({"ok": False, "error": "jev_api_key_missing", "dotenv": str(args.dotenv),
+                              "hint": f"export {KEY_NAME} or put it in that private file (0600); nothing was sent"}))
+            return 2
     try:
         app, title, candidates = _load_candidates(args.candidates_json)
         state = state_from_candidates(args.app or app or "unknown", args.window_title or title,
@@ -75,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         "state_tokens_estimate": estimate_tokens(request["state"]),
         "request_tokens_estimate": estimate_tokens(request),
         "targetless_actions": ["wait", "done", "blocked"],
+        "dotenv": str(args.dotenv),
+        "api_key_present": api_key_present,
     }
     if args.save_request:
         args.save_request.write_text(json.dumps(request, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

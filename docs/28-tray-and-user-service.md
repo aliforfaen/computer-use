@@ -70,6 +70,12 @@ NoNewPrivileges=yes
 EnvironmentFile=-%h/.config/jev-desktop/daemon.env
 ```
 
+- Private key files are per-consumer, both `0600` and never committed:
+  `daemon.env` holds the reader key that the service loads (and that the reader
+  request subprocess inherits), while `jev.env` holds `JEV_API_KEY` for the
+  manual selector probe in [doc 30](30-jev-selector-experiment.md) only. The
+  daemon never reads `jev.env`.
+
 - `SigTERM` is already handled: the owner stops the session, restores focus and
   accessibility, closes only its owned app, removes its socket and exits 0, so
   `KillMode=mixed` and the 30 s stop timeout are enough and an intentional

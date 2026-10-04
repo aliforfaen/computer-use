@@ -29,9 +29,13 @@ That is the whole claim. It is falsifiable in a few cheap runs:
   `HttpSelector` does one request with a hard call cap and no retries;
   `RecordedSelector` replays a saved answer for free.
 - `tools/jev_selector_probe.py` — offline by default (`--dry-run`), `--recorded`
-  to replay, `--call` for exactly one paid request (hard cap 3).
-- `tests/test_jev_selector.py` — 10 offline cases, including "a target that is
-  not one of our indices is rejected".
+  to replay, `--call` for exactly one paid request (hard cap 3). `--call` reads
+  the key from `JEV_API_KEY`, falling back to the private
+  `~/.config/jev-desktop/jev.env` (0600); it fails closed with
+  `jev_api_key_missing` before sending anything.
+- `tests/test_jev_selector.py` — 13 offline cases, including "a target that is
+  not one of our indices is rejected" and "the private dotenv supplies the key
+  while an exported one wins".
 
 Nothing here executes an action. `transactions.py` still owns execution,
 verification and policy; the existing `authorizer` seam is where a selector
@@ -84,8 +88,11 @@ stage that touches the live loop, and it still ends with our own verification.
 - Direct TypeSafe pricing (doc 01) makes even a generous Stage 2 set cost less
   than a cent. Latency, not money, is the constraint (~254 ms median from this
   host).
-- The key stays in the ignored `.env` as `JEV_API_KEY` and is read from the
-  environment only; it is never placed in the request state or in logs.
+- The key lives in the private `~/.config/jev-desktop/jev.env` (0600) as
+  `JEV_API_KEY`, or in the environment, which wins. It is deliberately not in
+  `daemon.env`: the selector is unwired, so the daemon never needs the key, and
+  keeping it out of the service environment keeps it out of the reader request
+  subprocess. It is never placed in the request state, a report or the audit log.
 - The state never contains coordinates, selectors, file paths, shell commands
   or typed text — the same rule as ADR-012's reader path.
 - Every answer is validated in code before use, so a wrong or hostile answer

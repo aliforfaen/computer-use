@@ -7,9 +7,14 @@ and a fake environment. See docs/30-jev-selector-experiment.md.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import jev_selector as js
+from tools.jev_selector_probe import KEY_NAME, _load_api_key
 
 
 def _candidate(ref, role, label, actions, states=None, **extra):
@@ -162,6 +167,39 @@ class HttpSelectorTests(unittest.TestCase):
         self.assertEqual((decision.action, decision.target_ref), ("click", "cand_a"))
         self.assertEqual(decision.model, "jev-recorded")
         self.assertEqual(decision.usage, {})
+
+
+class ProbeDotenvTests(unittest.TestCase):
+    """The probe reads the Jev key from a private dotenv file, never from state."""
+
+    def _env_file(self, tmp: str, body: str) -> Path:
+        path = Path(tmp) / "jev.env"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_dotenv_supplies_the_key_when_the_environment_does_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._env_file(tmp, "# private key file\nJEV_API_KEY='not-a-real-key'\n")
+            with mock.patch.dict(os.environ):
+                os.environ.pop(KEY_NAME, None)
+                self.assertTrue(_load_api_key(path))
+                self.assertEqual(os.environ[KEY_NAME], "not-a-real-key")
+
+    def test_environment_wins_and_a_missing_file_stays_silent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._env_file(tmp, f"{KEY_NAME}=from-file\n")
+            with mock.patch.dict(os.environ, {KEY_NAME: "from-env"}):
+                self.assertTrue(_load_api_key(path))
+                self.assertEqual(os.environ[KEY_NAME], "from-env")
+            with mock.patch.dict(os.environ):
+                os.environ.pop(KEY_NAME, None)
+                self.assertFalse(_load_api_key(Path(tmp) / "missing.env"))
+                self.assertFalse(_load_api_key(None))
+
+    def test_default_dotenv_is_the_private_config_dir(self):
+        from desktop_daemon import default_config_dir
+        self.assertEqual(default_config_dir() / "jev.env", Path(os.environ.get(
+            "XDG_CONFIG_HOME", Path.home() / ".config")) / "jev-desktop" / "jev.env")
 
 
 if __name__ == "__main__":
