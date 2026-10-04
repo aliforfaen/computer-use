@@ -30,6 +30,9 @@ from typing import Any, Iterable, Protocol
 ALLOWED_ACTIONS = ("click", "type_text", "scroll", "navigate_url", "wait", "done", "blocked")
 TARGETLESS_ACTIONS = frozenset({"wait", "done", "blocked"})
 MAX_OPTIONS = 120
+# Bounds for the driver loop's own history of actions already taken.
+HISTORY_ENTRIES = 20
+HISTORY_ENTRY_CHARS = 80
 DEFAULT_STATE_LIMIT = 32_000
 DEFAULT_TOTAL_LIMIT = 64_000
 
@@ -55,6 +58,10 @@ class DecisionState:
     window_title: str
     goal: str
     options: tuple[DecisionOption, ...]
+    # Action labels already carried out by the driver loop, oldest first. Labels
+    # only: no values, no typed text, no results. A stateless request needs this
+    # to know what has already happened.
+    history: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -68,13 +75,27 @@ class SelectedDecision:
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
+def _clean_history(history: Iterable[str]) -> tuple[str, ...]:
+    """Action labels only, whitespace-collapsed and bounded, newest kept."""
+    cleaned: list[str] = []
+    for entry in history:
+        if not isinstance(entry, str):
+            continue
+        text = " ".join(entry.split())
+        if text:
+            cleaned.append(text[:HISTORY_ENTRY_CHARS])
+    return tuple(cleaned[-HISTORY_ENTRIES:])
+
+
 def state_from_candidates(app: str, window_title: str, goal: str,
-                          candidates: Iterable[dict[str, Any]], *, limit: int = MAX_OPTIONS) -> DecisionState:
+                          candidates: Iterable[dict[str, Any]], *, limit: int = MAX_OPTIONS,
+                          history: Iterable[str] = ()) -> DecisionState:
     """Build a selector state from `candidates` CLI/MCP output.
 
     Usable candidates only (enabled/sensitive/showing/visible), sorted by
     role+label so the same desktop state renders the same way. Candidate
-    `value`, bounds and refs-with-coordinates are never included.
+    `value`, bounds and refs-with-coordinates are never included. `history` is
+    the driver loop's own record of actions already taken, as labels.
     """
     if not isinstance(goal, str) or not goal.strip():
         raise SelectorError("goal_required")
@@ -99,12 +120,16 @@ def state_from_candidates(app: str, window_title: str, goal: str,
                                      states=tuple(sorted(states)), actions=actions))
     usable.sort(key=lambda option: (option.role, option.label, option.ref))
     return DecisionState(app=app, window_title=window_title, goal=goal.strip(),
-                         options=tuple(usable[:limit]))
+                         options=tuple(usable[:limit]), history=_clean_history(history))
 
 
 def render_state_text(state: DecisionState) -> str:
     """Compact indexed table. No coordinates, no values, no file paths."""
-    lines = [f"app: {state.app}", f"window: {state.window_title}", f"goal: {state.goal}", "options:"]
+    lines = [f"app: {state.app}", f"window: {state.window_title}", f"goal: {state.goal}"]
+    if state.history:
+        lines.append("already done (oldest first):")
+        lines.extend(f"- {entry}" for entry in state.history)
+    lines.append("options:")
     for index, option in enumerate(state.options, start=1):
         lines.append(f"{index}. role={option.role} label={option.label!r} "
                      f"actions={','.join(option.actions)} states={','.join(option.states)}")
@@ -226,14 +251,29 @@ class Selector(Protocol):
 
 
 class RecordedSelector:
-    """Replay a recorded answer. Used for offline tests and `--dry-run` demos."""
+    """Replay recorded answers. Used for offline tests and `--dry-run` demos.
 
-    def __init__(self, answers: dict[str, Any], *, model: str | None = None):
+    A dict replays the same answer for every request; a list replays one answer
+    per request, which is what an offline multi-step loop needs.
+    """
+
+    def __init__(self, answers: dict[str, Any] | list[dict[str, Any]], *, model: str | None = None):
         self.answers = answers
         self.model = model
+        self.calls = 0
+
+    def _next_answer(self) -> dict[str, Any]:
+        if isinstance(self.answers, list):
+            if self.calls >= len(self.answers):
+                raise SelectorError("recorded_answers_exhausted")
+            answer = self.answers[self.calls]
+        else:
+            answer = self.answers
+        self.calls += 1
+        return answer
 
     def select(self, request: dict[str, Any], *, options: tuple[DecisionOption, ...]) -> SelectedDecision:
-        decision = validate_answer(self.answers, options=options)
+        decision = validate_answer(self._next_answer(), options=options)
         return SelectedDecision(action=decision.action, target_ref=decision.target_ref,
                                 confidence=decision.confidence, probabilities=decision.probabilities,
                                 model=self.model or str(request.get("model") or ""), usage={})

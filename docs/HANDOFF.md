@@ -1,6 +1,6 @@
 # Handoff — start here
 
-Updated **2026-10-03**. Checkout: `/home/messhias/lamasync/projects/computer-use`.
+Updated **2026-10-04**. Checkout: `/home/messhias/lamasync/projects/computer-use`.
 Origin: [aliforfaen/computer-use](https://github.com/aliforfaen/computer-use).
 Read `AGENTS.md`, this page, then [local CLI/MCP](16-local-owner-and-mcp.md).
 Numbered docs retain earlier experiments; this page is the current summary.
@@ -18,10 +18,36 @@ Numbered docs retain earlier experiments; this page is the current summary.
 | Owner surfaces | JSON config (CLI > env > file > default), `systemd --user` unit via `service install|status|uninstall`, and an AppIndicator tray with status, virtual/physical preference, session cleanup, settings and the kill switch. |
 | Audit retention | Durable audit at `~/.config/jev-desktop/audit.jsonl`, size-rotated (4 MiB, 3 backups) and age-pruned (30 days); stale session journals swept at startup. |
 | Jev selector seam | `jev_selector.py` builds an enumerated decision request from candidate output and validates the typed answer in code. Offline probe, not wired into the loop. |
+| Jev driver loop | `tools/jev_loop_probe.py` closes select → act → verify → re-enumerate against the owner socket (unwired). Virtual KCalc: `done_verified` on 1-2-3 with every click checked on the display; `wrong_choice` caught when the model pressed `Equals` first for 2+2; `verification_unavailable` when no postcondition exists for an operator click. [doc 31](31-jev-control-plan.md), `run/jev-loop-2026-10-04/`. |
 
 Useful agent acceptance: [Codex Luna workflow](20-codex-luna-workflow.md),
 [document workflow](21-kate-acceptance-workflow.md),
 [public webpage → Kate](23-public-browser-kate-agent-task.md).
+
+## Latest work — 2026-10-04
+
+**The Jev loop runs.** `tools/jev_loop_probe.py` drives
+`candidates -> Jev select -> act + code-owned check -> re-enumerate` as a client
+of the owner socket; nothing is wired into the daemon. On a virtual KCalc
+session: `done_verified` for "enter 1, 2 then 3" (4 calls, each click verified on
+the display, and the model used the appended history to progress); `wrong_choice`
+when it pressed `Equals` first for 2+2 — the check caught it and the loop
+stopped; `verification_unavailable` when it correctly chose `Add`, because KCalc
+exposes no postcondition for an operator click and the loop refuses to act
+unverified. Two guardrail changes: `display_text` became a general KCalc button
+check with a non-vacuous precondition (ADR-025), and loop progress travels as
+bounded action **labels** in the state (ADR-026). Browsers are not a Jev surface
+(ADR-027) — `agent-browser` over CDP already covers Brave/Chromium.
+[doc 31](31-jev-control-plan.md), `run/jev-loop-2026-10-04/`.
+
+**Keys.** The Jev key lives in `~/.config/jev-desktop/jev.env` (0600), separate
+from the reader key in `daemon.env`; `--dotenv` and the loop probe read it, the
+daemon never does. The reader is armed (DeepSeek Flash, 8 calls/session) and
+verified end to end on a virtual app.
+
+**Next, in order:** a Kate verified loop (`replace_document` + `document_saved`);
+close the modal guardrail gaps (destructive risk words, a modal postcondition);
+the modal experiment; ambiguity runs. See doc 31 §6.
 
 ## Latest work — 2026-10-03 (later session)
 

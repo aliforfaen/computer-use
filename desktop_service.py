@@ -909,7 +909,7 @@ class DesktopService:
             raise ValueError("unsupported_verification")
         if verification == "fixture_state" and (s.app != "firefox" or expected not in {"State: idle", "State: complete"}):
             raise ValueError("unsupported_verification")
-        if verification == "display_text" and (s.app != "kcalc" or expected != "1"):
+        if verification == "display_text" and s.app != "kcalc":
             raise ValueError("unsupported_verification")
         if verification == "document_saved" and s.app != "kate": raise ValueError("unsupported_verification")
         if verification in {"navigation_url", "window_title", "visible_text", "scroll_changed"} and s.app != "firefox":
@@ -917,8 +917,11 @@ class DesktopService:
 
     def _check_action_policy(self, s, kind, candidate, verification, expected, text):
         if verification == "display_text":
-            if not (s.app == "kcalc" and kind == "click" and candidate.role == "button"
-                    and candidate.label == "One" and expected == "1"):
+            # Any KCalc button click may be verified by the display showing the
+            # caller-supplied expected string. The expectation comes from policy,
+            # never from the model, and the precondition below refuses a vacuous
+            # check (see ADR-025).
+            if not (s.app == "kcalc" and kind == "click" and candidate.role == "button"):
                 raise ValueError("unsupported_verification")
         elif verification == "fixture_state":
             if not (s.app == "firefox" and kind == "click" and candidate.role == "button"
@@ -970,8 +973,12 @@ class DesktopService:
                 display = [row for row in rows if isinstance(row, dict)
                            and "editable" in {str(state).casefold() for state in row.get("states", [])}
                            and {str(state).casefold() for state in row.get("states", [])} & {"showing", "visible"}]
-                return (len(display) == 1 and display[0].get("text", display[0].get("name", "")) == ""
-                        and target.role == "button" and target.label == "One")
+                current = display[0].get("text", display[0].get("name", "")) if len(display) == 1 else None
+                # Non-vacuous: a display that already reads the expected value
+                # cannot tell a real effect from a no-op, so the click is refused
+                # rather than "verified".
+                return (isinstance(expected, str) and target.role == "button"
+                        and isinstance(current, str) and current != expected)
             if verification == "fixture_state":
                 raw = s.worker.atspi_find("firefox")
                 rows = raw.get("result") if isinstance(raw, dict) and raw.get("ok") is True else []

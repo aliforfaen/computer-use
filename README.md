@@ -21,6 +21,12 @@ client. Jev is an optional future accelerator.
   enumerated decision request and validates the typed answer in code. Offline by
   default, one-call `HttpSelector`, not wired into the loop.
   [Experiment plan](docs/30-jev-selector-experiment.md).
+- **Jev driver loop:** `tools/jev_loop_probe.py` closes
+  select → act + code-owned check → re-enumerate as a client of the owner socket.
+  Every step needs a verification the policy accepts, and `done` is only success
+  if a check already passed. Virtual KCalc: verified 1-2-3, caught a wrong first
+  choice, and refused an unverifiable operator click. Still unwired.
+  [Plan and results](docs/31-jev-control-plan.md).
 - **Scroll fixed:** the verifier now resolves the live scroll pane instead of an
   ambiguous `(role, label)` match, and failed verifications keep their evidence.
   Host-verified down and up on an offline fixture.
@@ -103,7 +109,7 @@ Run a targeted check from the repo root:
 ```bash
 uv run python -m tools.check                      # fast core set (~4 s, 96 cases)
 uv run python -m unittest tests.test_live_owner   # one module
-uv run python -m unittest discover -s tests       # everything (~10 s, 177 cases)
+uv run python -m unittest discover -s tests       # everything (~10 s, 199 cases)
 ```
 
 [Verification runbook](docs/29-verification-runbook.md) maps a change type to its

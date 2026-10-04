@@ -33,9 +33,16 @@ That is the whole claim. It is falsifiable in a few cheap runs:
   the key from `JEV_API_KEY`, falling back to the private
   `~/.config/jev-desktop/jev.env` (0600); it fails closed with
   `jev_api_key_missing` before sending anything.
-- `tests/test_jev_selector.py` — 13 offline cases, including "a target that is
-  not one of our indices is rejected" and "the private dotenv supplies the key
-  while an exported one wins".
+- `tools/jev_loop_probe.py` — the driver loop around the seam:
+  `candidates -> select -> act + code-owned check -> re-enumerate`, with step and
+  call caps, caller-supplied per-step expectations, and an honest outcome that
+  never reports `done` as success without a passed check. Results, the loop
+  shape and what it bounds are in [doc 31](31-jev-control-plan.md).
+- `tests/test_jev_selector.py` — 18 offline cases, including "a target that is
+  not one of our indices is rejected", the private dotenv, and the bounded
+  history rendering. `tests/test_jev_loop_probe.py` — 11 offline cases covering
+  every stop reason (`done_verified`, `done_unverified`, `wrong_choice`,
+  `verification_unavailable`, `unsupported_action`, budgets, owner errors).
 
 Nothing here executes an action. `transactions.py` still owns execution,
 verification and policy; the existing `authorizer` seam is where a selector
@@ -100,6 +107,14 @@ goal already met, should be `done`; adversarial: an option list with near-
 duplicate labels). For each state, decide the reference action+target *before*
 calling, then compare. Report agreement, confidence, and every disagreement
 verbatim. Keep the per-state cap explicit and record the answers.
+
+**Stage 2 result (2026-10-04): partially run, as a loop rather than a matrix.**
+The multi-step KCalc loop (`tools/jev_loop_probe.py`) produced `done_verified`,
+`wrong_choice` and `verification_unavailable` on three real goals, which is more
+informative than a state-by-state agreement table. Full results, the loop shape
+and the bounds it exposed are in [doc 31](31-jev-control-plan.md) §2. The
+remaining Stage 2 states (ambiguous and near-duplicate labels) are item 4 of
+doc 31 §6.
 
 **Stage 3 — optional acceleration.** Only if Stage 2 shows signal: compare
 "polling + selector advice" against the plain polling loop from

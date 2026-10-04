@@ -388,3 +388,35 @@ shipped-surface and safety-invariant coverage; the one-off wait-comparison fixtu
 removed. The reader-wait heartbeat is reported as `experimental` in `capabilities`,
 the CLI help and the MCP tool description, with polling named as the recommended loop.
 See docs 29 and 24.
+
+### ADR-025 — The KCalc display check is general, with a non-vacuous precondition
+**2026-10-04 · supersedes the single-case rule from doc 08.** `display_text` was
+hard-wired to one proof: KCalc, a click on the button labelled `One`, expecting the
+display to read `1`, from an empty display. A driver loop cannot use a check that
+covers one button, so the rule is now: any click on a KCalc **button** may be verified
+by the display showing the caller-supplied expected string (still KCalc-only, still
+click-only, still role `button`, expectation still from policy or the command line,
+never from the model). The precondition adds the safety property the old rule got for
+free: the display must be uniquely readable **and must not already read the expected
+value**, so a no-op click can never "verify". The original proof case still passes
+end to end (`tests/test_local_service_probe.py`). Nothing else about the verifier set
+changed, and no other app gained a display check.
+
+### ADR-026 — A driver loop's progress lives in the state as action labels
+**2026-10-04 · selector seam, still unwired (ADR-023).** A request is stateless and the
+state carries no values, so an option list is identical at every step and a model would
+repeat its first answer forever. `state_from_candidates` therefore takes an optional
+`history`: the loop's own record of completed actions, rendered between the goal and
+the options, capped at 20 entries and 80 characters, whitespace-collapsed, **labels
+only** — no values, no typed text, no results, no coordinates. `RecordedSelector` also
+accepts a list now, replaying one answer per request, which is what an offline
+multi-step test needs. See doc 31 for the loop and its results.
+
+### ADR-027 — Browsers are not a Jev surface
+**2026-10-04 · reuse decision.** Web automation stays with the existing driver
+(`agent-browser`, already installed, driving Chromium/Brave over CDP, with element
+refs and its own postcondition checks); Orca's embedded browser stays with `orca-cli`;
+this repo keeps Firefox only as the *native* AT-SPI fixture target for verification
+tests. Rationale: page automation already has semantic selection, so a decision model
+adds a paid round trip and a new failure mode without adding capability. Jev's value is
+on surfaces with no DOM — Qt dialogs, native editors. Named in doc 31 §4.

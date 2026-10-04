@@ -202,5 +202,61 @@ class ProbeDotenvTests(unittest.TestCase):
             "XDG_CONFIG_HOME", Path.home() / ".config")) / "jev-desktop" / "jev.env")
 
 
+class HistoryTests(unittest.TestCase):
+    """The driver loop's history is labels only, collapsed and bounded."""
+
+    def test_history_renders_between_the_goal_and_the_options(self):
+        state = js.state_from_candidates("kcalc", "KCalc", "enter 1 2 3", CANDIDATES,
+                                         history=["click 'One'", "click 'Two'"])
+        text = js.render_state_text(state)
+        self.assertLess(text.index("goal:"), text.index("already done"))
+        self.assertLess(text.index("already done"), text.index("options:"))
+        self.assertIn("- click 'One'", text)
+        self.assertIn("- click 'Two'", text)
+
+    def test_history_entries_are_collapsed_bounded_and_drop_non_strings(self):
+        state = js.state_from_candidates("kcalc", "KCalc", "enter 1", CANDIDATES,
+                                         history=["click\n'One'", "   ", 7, "x" * 200])
+        self.assertEqual(state.history[0], "click 'One'")
+        self.assertEqual(state.history[1], "x" * js.HISTORY_ENTRY_CHARS)
+        self.assertEqual(len(state.history), 2)
+        long_state = js.state_from_candidates("kcalc", "KCalc", "enter 1", CANDIDATES,
+                                             history=[f"step {index}" for index in range(50)])
+        self.assertEqual(len(long_state.history), js.HISTORY_ENTRIES)
+        self.assertEqual(long_state.history[-1], "step 49")
+
+    def test_a_state_without_history_renders_exactly_as_before(self):
+        state = js.state_from_candidates("kcalc", "KCalc", "enter 1", CANDIDATES)
+        self.assertEqual(state.history, ())
+        self.assertNotIn("already done", js.render_state_text(state))
+
+
+class RecordedSelectorSequenceTests(unittest.TestCase):
+    def setUp(self):
+        self.state = js.state_from_candidates("kcalc", "KCalc", "enter 1", CANDIDATES)
+        self.request = js.build_request(self.state)
+
+    def _answer(self, action, target=None):
+        answers = {"action": {"type": "choice", "choice": action, "confidence": 0.9}}
+        if target is not None:
+            answers["target"] = {"type": "choice", "choice": target}
+        return answers
+
+    def test_a_list_replays_one_answer_per_request(self):
+        selector = js.RecordedSelector([self._answer("click", 1), self._answer("done")])
+        first = selector.select(self.request, options=self.state.options)
+        second = selector.select(self.request, options=self.state.options)
+        self.assertEqual((first.action, first.target_ref), ("click", "cand_a"))
+        self.assertEqual(second.action, "done")
+        self.assertEqual(selector.calls, 2)
+        with self.assertRaises(js.SelectorError):
+            selector.select(self.request, options=self.state.options)
+
+    def test_a_dict_still_replays_the_same_answer_every_time(self):
+        selector = js.RecordedSelector(self._answer("click", 2))
+        for _ in range(3):
+            self.assertEqual(selector.select(self.request, options=self.state.options).target_ref, "cand_c")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -596,5 +596,84 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertGreaterEqual(entry["duration_ms"], 0)
 
 
+class _StubWorker:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def atspi_find(self, app):
+        return {"ok": True, "result": [dict(row) for row in self.rows]}
+
+
+class _StubSession:
+    def __init__(self, app, rows):
+        self.app = app
+        self.worker = _StubWorker(rows)
+
+
+class _StubCandidate:
+    def __init__(self, role, label, states=("enabled", "sensitive", "showing", "visible")):
+        self.role, self.label, self.states = role, label, tuple(states)
+        self.value, self.actions, self.value_number = "", ("click",), None
+
+
+class _StubSnapshot:
+    def __init__(self, candidates):
+        self.candidates = list(candidates)
+
+
+_DISPLAY = {"role": "text", "name": "", "text": "",
+            "states": ["editable", "enabled", "sensitive", "showing", "visible"]}
+
+
+def _display(text):
+    return {**_DISPLAY, "text": text}
+
+
+class KcalcDisplayVerifierTests(unittest.TestCase):
+    """display_text is a general KCalc button check with a non-vacuous precondition (ADR-025)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.service = DesktopService(Path(self.tmp.name) / "audit.jsonl", allowed_apps={"kcalc"})
+
+    def tearDown(self):
+        self.service.close()
+        self.tmp.cleanup()
+
+    def test_any_kcalc_button_may_be_checked_against_the_display(self):
+        session = _StubSession("kcalc", [_display("1")])
+        self.service._check_verifier(session, "display_text", "12", "ref")
+        self.service._check_action_policy(session, "click", _StubCandidate("button", "Two"),
+                                          "display_text", "12", None)
+
+    def test_the_check_stays_inside_kcalc_button_clicks(self):
+        kate = _StubSession("kate", [_display("1")])
+        with self.assertRaises(ValueError):
+            self.service._check_verifier(kate, "display_text", "12", "ref")
+        kcalc = _StubSession("kcalc", [_display("1")])
+        with self.assertRaises(ValueError):
+            self.service._check_action_policy(kcalc, "click", _StubCandidate("text", "editable text"),
+                                              "display_text", "12", None)
+        with self.assertRaises(ValueError):
+            self.service._check_action_policy(kcalc, "type_text", _StubCandidate("button", "Two"),
+                                              "display_text", "12", "12")
+
+    def test_the_precondition_requires_a_single_readable_display_that_would_change(self):
+        candidate = _StubCandidate("button", "Two")
+        snapshot = _StubSnapshot([candidate])
+        would_change = _StubSession("kcalc", [_display("1")])
+        self.assertTrue(self.service._precondition(would_change, "click", "display_text", "12",
+                                                  None, candidate)(snapshot))
+        already_there = _StubSession("kcalc", [_display("12")])
+        self.assertFalse(self.service._precondition(already_there, "click", "display_text", "12",
+                                                    None, candidate)(snapshot))
+        two_displays = _StubSession("kcalc", [_display("1"), _display("2")])
+        self.assertFalse(self.service._precondition(two_displays, "click", "display_text", "12",
+                                                    None, candidate)(snapshot))
+        no_display = _StubSession("kcalc", [])
+        self.assertFalse(self.service._precondition(no_display, "click", "display_text", "12",
+                                                    None, candidate)(snapshot))
+
+
 if __name__ == "__main__":
     unittest.main()

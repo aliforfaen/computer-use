@@ -4,7 +4,26 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**Latest work (2026-10-03, later session):** the testing pit was closed and the
+**Latest work (2026-10-04):** the Jev selector is exercised for real and the
+driver loop exists. `tools/jev_loop_probe.py` closes
+`candidates -> Jev select -> act + code-owned check -> re-enumerate` as a
+*client* of the owner socket — nothing is wired into the daemon (ADR-023). On a
+virtual KCalc session it produced `done_verified` (digits 1,2,3 with each click
+verified on the display, 4 calls), `wrong_choice` (the model pressed `Equals`
+first for 2+2 and the check caught it) and `verification_unavailable` (no AT-SPI
+postcondition exists for an operator click, so the loop refuses it rather than
+guessing). Two guardrail changes made this possible and are recorded:
+`display_text` is now a general KCalc button check with a **non-vacuous**
+precondition (ADR-025), and the loop's progress travels in the state as bounded
+action **labels** only (ADR-026). Browsers are explicitly *not* a Jev surface
+(ADR-027): web work stays with the installed `agent-browser` over CDP
+(Chromium/Brave), Orca's embedded browser with `orca-cli`, and Firefox here only
+as the native AT-SPI fixture. Plan, results and next steps:
+[doc 31](docs/31-jev-control-plan.md). The Jev key lives in the private
+`~/.config/jev-desktop/jev.env` (0600), separate from the reader key in
+`daemon.env`; the daemon never reads it.
+
+**Previous work (2026-10-03, later session):** the testing pit was closed and the
 owner surfaces finished. The suite went 190 → 177 cases by collapsing historical
 harness matrices; `uv run python -m tools.check` is the 96-case core set (~4 s)
 and [doc 29](docs/29-verification-runbook.md) maps a change to its cheapest
@@ -127,9 +146,11 @@ The owner chose **tailnet ACLs as the only access gate** and **remote reach equa
   or Tailscale app capabilities must be addable later as config, not a rewrite.
 - Do not stream screenshots or video to remote callers by default; metadata and a hash, and a
   downscaled JPEG only on explicit request.
-- **Never write secrets to tracked files or logs.** The ignored `.env` holds
-  `JEV_API_KEY` for TypeSafe direct. Load it into the process environment for
-  `https://api.typesafe.ai/v1/systemone`; portal tokens stay private.
+- **Never write secrets to tracked files or logs.** Private keys live outside the
+  checkout: `~/.config/jev-desktop/daemon.env` (0600) holds `DEEPSEEK_API_KEY` for the
+  reader, and `~/.config/jev-desktop/jev.env` (0600) holds `JEV_API_KEY` for the Jev
+  selector probe. The daemon never reads `jev.env`. Keep secrets out of state,
+  requests, reports and the audit.
 - **Document platform constraints, don't paper over them.** Wayland input is focus-routed.
   If something cannot work, say so in `docs/03-wayland-constraints.md` instead of degrading silently.
 - **Ask before destructive things.** Anything that types into a terminal, clicks a
