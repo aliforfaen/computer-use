@@ -201,6 +201,12 @@ assets/                     app icon (jev-icon.svg) + jev-desktop.desktop launch
 benchmark_fixtures/         local HTML fixtures, resolved by jevdesktop.paths
 ```
 
+**Where new files go.** Runtime module → `src/jevdesktop/`. Standalone benchmark or
+one-off harness → `scripts/`. Verification or owner probe → `tools/`. Unit test →
+`tests/`. Icon, image or `.desktop` asset → `assets/`. HTML fixture →
+`benchmark_fixtures/`. Documentation → `docs/`. Captures and trial output → `run/`
+(ignored). Nothing new belongs in the repository root.
+
 ## Conventions
 
 - Docs, benchmarks and the authorized M1–M4a virtual wait baseline are deliverables.

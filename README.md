@@ -111,6 +111,10 @@ shown at the top of this README.
 
 ## Repository layout
 
+New files go by kind: runtime → `src/jevdesktop/`; benchmarks/harnesses → `scripts/`;
+probes → `tools/`; tests → `tests/`; icons, images and `.desktop` entries → `assets/`;
+HTML fixtures → `benchmark_fixtures/`; captures → `run/` (ignored). Keep the root clean.
+
 | Location | Contents |
 | --- | --- |
 | `src/jevdesktop/` | Installed package: service, CLI, MCP, tray, workers and shared runtime helpers. |

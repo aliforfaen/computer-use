@@ -197,8 +197,11 @@ were used.
 
 ## Repository and operational notes
 
-- Runtime modules implement the local service; tests and experiment utilities
-  have separate directories (see README for layout and invocation).
+- New files go by kind: runtime module → `src/jevdesktop/`, standalone
+  benchmark/harness → `scripts/`, probe → `tools/`, test → `tests/`, icon/image/
+  `.desktop` asset → `assets/`, HTML fixture → `benchmark_fixtures/`, docs → `docs/`,
+  captures and trial output → `run/` (ignored). Nothing new belongs in the root.
+  See the layout sections in README and AGENTS.
 - `.env`, `run/`, `.memsearch/` and local MCP/OpenCode config stay ignored.
   Never display credential values. Local evidence is not shipped with Git.
 - Preserve owner config edits. The existing `/.pi/mcp.json` ignore rule belongs
