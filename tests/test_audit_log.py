@@ -7,7 +7,7 @@ import time
 import unittest
 from pathlib import Path
 
-from audit_log import AuditRotation, append_jsonl, prune_directory
+from jevdesktop.audit_log import AuditRotation, append_jsonl, prune_directory
 
 
 def _line(index: int) -> bytes:

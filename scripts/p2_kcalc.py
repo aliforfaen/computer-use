@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from jevdesktop import paths
+
 
 MODEL = "jev-1.13.0"
 API_URL = "https://api.typesafe.ai/v1/systemone"
@@ -121,7 +123,7 @@ def _load_key() -> str:
     key = os.environ.get("JEV_API_KEY")
     if key:
         return key
-    env_path = Path(__file__).resolve().parent / ".env"
+    env_path = (paths.repo_root() or Path(__file__).resolve().parent) / ".env"
     try:
         lines = env_path.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
@@ -193,7 +195,7 @@ def run() -> int:
     try:
         from kwin_mcp.core import AutomationEngine
     except ImportError as exc:
-        raise ProbeError("install pinned dependency with: uv run --with kwin-mcp==0.10.0 python p2_kcalc.py") from exc
+        raise ProbeError("install pinned dependency with: uv run --with kwin-mcp==0.10.0 python -m scripts.p2_kcalc") from exc
 
     engine = AutomationEngine()
     started = False

@@ -4,7 +4,21 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**Latest work (2026-10-04):** the Jev selector is exercised for real and the
+**Latest work (2026-10-05):** the flat root modules became the installable
+`src/jevdesktop/` package; the entry points are now `jevdesktop.desktop_cli`,
+`jevdesktop.desktop_mcp` and `jevdesktop.desktop_tray`, workers start via
+`python -m jevdesktop.<worker>`, and `jevdesktop.paths` resolves the checkout,
+fixtures and run directory (ADR-028). Standalone benchmarks moved to `scripts/`
+(not installed) and the probes stay in `tools/`. The owner's `assets/jev-icon.svg`
+is now the app icon everywhere: the README header, the tray (rendered to a small
+PNG pair under `~/.cache/jev-desktop/icons`, with a stock-icon fallback), and the
+menu entry — `service install` drops
+`~/.local/share/icons/hicolor/scalable/apps/jev-icon.svg` plus
+`applications/jev-desktop.desktop` and `service uninstall` removes them
+(ADR-029). Presentation only; no allowlist, focus, audit or authorization change.
+Full offline suite (201 cases) and `uv run python -m tools.check` (101 cases) pass.
+
+**Previous work (2026-10-04):** the Jev selector is exercised for real and the
 driver loop exists. `tools/jev_loop_probe.py` closes
 `candidates -> Jev select -> act + code-owned check -> re-enumerate` as a
 *client* of the owner socket — nothing is wired into the daemon (ADR-023). On a
@@ -165,7 +179,7 @@ HANDOFF.md           (in docs/) start here for a fresh session
 docs/01-jev-primer.md
 docs/02-prior-art.md
 docs/03-wayland-constraints.md
-docs/04-architecture.md       append-only ADR-001..015 log
+docs/04-architecture.md       append-only ADR-001..029 log
 docs/05-open-questions.md     P0 checklist
 docs/06-remote-agents.md      tailnet topology + access model
 docs/07-p1-selector-probe.md  KCalc observation + decision-only Jev probe
@@ -181,8 +195,10 @@ docs/16-local-owner-and-mcp.md local owner, CLI/MCP and lifecycle limits
 docs/17-dynamic-wait-baseline.md local M4a wait implementation, host baseline and limits
 tests/                      offline tests; run as tests.test_MODULE
 tools/                      standalone probes; run as python -m tools.MODULE
-benchmark_capture.py        shared fixture capture; benchmark_fixtures/
-vision_benchmark.py         configurable image-reader benchmark
+src/jevdesktop/             installed runtime package (service, CLI, MCP, tray, workers)
+scripts/                    standalone benchmarks/harnesses; run as python -m scripts.MODULE
+assets/                     app icon (jev-icon.svg) + jev-desktop.desktop launcher entry
+benchmark_fixtures/         local HTML fixtures, resolved by jevdesktop.paths
 ```
 
 ## Conventions

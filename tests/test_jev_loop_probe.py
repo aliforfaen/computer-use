@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 
-import jev_selector as js
+import jevdesktop.jev_selector as js
 from tools.jev_loop_probe import run_loop
 
 

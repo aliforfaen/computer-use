@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from desktop_daemon import MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, default_socket_path
+from jevdesktop.desktop_daemon import MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, default_socket_path
 
 MAX_DESKTOP_TEXT_CHARS = 4096
 
@@ -196,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
     if not hasattr(args, "socket"):
         args.socket = None
     if args.command == "daemon":
-        from desktop_daemon import main as daemon_main
+        from jevdesktop.desktop_daemon import main as daemon_main
         # Only forward options the caller actually set so the daemon's config
         # file can supply the rest. Do not duplicate this list anywhere else.
         daemon_args = ["--foreground"]
@@ -227,10 +227,10 @@ def main(argv: list[str] | None = None) -> int:
                 daemon_args += [flag, str(value)]
         return daemon_main(daemon_args)
     if args.command == "service":
-        from desktop_service_unit import service_command
+        from jevdesktop.desktop_service_unit import service_command
         return service_command(args)
     if args.command == "tray":
-        from desktop_tray import tray_main
+        from jevdesktop.desktop_tray import tray_main
         return tray_main(socket=args.socket, unit=args.unit, settings_path=args.settings)
     method_params: dict[str, Any]
     method = args.command

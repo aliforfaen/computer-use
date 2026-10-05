@@ -1,11 +1,20 @@
+<p align="center">
+  <img src="assets/jev-icon.svg" width="96" height="96" alt="Jev cursor icon: a light-blue mouse pointer with a curious eye">
+</p>
+
 # Computer Use
 
 Screenshot-driven computer use for agents on **CachyOS, KDE Plasma and Wayland**.
 Built on [kwin-mcp](https://github.com/isac322/kwin-mcp), with a local CLI and MCP
 client. Jev is an optional future accelerator.
 
-## Where things stand — 2026-10-03
+## Where things stand — 2026-10-05
 
+- **Package and icon:** the runtime is the installable `src/jevdesktop/` package
+  ([ADR-028](docs/04-architecture.md)), standalone benchmarks live in `scripts/`,
+  and `assets/jev-icon.svg` is the app icon in the README, the tray and the menu
+  entry installed by `service install`
+  ([ADR-029](docs/04-architecture.md), [tray and service](docs/28-tray-and-user-service.md)).
 - **Working:** virtual Firefox/Kate/KCalc, app screenshots, grounded navigation,
   links, text entry and scrolling, saved Kate documents, automatic cleanup,
   CLI and MCP.
@@ -13,11 +22,12 @@ client. Jev is an optional future accelerator.
   `systemd --user` unit with `service install|status|uninstall`, and an
   AppIndicator tray with status, a virtual/physical **preference**, session
   cleanup, settings and the kill switch. The tray never pre-authorizes live
-  mode. [Tray, service and config](docs/28-tray-and-user-service.md).
+  mode, and the app icon comes from `assets/jev-icon.svg`.
+  [Tray, service and config](docs/28-tray-and-user-service.md).
 - **Audit retention:** the audit log is durable at
   `~/.config/jev-desktop/audit.jsonl`, size-rotated and age-pruned; stale session
   journals are swept at startup. [ADR-021](docs/04-architecture.md).
-- **Jev selector seam:** `jev_selector.py` turns candidate output into an
+- **Jev selector seam:** `src/jevdesktop/jev_selector.py` turns candidate output into an
   enumerated decision request and validates the typed answer in code. Offline by
   default, one-call `HttpSelector`, not wired into the loop.
   [Experiment plan](docs/30-jev-selector-experiment.md).
@@ -93,13 +103,21 @@ systemctl --user enable --now jev-desktop.service
 uv run jev-desktop tray
 ```
 
+`service install` also drops the launcher entry and the app icon into the XDG
+data home (`applications/jev-desktop.desktop` and
+`icons/hicolor/scalable/apps/jev-icon.svg`), so the Jev icon shows up in menus
+and the tray; `service uninstall` removes them again. The icon is the same file
+shown at the top of this README.
+
 ## Repository layout
 
 | Location | Contents |
 | --- | --- |
-| Root Python modules | Service, clients, workers and shared capture/benchmark code. |
+| `src/jevdesktop/` | Installed package: service, CLI, MCP, tray, workers and shared runtime helpers. |
+| `scripts/` | Standalone development benchmarks and one-off harnesses (not installed). |
 | `tests/` | Offline unit tests, grouped by module. |
 | `tools/` | Standalone probes and the fast core check: `check`, service probe, MCP trial client, vision-wait probe, scroll-effect probe. |
+| `assets/` | App icon (`jev-icon.svg`) and the `.desktop` launcher entry; installed by `service install`. |
 | `benchmark_fixtures/` | Reusable local HTML fixtures. |
 | `docs/` | Current handoff, contracts, decisions and historical results. |
 | `run/` (ignored) | Captures, documents, timelines and trial evidence. |
@@ -114,8 +132,8 @@ uv run python -m unittest discover -s tests       # everything (~10 s, 199 cases
 
 [Verification runbook](docs/29-verification-runbook.md) maps a change type to its
 cheapest check. Probe commands can launch apps or call a provider; read their
-documented limits before running them. Shared benchmark modules remain at root
-because the runtime imports them.
+documented limits before running them. Runtime modules live in the installed
+`src/jevdesktop/` package; development benchmarks run from `scripts/`.
 
 ## Benchmarks and design
 

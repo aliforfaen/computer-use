@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
-from audit_log import DEFAULT_ROTATION, AuditRotation, append_jsonl
+from jevdesktop.audit_log import DEFAULT_ROTATION, AuditRotation, append_jsonl
 
 
 _TREE_LINE = re.compile(

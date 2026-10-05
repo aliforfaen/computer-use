@@ -20,9 +20,9 @@ from unittest import mock
 
 from PIL import Image
 
-import wait_benchmark
-from vision_reader import ReaderResult
-from wait_watcher import ReaderJudge, WaitFrame, WaitSpec
+import scripts.wait_benchmark as wait_benchmark
+from jevdesktop.vision_reader import ReaderResult
+from jevdesktop.wait_watcher import ReaderJudge, WaitFrame, WaitSpec
 from tools.vision_wait_probe import (
     BudgetedReader,
     MAX_CALLS,

@@ -24,11 +24,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from observation import ObservationAdapter, ObservationError
-from audit_log import DEFAULT_ROTATION, AuditRotation, append_jsonl, prune_directory
-from owner_wait import run_owner_wait
-from vision_reader import BoundedReader, ReaderResult, _usage_totals
-from transactions import (Action, AuditLog, AutonomyMode, Candidate, KwinMcpBackend,
+from jevdesktop import paths
+from jevdesktop.observation import ObservationAdapter, ObservationError
+from jevdesktop.audit_log import DEFAULT_ROTATION, AuditRotation, append_jsonl, prune_directory
+from jevdesktop.owner_wait import run_owner_wait
+from jevdesktop.vision_reader import BoundedReader, ReaderResult, _usage_totals
+from jevdesktop.transactions import (Action, AuditLog, AutonomyMode, Candidate, KwinMcpBackend,
                           Policy, TransactionEngine, TransactionError, Verification, _scroll_viewport,
                           _scroll_witnesses)
 
@@ -98,7 +99,7 @@ class DesktopWorkerClient:
 
     def __init__(self, *, timeout: float = 20.0):
         self.timeout = timeout
-        self.proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("desktop_worker.py"))],
+        self.proc = subprocess.Popen([sys.executable, "-m", "jevdesktop.desktop_worker"],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                      text=True, bufsize=1, start_new_session=True)
         self._lock = threading.Lock()
@@ -239,7 +240,7 @@ class DesktopWorkerClient:
                         and set(flags) == {"IsEnabled", "ScreenReaderEnabled"}
                         and all(type(value) is bool for value in flags.values())):
                     try:
-                        from live_desktop_probe import _set_a11y_flags_at
+                        from jevdesktop.live_desktop_probe import _set_a11y_flags_at
                         a11y_ok = _set_a11y_flags_at(address, flags) == flags
                     except Exception:
                         a11y_ok = False
@@ -306,7 +307,7 @@ class DesktopWorkerClient:
                 original = record.get("action_original_window") or record.get("original_window")
                 focus_ok = False
                 from kwin_mcp.core import AutomationEngine
-                from live_desktop_probe import _restore_exact, _window_rows
+                from jevdesktop.live_desktop_probe import _restore_exact, _window_rows
                 engine = AutomationEngine()
                 try:
                     connected = engine.session_connect(keep_screenshots=False)
@@ -396,7 +397,7 @@ class _Session:
         self.worker = worker
         self.session_id = session_id
         self.audit_rotation = audit_rotation
-        self.audit_path = Path(audit_path) if audit_path is not None else Path(__file__).parent / "run" / "desktop-service" / "actions.jsonl"
+        self.audit_path = Path(audit_path) if audit_path is not None else paths.run_dir() / "desktop-service" / "actions.jsonl"
         self.started_at = datetime.now(timezone.utc).isoformat()
         self.started_clock = monotonic()
         self.last_activity_clock = self.started_clock
@@ -463,7 +464,7 @@ class DesktopService:
                  max_actions: int = 64, max_observations: int = 256,
                  monotonic=time.monotonic, watchdog_interval: float = 1.0,
                  audit_rotation: AuditRotation = DEFAULT_ROTATION):
-        self.audit_path = Path(audit_path or Path(__file__).parent / "run" / "desktop-service" / "actions.jsonl")
+        self.audit_path = Path(audit_path or paths.run_dir() / "desktop-service" / "actions.jsonl")
         self.audit_rotation = audit_rotation
         self.worker_factory = worker_factory or (lambda: DesktopWorkerClient(timeout=request_timeout))
         self._worker = None
@@ -941,7 +942,7 @@ class DesktopService:
             if candidate.role not in {"text", "text entry", "entry", "combo box"}:
                 raise ValueError("unsupported_verification")
         elif verification == "navigation_url":
-            from transactions import _valid_web_url
+            from jevdesktop.transactions import _valid_web_url
             if not (s.app == "firefox" and kind == "navigate_url" and "navigate_url" in candidate.actions
                     and isinstance(text, str) and text == expected and _valid_web_url(text)):
                 raise ValueError("unsupported_verification")

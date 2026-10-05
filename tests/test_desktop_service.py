@@ -8,9 +8,9 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from desktop_service import DesktopService, DesktopWorkerClient
-from observation import ObservationError
-from vision_reader import ReaderResult
+from jevdesktop.desktop_service import DesktopService, DesktopWorkerClient
+from jevdesktop.observation import ObservationError
+from jevdesktop.vision_reader import ReaderResult
 
 
 class _Alive:
@@ -152,7 +152,7 @@ class DesktopServiceTests(unittest.TestCase):
             started = service.dispatch("session_start", {"app": "kate"}, self.ctx)
             self.assertTrue(started["ok"], started)
             session = service._session
-            from observation import CaptureRef
+            from jevdesktop.observation import CaptureRef
             import hashlib
             image = b"same capture"
             capture_id = "reader-cap"
@@ -234,7 +234,7 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertEqual(self.worker.keys, ["ctrl+a", "Return"])
 
     def test_firefox_omnibox_scheme_elision_is_normalized_without_changing_path(self):
-        from desktop_service import _same_address_destination
+        from jevdesktop.desktop_service import _same_address_destination
         self.assertTrue(_same_address_destination("www.python.org/about/", "https://www.python.org/about/"))
         self.assertFalse(_same_address_destination("www.python.org/downloads/", "https://www.python.org/about/"))
 

@@ -7,14 +7,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from desktop_daemon import _make_service
-import desktop_cli
-
-
+from jevdesktop.desktop_daemon import _make_service
+import jevdesktop.desktop_cli as desktop_cli
 class DesktopDaemonReaderConfigTests(unittest.TestCase):
     def test_cli_passes_reader_key_file_and_deadlines_to_daemon(self):
         captured = []
-        with patch("desktop_daemon.main", side_effect=lambda argv: captured.extend(argv) or 0):
+        with patch("jevdesktop.desktop_daemon.main", side_effect=lambda argv: captured.extend(argv) or 0):
             result = desktop_cli.main(["daemon", "--foreground", "--allow-app", "kcalc",
                 "--reader-provider", "deepseek", "--max-reader-calls", "3", "--dotenv", ".env",
                 "--reader-timeout", "8", "--reader-total-timeout", "12"])

@@ -1,7 +1,7 @@
 # 29 — Verification runbook
 
 **2026-10-03.** The cheapest check for a change, so a small edit never turns
-into another test marathon. The suite is intentionally ~175 cases; most changes
+into another test marathon. The suite is intentionally ~200 cases; most changes
 need one or two modules, not discovery.
 
 ## Core rule
@@ -11,7 +11,7 @@ change crosses module boundaries, packaging, or the daemon/CLI/MCP contract.
 
 ```bash
 uv run python -m unittest tests.test_desktop_service      # one module
-uv run python -m tools.check                              # fast core set (~2 s)
+uv run python -m tools.check                              # fast core set (~4 s)
 uv run python -m unittest discover -s tests               # everything (~10 s)
 ```
 
@@ -23,8 +23,8 @@ product" check. Reader/live/harness modules are deliberately excluded.
 
 | Change | Check |
 | --- | --- |
-| `desktop_service.py` dispatch, verifier, budgets | `tests.test_desktop_service` |
-| `transactions.py` policy, candidates, scroll, action flow | `tests.test_transactions` |
+| `src/jevdesktop/desktop_service.py` dispatch, verifier, budgets | `tests.test_desktop_service` |
+| `src/jevdesktop/transactions.py` policy, candidates, scroll, action flow | `tests.test_transactions` |
 | `desktop_cli.py` / `desktop_mcp.py` / `desktop_daemon.py` | `tests.test_desktop_surfaces tests.test_desktop_daemon` |
 | `desktop_service_unit.py` / `desktop_tray.py` | `tests.test_desktop_tray_and_service` |
 | `desktop_worker.py` documents, window readiness | `tests.test_desktop_worker_documents` |
@@ -32,8 +32,8 @@ product" check. Reader/live/harness modules are deliberately excluded.
 | `vision_reader.py` stream bounds, call caps | `tests.test_vision_reader` |
 | `wait_watcher.py` / `owner_wait.py` | `tests.test_wait_watcher` |
 | `live_desktop_probe.py` / live focus restore | `tests.test_live_desktop_probe tests.test_live_owner` |
+| `paths.py`, `scripts/`, `assets/`, `pyproject.toml` | discovery + `uv build` |
 | Docs only | none; read the diff |
-| Packaging, `pyproject.toml`, new module | discovery + `uv build` |
 
 ## The default agent loop
 

@@ -23,7 +23,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Callable
 
-from observation import ObservationAdapter, ObservationError
+from jevdesktop.observation import ObservationAdapter, ObservationError
 
 
 APP = "kcalc"

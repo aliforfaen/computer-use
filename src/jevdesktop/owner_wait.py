@@ -6,8 +6,8 @@ import hashlib
 import math
 from typing import Any
 
-from observation import ObservationError
-from wait_watcher import AdapterFrameSource, ReaderJudge, WaitSpec, WaitWatcher
+from jevdesktop.observation import ObservationError
+from jevdesktop.wait_watcher import AdapterFrameSource, ReaderJudge, WaitSpec, WaitWatcher
 
 
 MAX_WAIT_SECONDS = 120.0

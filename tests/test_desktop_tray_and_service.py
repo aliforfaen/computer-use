@@ -13,9 +13,10 @@ from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
 
-from desktop_daemon import _apply_config, _make_service, load_config
-from desktop_service_unit import UNIT_NAME, TRAY_UNIT_NAME, _install, _status, _uninstall, render_tray_unit, render_unit
-from desktop_tray import (DesktopTray, DEFAULT_SETTINGS, MODE_LIVE, MODE_VIRTUAL, load_settings,
+from jevdesktop.desktop_daemon import _apply_config, _make_service, load_config
+from jevdesktop.desktop_service_unit import UNIT_NAME, TRAY_UNIT_NAME, _install, _status, _uninstall, render_tray_unit, render_unit
+from jevdesktop.desktop_tray import (DesktopTray, DEFAULT_SETTINGS, ICON_CANDIDATES, ICON_THEME_NAME, MODE_LIVE,
+                          MODE_VIRTUAL, _icon_cache_is_fresh, load_settings, prepare_tray_icon,
                           save_settings)
 
 
@@ -96,11 +97,12 @@ class ServiceUnitTests(unittest.TestCase):
         self.assertIn("ConditionEnvironment=WAYLAND_DISPLAY", tray)
 
     def test_install_seeds_private_config_and_is_idempotent(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.dict(os.environ, {"XDG_DATA_HOME": str(Path(temp) / "data")}):
             root = Path(temp)
             config = root / "config.json"
             units = root / "units"
-            with patch("desktop_service_unit._systemctl", return_value=None):
+            with patch("jevdesktop.desktop_service_unit._systemctl", return_value=None):
                 buffer = io.StringIO()
                 with contextlib.redirect_stdout(buffer):
                     self.assertEqual(_install(_args(allow_app=["kate", "firefox"], config=config), units), 0)
@@ -119,31 +121,41 @@ class ServiceUnitTests(unittest.TestCase):
                 self.assertEqual(json.loads(config.read_text())["allowed_apps"], ["kate", "firefox"])
 
     def test_install_with_tray_writes_both_units_and_uninstall_removes_them(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.dict(os.environ, {"XDG_DATA_HOME": str(Path(temp) / "data")}):
             root = Path(temp)
             config = root / "config.json"
             units = root / "units"
-            with patch("desktop_service_unit._systemctl", return_value=None):
+            with patch("jevdesktop.desktop_service_unit._systemctl", return_value=None):
                 buffer = io.StringIO()
                 with contextlib.redirect_stdout(buffer):
                     self.assertEqual(_install(_args(allow_app=["kate"], config=config, tray=True), units), 0)
                 self.assertEqual(json.loads(buffer.getvalue())["units"].keys(),
                                  {UNIT_NAME, TRAY_UNIT_NAME})
                 self.assertTrue((units / TRAY_UNIT_NAME).exists())
+                desktop_entry = Path(root) / "data" / "applications" / "jev-desktop.desktop"
+                desktop_icon = Path(root) / "data" / "icons" / "hicolor" / "scalable" / "apps" / "jev-icon.svg"
+                self.assertTrue(desktop_entry.exists())
+                self.assertTrue(desktop_icon.exists())
+                self.assertIn("Icon=jev-icon", desktop_entry.read_text(encoding="utf-8"))
                 buffer = io.StringIO()
                 with contextlib.redirect_stdout(buffer):
                     self.assertEqual(_status(_args(config=config), units), 0)
                 report = json.loads(buffer.getvalue())
                 self.assertTrue(report["tray"]["installed"])
                 self.assertFalse(report["tray"]["drift"])
+                self.assertTrue(report["desktop_entry"]["installed"])
                 buffer = io.StringIO()
                 with contextlib.redirect_stdout(buffer):
                     self.assertEqual(_uninstall(_args(), units), 0)
                 self.assertFalse((units / UNIT_NAME).exists())
                 self.assertFalse((units / TRAY_UNIT_NAME).exists())
+                self.assertFalse(desktop_entry.exists())
+                self.assertFalse(desktop_icon.exists())
 
     def test_install_requires_an_allowlist_when_no_config_exists(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.dict(os.environ, {"XDG_DATA_HOME": str(Path(temp) / "data")}):
             root = Path(temp)
             buffer = io.StringIO()
             with contextlib.redirect_stdout(buffer):
@@ -152,11 +164,12 @@ class ServiceUnitTests(unittest.TestCase):
             self.assertFalse((root / "config.json").exists())
 
     def test_status_reports_drift_and_uninstall_requires_stop_flag(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.dict(os.environ, {"XDG_DATA_HOME": str(Path(temp) / "data")}):
             root = Path(temp)
             config = root / "config.json"
             units = root / "units"
-            with patch("desktop_service_unit._systemctl", return_value=None):
+            with patch("jevdesktop.desktop_service_unit._systemctl", return_value=None):
                 buffer = io.StringIO()
                 with contextlib.redirect_stdout(buffer):
                     _install(_args(allow_app=["kate"], config=config), units)
@@ -173,7 +186,7 @@ class ServiceUnitTests(unittest.TestCase):
                     _status(_args(config=config), units)
                 self.assertTrue(json.loads(buffer.getvalue())["drift"])
 
-                with patch("desktop_service_unit._unit_state", return_value=("active", "enabled")):
+                with patch("jevdesktop.desktop_service_unit._unit_state", return_value=("active", "enabled")):
                     buffer = io.StringIO()
                     with contextlib.redirect_stdout(buffer):
                         self.assertEqual(_uninstall(_args(), units), 2)
@@ -208,6 +221,31 @@ class TraySettingsTests(unittest.TestCase):
             self.assertEqual(load_settings(path), DEFAULT_SETTINGS)
             with self.assertRaises(ValueError):
                 save_settings(path, {"desktop_mode": "sideways"})
+
+
+class TrayIconTests(unittest.TestCase):
+    def test_icon_cache_freshness_follows_the_svg_timestamp(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            svg = root / "jev-icon.svg"
+            svg.write_text("<svg/>", encoding="utf-8")
+            cache = root / "cache"
+            self.assertFalse(_icon_cache_is_fresh(svg, cache))
+            cache.mkdir()
+            for name in (f"{ICON_THEME_NAME}.png", f"{ICON_THEME_NAME}@2x.png"):
+                target = cache / name
+                target.write_bytes(b"png")
+                os.utime(target, (svg.stat().st_mtime + 5,) * 2)
+            self.assertTrue(_icon_cache_is_fresh(svg, cache))
+            os.utime(svg, (svg.stat().st_mtime + 60,) * 2)
+            self.assertFalse(_icon_cache_is_fresh(svg, cache))
+
+    def test_prepare_tray_icon_falls_back_to_a_theme_icon_without_the_svg(self):
+        from jevdesktop import desktop_tray
+        with patch.object(desktop_tray.paths, "icon_path", return_value=None):
+            name, theme_path = prepare_tray_icon(_FakeGtk())
+        self.assertIn(name, ICON_CANDIDATES)
+        self.assertIsNone(theme_path)
 
 
 class _FakeWidget:

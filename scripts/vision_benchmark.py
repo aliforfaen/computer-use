@@ -15,12 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from vision_reader import StreamParseError, build_request_body, parse_stream
+from jevdesktop.vision_reader import StreamParseError, build_request_body, parse_stream
 
 try:
     import httpx
 except ImportError as exc:  # pragma: no cover - exercised by CLI users without dependency
-    raise SystemExit("vision_benchmark.py requires httpx; install it with `python -m pip install httpx`") from exc
+    raise SystemExit("scripts.vision_benchmark requires httpx; install it with `python -m pip install httpx`") from exc
 
 
 MAX_COMPLETION_TOKENS = 256
@@ -372,7 +372,7 @@ def _load_dotenv(dotenv_path: Path) -> None:
 
 def _capture(output_dir: Path, scope: str) -> Path:
     try:
-        from benchmark_capture import capture_suite
+        from jevdesktop.benchmark_capture import capture_suite
     except ImportError as exc:
         raise BenchmarkError("benchmark_capture_module_unavailable") from exc
     try:

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import live_desktop_probe as probe
+import jevdesktop.live_desktop_probe as probe
 
 
 def _window(window_id, app, caption, pid, *, active=False):
@@ -146,7 +146,7 @@ class LiveDesktopProbeTests(unittest.TestCase):
             self.assertTrue(report["temporary_a11y_restored"])
 
     def test_temporary_atspi_flags_restore_even_when_capture_fails(self):
-        from observation import ObservationError
+        from jevdesktop.observation import ObservationError
 
         initial = {"IsEnabled": False, "ScreenReaderEnabled": False}
         enabled = {"IsEnabled": True, "ScreenReaderEnabled": True}
@@ -175,7 +175,7 @@ class LiveDesktopProbeTests(unittest.TestCase):
             self.assertTrue(report["temporary_a11y_restored"])
 
     def test_capture_mapping_failure_refuses_input_and_still_restores(self):
-        from observation import ObservationError
+        from jevdesktop.observation import ObservationError
 
         class BadAdapter(FakeAdapter):
             def capture(self, app, scope):

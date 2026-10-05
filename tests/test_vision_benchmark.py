@@ -14,7 +14,7 @@ from pathlib import Path
 
 import httpx
 
-import vision_benchmark as vb
+import scripts.vision_benchmark as vb
 
 
 class VisionBenchmarkTests(unittest.TestCase):

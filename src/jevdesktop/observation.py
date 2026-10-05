@@ -16,7 +16,7 @@ from typing import Any, Mapping
 import io
 import copy
 
-from vision_reader import Reader, ReaderResult
+from jevdesktop.vision_reader import Reader, ReaderResult
 
 
 @dataclass(frozen=True)

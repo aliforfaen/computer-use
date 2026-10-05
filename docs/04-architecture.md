@@ -420,3 +420,30 @@ this repo keeps Firefox only as the *native* AT-SPI fixture target for verificat
 tests. Rationale: page automation already has semantic selection, so a decision model
 adds a paid round trip and a new failure mode without adding capability. Jev's value is
 on surfaces with no DOM — Qt dialogs, native editors. Named in doc 31 §4.
+
+### ADR-028 — Runtime lives in an installable `src/jevdesktop` package
+**2026-10-05 · supersedes the flat-module layout in ADR-015.** Every runtime module
+moved from the repository root into `src/jevdesktop/` and is installed as a real
+package; the console entry points are `jevdesktop.desktop_cli:main`,
+`jevdesktop.desktop_mcp:main` and `jevdesktop.desktop_tray:main`. Worker children
+start with `python -m jevdesktop.<worker>` instead of a path, so the package stays
+importable when installed rather than used in place. Standalone benchmarks that no
+runtime code imports moved to `scripts/` (not installed); verification probes stay in
+`tools/`; `benchmark_fixtures/` and the repo-root `run/` directory stay where the
+checks expect them, resolved through `jevdesktop.paths`. A small `paths` module is the
+single place that walks up to the checkout so assets, fixtures and run output do not
+depend on `__file__` pointing at a root-level module. No behaviour changed; the full
+offline suite and the fast core set pass unchanged.
+
+### ADR-029 — The Jev cursor icon is the app, tray and menu icon
+**2026-10-05 · owner surfaces (ADR-020).** `assets/jev-icon.svg` is the canonical
+app icon (shown in the README). Three surfaces use the same file: the tray renders it
+into a small PNG pair under `~/.cache/jev-desktop/icons` and points the
+StatusNotifierItem at that path (falling back to a stock theme icon when librsvg is
+unavailable, so the tray always starts); `service install` copies the SVG to
+`~/.local/share/icons/hicolor/scalable/apps/jev-icon.svg` and installs
+`assets/jev-desktop.desktop` (with `Icon=jev-icon`) to `~/.local/share/applications`,
+removing both again on `service uninstall`. The package ships the icon and entry
+through symlinks into `assets/`, so the checkout file is the only source of truth.
+This changes presentation only: no allowlist, focus, audit or authorization behaviour
+is touched.

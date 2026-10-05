@@ -22,7 +22,7 @@ That is the whole claim. It is falsifiable in a few cheap runs:
 
 ## What exists now
 
-- `jev_selector.py` — the seam. Builds a state from `candidates` output
+- `src/jevdesktop/jev_selector.py` — the seam. Builds a state from `candidates` output
   (labels, roles, states, action names only), renders an indexed table, builds
   the `action` + `target` question heads, enforces the token budget, and
   validates the typed answer so the target must be an index we created.
@@ -44,7 +44,7 @@ That is the whole claim. It is falsifiable in a few cheap runs:
   every stop reason (`done_verified`, `done_unverified`, `wrong_choice`,
   `verification_unavailable`, `unsupported_action`, budgets, owner errors).
 
-Nothing here executes an action. `transactions.py` still owns execution,
+Nothing here executes an action. `src/jevdesktop/transactions.py` still owns execution,
 verification and policy; the existing `authorizer` seam is where a selector
 could later advise without gaining authority.
 

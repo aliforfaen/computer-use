@@ -6,9 +6,9 @@ import unittest
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from observation import CaptureRef, ObservationError, Observation
-from owner_wait import run_owner_wait
-from vision_reader import BoundedReader, ReaderResult
+from jevdesktop.observation import CaptureRef, ObservationError, Observation
+from jevdesktop.owner_wait import run_owner_wait
+from jevdesktop.vision_reader import BoundedReader, ReaderResult
 
 
 class _FakeReader:
@@ -60,7 +60,7 @@ def _session(*, judgment="wake", observation_cap=4, reader_calls=2, reader=True)
 
 class OwnerWaitTests(unittest.TestCase):
     def test_wait_is_exposed_as_bounded_read_only_mcp_tool(self):
-        from desktop_mcp import METHODS, _tools
+        from jevdesktop.desktop_mcp import METHODS, _tools
         tool = next(item for item in _tools() if item.name == "desktop_wait")
         self.assertTrue(tool.annotations.read_only_hint)
         self.assertIn("wait", METHODS["desktop_wait"])

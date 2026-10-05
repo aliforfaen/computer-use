@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Jev Desktop
+GenericName=Desktop computer use
+Comment=Local single-owner desktop computer-use owner and tray indicator
+Exec=jev-desktop-tray
+TryExec=jev-desktop-tray
+Icon=jev-icon
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=computer-use;automation;accessibility;tray;
+StartupNotify=false

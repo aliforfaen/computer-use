@@ -110,7 +110,7 @@ async def _call(tool_name: str, params: dict[str, Any], output_dir: Path) -> dic
     output_dir.mkdir(parents=True, exist_ok=True)
     server = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "desktop_mcp"],
+        args=["-m", "jevdesktop.desktop_mcp"],
         cwd=str(ROOT),
     )
     async with stdio_client(server) as (read_stream, write_stream):

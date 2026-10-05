@@ -272,8 +272,8 @@ def _remove_own_socket(server: DesktopSocketServer) -> None:
 
 
 def _make_service(args: argparse.Namespace) -> Any:
-    from audit_log import DEFAULT_ROTATION, AuditRotation
-    from desktop_service import DesktopService
+    from jevdesktop.audit_log import DEFAULT_ROTATION, AuditRotation
+    from jevdesktop.desktop_service import DesktopService
 
     rotation = DEFAULT_ROTATION
     if any(getattr(args, key, None) is not None for key in ("audit_max_bytes", "audit_backups", "audit_max_age_days")):
@@ -296,7 +296,7 @@ def _make_service(args: argparse.Namespace) -> Any:
     if args.reader_provider:
         if args.max_reader_calls is None or args.max_reader_calls <= 0:
             raise RuntimeError("--reader-provider requires a positive --max-reader-calls opt-in cap")
-        from vision_reader import IsolatedVisionReader, ReaderConfig
+        from jevdesktop.vision_reader import IsolatedVisionReader, ReaderConfig
 
         defaults = {
             "deepseek": ("https://api.deepseek.com", "deepseek-flash", "DEEPSEEK_API_KEY"),

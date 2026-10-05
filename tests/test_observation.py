@@ -7,8 +7,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from observation import CaptureStore, ObservationAdapter, ObservationError, Rect
-from vision_reader import ReaderResult
+from jevdesktop.observation import CaptureStore, ObservationAdapter, ObservationError, Rect
+from jevdesktop.vision_reader import ReaderResult
 
 
 class FakeEngine:

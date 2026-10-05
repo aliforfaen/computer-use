@@ -16,40 +16,16 @@ dependencies = [
 ]
 
 [project.scripts]
-jev-desktop = "desktop_cli:main"
-jev-desktop-mcp = "desktop_mcp:main"
-jev-desktop-tray = "desktop_tray:main"
+jev-desktop = "jevdesktop.desktop_cli:main"
+jev-desktop-mcp = "jevdesktop.desktop_mcp:main"
+jev-desktop-tray = "jevdesktop.desktop_tray:main"
 
 [tool.setuptools]
-py-modules = [
-    "benchmark_capture",
-    "audit_log",
-    "desktop_cli",
-    "desktop_daemon",
-    "desktop_mcp",
-    "desktop_service",
-    "desktop_service_unit",
-    "desktop_tray",
-    "desktop_worker",
-    "jev_accessibility_worker",
-    "jev_selector",
-    "live_desktop_probe",
-    "observation",
-    "owner_wait",
-    "p2_kcalc",
-    "transactions",
-    "virtual_tasks",
-    "vision_benchmark",
-    "vision_reader",
-    "vision_reader_worker",
-    "wait_benchmark",
-    "wait_watcher",
-]
 include-package-data = true
 
 [tool.setuptools.packages.find]
-namespaces = true
-include = ["benchmark_fixtures*", "tools*"]
+where = ["src"]
+include = ["jevdesktop*"]
 
 [tool.setuptools.package-data]
-benchmark_fixtures = ["*.html"]
+jevdesktop = ["assets/*"]

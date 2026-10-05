@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from desktop_service import DesktopService
+from jevdesktop.desktop_service import DesktopService
 from tools.local_service_probe import ProbeError, _mcp_observation_ok, _socket_request
 
 

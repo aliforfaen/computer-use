@@ -11,10 +11,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import desktop_service
-import desktop_worker
-import live_desktop_probe
-from desktop_service import DesktopService, DesktopWorkerClient
+import jevdesktop.desktop_service as desktop_service
+import jevdesktop.desktop_worker as desktop_worker
+import jevdesktop.live_desktop_probe as live_desktop_probe
+from jevdesktop.desktop_service import DesktopService, DesktopWorkerClient
 from test_desktop_service import FakeWorker
 
 

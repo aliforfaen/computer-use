@@ -20,14 +20,18 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from desktop_cli import ipc_call
-from desktop_daemon import default_config_dir
+from jevdesktop import paths
+from jevdesktop.desktop_cli import ipc_call
+from jevdesktop.desktop_daemon import default_config_dir
 
 MODE_VIRTUAL = "virtual"
 MODE_LIVE = "live"
 VALID_MODES = (MODE_VIRTUAL, MODE_LIVE)
 VALID_AUTONOMY = ("supervised", "guarded", "yolo")
 ICON_CANDIDATES = ("input-mouse", "input-tablet", "preferences-desktop", "computer")
+ICON_THEME_NAME = paths.ICON_THEME_NAME
+ICON_PRIMARY_SIZE = 48
+ICON_HIDPI_SIZE = 96
 SERVICE_VERBS = ("start", "stop", "enable", "disable")
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -88,15 +92,73 @@ def _icon_name(gtk: Any) -> str:
     return ICON_CANDIDATES[0]
 
 
+def _icon_cache_files(cache_dir: Path) -> tuple[Path, Path]:
+    return cache_dir / f"{ICON_THEME_NAME}.png", cache_dir / f"{ICON_THEME_NAME}@2x.png"
+
+
+def _icon_cache_is_fresh(svg: Path, cache_dir: Path) -> bool:
+    try:
+        source = svg.stat().st_mtime
+    except OSError:
+        return False
+    for path in _icon_cache_files(cache_dir):
+        try:
+            if path.stat().st_mtime < source:
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def _render_icon_cache(svg: Path, cache_dir: Path) -> None:
+    """Render the SVG into the PNG pair the StatusNotifierItem host displays."""
+    import gi
+
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import GdkPixbuf
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    primary, hidpi = _icon_cache_files(cache_dir)
+    for target, size in ((primary, ICON_PRIMARY_SIZE), (hidpi, ICON_HIDPI_SIZE)):
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(svg), size, size, True)
+        pixbuf.savev(str(target), "png", [], [])
+
+
+def prepare_tray_icon(gtk: Any) -> tuple[str, Path | None]:
+    """Return ``(icon_name, theme_path)`` for the tray indicator.
+
+    ``theme_path`` is ``None`` when the SVG is missing or cannot be rendered,
+    so the caller falls back to a stock theme icon and the tray still starts.
+    """
+    svg = paths.icon_path()
+    if svg is None:
+        return _icon_name(gtk), None
+    cache_dir = paths.icon_cache_dir()
+    try:
+        if not _icon_cache_is_fresh(svg, cache_dir):
+            _render_icon_cache(svg, cache_dir)
+    except Exception as exc:  # pragma: no cover - host without a working SVG loader
+        print(f"tray_icon_unavailable: {type(exc).__name__}; using a stock theme icon",
+              file=sys.stderr)
+        return _icon_name(gtk), None
+    return ICON_THEME_NAME, cache_dir
+
+
 class DesktopTray:
     """GTK main-loop object; every owner or systemctl call runs off-thread."""
 
+    icon_name: str = ICON_CANDIDATES[0]
+    icon_dir: Path | None = None
+
     def __init__(self, *, socket: Path | None, unit: str, gtk: Any, glib: Any, appindicator: Any,
-                 settings_path: Path | None = None) -> None:
+                 settings_path: Path | None = None, icon_name: str | None = None,
+                 icon_dir: Path | None = None) -> None:
         self.gtk = gtk
         self.glib = glib
         self.socket = socket
         self.unit = unit
+        self.icon_name = icon_name or ICON_CANDIDATES[0]
+        self.icon_dir = icon_dir
         self.settings_path = settings_path or default_settings_path()
         self.settings = load_settings(self.settings_path)
         self.status: dict[str, Any] | None = None
@@ -216,7 +278,13 @@ class DesktopTray:
         menu.show_all()
         self.menu = menu
         self.indicator = appindicator.Indicator.new(
-            "jev-desktop", _icon_name(gtk), appindicator.IndicatorCategory.APPLICATION_STATUS)
+            "jev-desktop", self.icon_name, appindicator.IndicatorCategory.APPLICATION_STATUS)
+        if self.icon_dir is not None:
+            try:
+                self.indicator.set_icon_theme_path(str(self.icon_dir))
+                self.indicator.set_icon_full(self.icon_name, "Jev desktop")
+            except AttributeError:  # older libayatana without explicit theme-path support
+                pass
         self.indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
         self.indicator.set_title("Jev desktop")
         self.indicator.set_menu(menu)
@@ -552,8 +620,9 @@ def tray_main(*, socket: Path | None = None, unit: str = "jev-desktop",
         print("tray_unavailable: PyGObject and libayatana-appindicator are required "
               f"({type(exc).__name__})", file=sys.stderr)
         return 2
+    icon_name, icon_dir = prepare_tray_icon(Gtk)
     tray = DesktopTray(socket=socket, unit=unit, gtk=Gtk, glib=GLib, appindicator=AyatanaAppIndicator3,
-                       settings_path=settings_path)
+                       settings_path=settings_path, icon_name=icon_name, icon_dir=icon_dir)
     return tray.run()
 
 

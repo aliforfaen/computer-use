@@ -1,6 +1,6 @@
 import unittest
 
-from p2_kcalc import Button, ProbeError, parse_buttons, parse_decision, parse_display, verify_transition
+from scripts.p2_kcalc import Button, ProbeError, parse_buttons, parse_decision, parse_display, verify_transition
 
 
 class P2ValidationTests(unittest.TestCase):

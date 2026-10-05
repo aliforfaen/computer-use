@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import jev_selector as js
+import jevdesktop.jev_selector as js
 from tools.jev_selector_probe import KEY_NAME, _load_api_key
 
 
@@ -197,7 +197,7 @@ class ProbeDotenvTests(unittest.TestCase):
                 self.assertFalse(_load_api_key(None))
 
     def test_default_dotenv_is_the_private_config_dir(self):
-        from desktop_daemon import default_config_dir
+        from jevdesktop.desktop_daemon import default_config_dir
         self.assertEqual(default_config_dir() / "jev.env", Path(os.environ.get(
             "XDG_CONFIG_HOME", Path.home() / ".config")) / "jev-desktop" / "jev.env")
 

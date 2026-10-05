@@ -13,8 +13,8 @@ import mcp.types as types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
-from desktop_cli import ipc_call
-from desktop_daemon import default_socket_path
+from jevdesktop.desktop_cli import ipc_call
+from jevdesktop.desktop_daemon import default_socket_path
 
 
 def _obj(properties: dict[str, Any] | None = None, required: list[str] | None = None) -> dict[str, Any]:

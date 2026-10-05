@@ -17,8 +17,8 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-from desktop_cli import MAX_DESKTOP_TEXT_CHARS, _build_parser, _read_text_file, ipc_call, main as cli_main
-from desktop_daemon import OwnerLock, RequestHandler, DesktopSocketServer
+from jevdesktop.desktop_cli import MAX_DESKTOP_TEXT_CHARS, _build_parser, _read_text_file, ipc_call, main as cli_main
+from jevdesktop.desktop_daemon import OwnerLock, RequestHandler, DesktopSocketServer
 
 
 ROOT = Path(__file__).resolve().parent
@@ -77,13 +77,13 @@ class _FakeIpcServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
 
 class DesktopSurfaceTests(unittest.TestCase):
     def test_cli_uses_configured_default_socket_without_explicit_argument(self):
-        with patch("desktop_cli.ipc_call", return_value={"ok": True, "session": None}) as call:
+        with patch("jevdesktop.desktop_cli.ipc_call", return_value={"ok": True, "session": None}) as call:
             with redirect_stdout(StringIO()):
                 self.assertEqual(cli_main(["status"]), 0)
             call.assert_called_once_with("status", {}, socket_path=None)
 
     def test_cli_wait_forwards_a_bounded_visual_condition(self):
-        with patch("desktop_cli.ipc_call", return_value={"ok": True, "wait": {"status": "ready"}}) as call:
+        with patch("jevdesktop.desktop_cli.ipc_call", return_value={"ok": True, "wait": {"status": "ready"}}) as call:
             with redirect_stdout(StringIO()):
                 self.assertEqual(cli_main(["wait", "firefox", "--expected", "heading visible", "--timeout", "12"]), 0)
             call.assert_called_once_with("wait", {"app": "firefox", "expected": "heading visible",
@@ -128,7 +128,7 @@ class DesktopSurfaceTests(unittest.TestCase):
                 _read_text_file(text_file.name)
 
     def test_mcp_schema_advertises_document_actions_and_saved_verifier(self):
-        from desktop_mcp import _tools
+        from jevdesktop.desktop_mcp import _tools
 
         by_name = {tool.name: tool for tool in _tools()}
         action = by_name["desktop_act"].input_schema["properties"]
@@ -183,7 +183,7 @@ class DesktopSurfaceTests(unittest.TestCase):
 
             async def exercise():
                 params = StdioServerParameters(command=sys.executable,
-                    args=["-m", "desktop_mcp", "--socket", str(socket_path)],
+                    args=["-m", "jevdesktop.desktop_mcp", "--socket", str(socket_path)],
                     env={"PYTHONPATH": str(ROOT)}, cwd=ROOT)
                 async with stdio_client(params) as (reader, writer):
                     async with ClientSession(reader, writer) as client:

@@ -3,7 +3,7 @@
 
 This is a bounded synthetic local-image benchmark, not a vision/provider or
 primary-agent A/B test. Browser event POSTs are ground truth only and never
-enter the wait judge. Run on cachy with ``uv run wait_benchmark.py``.
+enter the wait judge. Run on cachy with ``uv run python -m scripts.wait_benchmark``.
 """
 
 from __future__ import annotations
@@ -24,11 +24,12 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from benchmark_capture import _atspi_version, _version
-from observation import ObservationAdapter
+from jevdesktop import paths
+from jevdesktop.benchmark_capture import _atspi_version, _version
+from jevdesktop.observation import ObservationAdapter
 
-ROOT = Path(__file__).resolve().parent
-FIXTURE = ROOT / "benchmark_fixtures" / "wait.html"
+ROOT = paths.repo_root() or Path(__file__).resolve().parent
+FIXTURE = paths.fixtures_dir() / "wait.html"
 OUT = ROOT / "run" / "wait-benchmark"
 SCREEN = (1280, 800)
 INTERVAL = 0.20
@@ -218,7 +219,7 @@ def _firefox_command(profile: Path, url: str) -> str:
 def _run_trial(server: FixtureServer, case: dict[str, Any], arm: str,
                trial_number: int, order_index: int) -> dict[str, Any]:
     from kwin_mcp.core import AutomationEngine
-    from wait_watcher import WaitFrame, WaitSpec, WaitWatcher
+    from jevdesktop.wait_watcher import WaitFrame, WaitSpec, WaitWatcher
 
     trial = uuid.uuid4().hex
     profile = Path(tempfile.mkdtemp(prefix="jev-wait-profile-"))

@@ -94,7 +94,7 @@ def _socket_request(path: Path, method: str, params: dict[str, Any] | None = Non
 def _run_cli(socket_path: Path, *args: str) -> tuple[int, dict[str, Any] | None]:
     env = os.environ.copy()
     env["JEV_DESKTOP_SOCKET"] = str(socket_path)
-    command = [sys.executable, str(ROOT / "desktop_cli.py"), *args]
+    command = [sys.executable, "-m", "jevdesktop.desktop_cli", *args]
     try:
         completed = subprocess.run(
             command,
@@ -155,7 +155,7 @@ async def _mcp_probe(socket_path: Path, expected_session_id: str) -> dict[str, A
     env["JEV_DESKTOP_SOCKET"] = str(socket_path)
     params = StdioServerParameters(
         command=sys.executable,
-        args=[str(ROOT / "desktop_mcp.py")],
+        args=["-m", "jevdesktop.desktop_mcp"],
         env=env,
     )
     try:
@@ -233,7 +233,8 @@ def run_probe() -> dict[str, Any]:
     try:
         command = [
             sys.executable,
-            str(ROOT / "desktop_daemon.py"),
+            "-m",
+            "jevdesktop.desktop_daemon",
             "--foreground",
             "--socket",
             str(socket_path),

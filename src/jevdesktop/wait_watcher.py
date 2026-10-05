@@ -14,8 +14,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
-from observation import CaptureRef, ObservationAdapter, ObservationError
-from vision_reader import Reader, ReaderResult
+from jevdesktop.observation import CaptureRef, ObservationAdapter, ObservationError
+from jevdesktop.vision_reader import Reader, ReaderResult
 
 Judgment = Literal["wait", "wake", "error", "unexpected"]
 WaitStatus = Literal["ready", "unexpected", "timeout", "cancelled", "error"]

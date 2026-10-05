@@ -28,8 +28,8 @@ import os
 import sys
 from pathlib import Path
 
-from desktop_daemon import _load_dotenv_key, default_config_dir
-from jev_selector import (HttpSelector, JevConfig, MAX_OPTIONS, RecordedSelector, SelectorError,
+from jevdesktop.desktop_daemon import _load_dotenv_key, default_config_dir
+from jevdesktop.jev_selector import (HttpSelector, JevConfig, MAX_OPTIONS, RecordedSelector, SelectorError,
                           build_request, estimate_tokens, render_state_text, state_from_candidates)
 
 MAX_PROBE_CALLS = 3

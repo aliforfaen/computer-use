@@ -29,7 +29,7 @@ def main() -> int:
                 "max_tokens", "max_response_chars")}
             image = base64.b64decode(request["image_base64"], validate=True)
             questions = request["questions"]
-            from vision_reader import ReaderConfig, VisionReader
+            from jevdesktop.vision_reader import ReaderConfig, VisionReader
 
             result = VisionReader(ReaderConfig(**config)).interpret(image, questions)
             value = {"status": result.status, "data": result.data, "error": result.error,

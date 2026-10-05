@@ -4,8 +4,8 @@ import threading
 import time
 import unittest
 
-from vision_reader import ReaderResult, _validate_questions
-from wait_watcher import AdapterFrameSource, ReaderJudge, WaitFrame, WaitSpec, WaitWatcher
+from jevdesktop.vision_reader import ReaderResult, _validate_questions
+from jevdesktop.wait_watcher import AdapterFrameSource, ReaderJudge, WaitFrame, WaitSpec, WaitWatcher
 
 
 class WaitWatcherTests(unittest.TestCase):

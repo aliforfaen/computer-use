@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 
-from wait_benchmark import CASES, _normalized_status, make_plan
+from scripts.wait_benchmark import CASES, _normalized_status, make_plan
 
 
 class WaitBenchmarkTests(unittest.TestCase):

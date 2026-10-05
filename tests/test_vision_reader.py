@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 
-from vision_reader import (BoundedReader, IsolatedVisionReader, ReaderConfig, ReaderResult,
+from jevdesktop.vision_reader import (BoundedReader, IsolatedVisionReader, ReaderConfig, ReaderResult,
                            StreamParseError, VisionReader, build_request_body, parse_stream)
 
 

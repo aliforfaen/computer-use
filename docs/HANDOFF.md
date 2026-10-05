@@ -1,6 +1,6 @@
 # Handoff — start here
 
-Updated **2026-10-04**. Checkout: `/home/messhias/lamasync/projects/computer-use`.
+Updated **2026-10-05**. Checkout: `/home/messhias/lamasync/projects/computer-use`.
 Origin: [aliforfaen/computer-use](https://github.com/aliforfaen/computer-use).
 Read `AGENTS.md`, this page, then [local CLI/MCP](16-local-owner-and-mcp.md).
 Numbered docs retain earlier experiments; this page is the current summary.
@@ -15,18 +15,33 @@ Numbered docs retain earlier experiments; this page is the current summary.
 | Observation | Explicit app images for vision agents; optional interpreted data from a bounded, cancellable reader. DeepSeek is provisional, MiMo configurable. |
 | Lifecycle | Idle/lifetime/read/action caps, watchdog teardown, owned-app cleanup and recovery journals. |
 | Local live Kate | Owner-watched document workflow and app screenshot passed; exact focus and accessibility flags restored, zero Kate windows remaining. |
-| Owner surfaces | JSON config (CLI > env > file > default), `systemd --user` unit via `service install|status|uninstall`, and an AppIndicator tray with status, virtual/physical preference, session cleanup, settings and the kill switch. |
+| Owner surfaces | JSON config (CLI > env > file > default), `systemd --user` unit via `service install|status|uninstall`, and an AppIndicator tray with status, virtual/physical preference, session cleanup, settings and the kill switch. The Jev icon is the app, tray and menu icon. |
 | Audit retention | Durable audit at `~/.config/jev-desktop/audit.jsonl`, size-rotated (4 MiB, 3 backups) and age-pruned (30 days); stale session journals swept at startup. |
-| Jev selector seam | `jev_selector.py` builds an enumerated decision request from candidate output and validates the typed answer in code. Offline probe, not wired into the loop. |
+| Jev selector seam | `src/jevdesktop/jev_selector.py` builds an enumerated decision request from candidate output and validates the typed answer in code. Offline probe, not wired into the loop. |
 | Jev driver loop | `tools/jev_loop_probe.py` closes select → act → verify → re-enumerate against the owner socket (unwired). Virtual KCalc: `done_verified` on 1-2-3 with every click checked on the display; `wrong_choice` caught when the model pressed `Equals` first for 2+2; `verification_unavailable` when no postcondition exists for an operator click. [doc 31](31-jev-control-plan.md), `run/jev-loop-2026-10-04/`. |
 
 Useful agent acceptance: [Codex Luna workflow](20-codex-luna-workflow.md),
 [document workflow](21-kate-acceptance-workflow.md),
 [public webpage → Kate](23-public-browser-kate-agent-task.md).
 
-## Latest work — 2026-10-04
+## Latest work — 2026-10-05
 
-**The Jev loop runs.** `tools/jev_loop_probe.py` drives
+**Package and icon.** The flat root modules are now the installed
+`src/jevdesktop/` package (ADR-028): entry points are `jevdesktop.desktop_cli`,
+`jevdesktop.desktop_mcp` and `jevdesktop.desktop_tray`, worker children start via
+`python -m jevdesktop.<worker>`, and `jevdesktop.paths` is the single place that
+resolves the checkout, fixtures and `run/`. Standalone benchmarks moved to
+`scripts/`; verification probes stay in `tools/`. The owner's `assets/jev-icon.svg`
+is the app icon in the README, the tray (rendered to `~/.cache/jev-desktop/icons`
+with a stock-icon fallback) and the menu: `service install` writes
+`~/.local/share/icons/hicolor/scalable/apps/jev-icon.svg` and
+`applications/jev-desktop.desktop`, and `service uninstall` removes both
+(ADR-029). Presentation only. `uv run python -m tools.check` is the 101-case core
+set; the full offline suite is 201 cases.
+
+**Previous work (2026-10-04): the Jev loop runs.**
+
+`tools/jev_loop_probe.py` drives
 `candidates -> Jev select -> act + code-owned check -> re-enumerate` as a client
 of the owner socket; nothing is wired into the daemon. On a virtual KCalc
 session: `done_verified` for "enter 1, 2 then 3" (4 calls, each click verified on
@@ -157,23 +172,28 @@ See [doc 16](16-local-owner-and-mcp.md) for sockets, actions, images, readers,
 lifecycle and live opt-in. Changes to tool schemas require a host refresh.
 
 Use targeted offline checks and small host probes for changed behavior:
-`uv run python -m tools.check` is the 96-case core set (~4 s), and
+`uv run python -m tools.check` is the 101-case core set (~4 s), and
 [doc 29](29-verification-runbook.md) maps a change type to its cheapest check.
-The suite is 177 cases after collapsing the historical harness matrices; full
+The suite is 201 cases after collapsing the historical harness matrices; full
 discovery is ~10 s but only needed for cross-module, packaging or contract
 changes. Do not rerun a large matrix solely to reproduce an old test count.
 
 ## Cleanup checkpoint
 
-The 17 root test files now live in `tests/`. Standalone utilities moved to
-`tools/`: `check` (fast core suite), `local_service_probe`, `mcp_trial_client`,
-`scroll_effect_probe`, `vision_wait_probe`.
-Invoke them with `uv run python -m tools.NAME`; runtime-imported benchmark
-modules remain at root. Tool roots and packaging were updated accordingly.
+The 17 test files live in `tests/`. The installed runtime lives in
+`src/jevdesktop/` (entry points `jevdesktop.desktop_cli`, `jevdesktop.desktop_mcp`,
+`jevdesktop.desktop_tray`; workers via `python -m jevdesktop.<worker>`). Standalone
+benchmarks moved to `scripts/` (`python -m scripts.NAME`); standalone probes stay in
+`tools/` (`python -m tools.NAME`: `check`, `local_service_probe`, `mcp_trial_client`,
+`scroll_effect_probe`, `vision_wait_probe`). The app icon and `.desktop` entry live in
+`assets/` and are installed by `service install`. `benchmark_fixtures/` stays at the
+root and is resolved by `jevdesktop.paths`; packaging was updated to a `src/` layout
+and a clean wheel ships only `jevdesktop/`.
 
-Verification: 176 cases discovered without running the full suite; 37 focused
-tests passed (service probe, vision wait probe, live probe and KCalc proof).
-All three moved tools passed `--help`. No live apps or provider calls were used.
+Verification: the full offline suite (201 cases) and the fast core set (101 cases)
+pass; the tray icon render and the `service install`/`uninstall` desktop assets were
+checked on the host into a temporary XDG data home. No live apps or provider calls
+were used.
 
 ## Repository and operational notes
 

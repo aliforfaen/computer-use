@@ -17,8 +17,10 @@ from pathlib import Path
 from urllib.parse import quote
 
 
-ROOT = Path(__file__).resolve().parent
-FIXTURE = ROOT / "benchmark_fixtures" / "action.html"
+from jevdesktop import paths
+
+ROOT = paths.repo_root() or Path(__file__).resolve().parent
+FIXTURE = paths.fixtures_dir() / "action.html"
 DOCUMENTS = ROOT / "run" / "documents"
 
 
@@ -33,7 +35,7 @@ def _ensure_bounded_atspi_worker(engine):
         proc = None
     if proc is None:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "jev_accessibility_worker", "--serve"],
+            [sys.executable, "-m", "jevdesktop.jev_accessibility_worker", "--serve"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             env=env,
@@ -245,7 +247,7 @@ class Worker:
             if not isinstance(start, str) or "Input backend: KWin EIS" not in start:
                 raise ValueError("virtual_session_unavailable")
             self._write_journal()
-            from benchmark_capture import _enable_virtual_atspi
+            from jevdesktop.benchmark_capture import _enable_virtual_atspi
             flags = _enable_virtual_atspi(self.engine)
             if not all(flags.values()):
                 raise ValueError("atspi_setup_failed")
@@ -263,7 +265,7 @@ class Worker:
     def _start_live(self, app: str, *, temporary_a11y: bool = False) -> dict:
         """Connect to the owner desktop and launch one PID-owned allowlisted app."""
         from kwin_mcp.core import AutomationEngine
-        from live_desktop_probe import (_active_row, _a11y_address, _a11y_flags, _raw_window_rows,
+        from jevdesktop.live_desktop_probe import (_active_row, _a11y_address, _a11y_flags, _raw_window_rows,
                                         _set_a11y_flags_at,
                                         _raw_pid_for_window_id, _restore_exact, _window_rows)
         self.engine = AutomationEngine()
@@ -347,7 +349,7 @@ class Worker:
     def _focus_live_app(self) -> bool:
         if self.desktop_mode != "live" or self.engine is None or not self.live_window_id:
             return False
-        from live_desktop_probe import _active_row, _restore_needle, _window_rows
+        from jevdesktop.live_desktop_probe import _active_row, _restore_needle, _window_rows
         rows = _window_rows(self.engine)
         matches = [row for row in rows if row.get("id") == self.live_window_id]
         if len(matches) != 1 or not isinstance(matches[0].get("app"), str):
@@ -367,7 +369,7 @@ class Worker:
         target = self.action_original_window or (self.original_window if baseline else None)
         if self.desktop_mode != "live" or self.engine is None or not target:
             return False
-        from live_desktop_probe import _restore_exact, _window_rows
+        from jevdesktop.live_desktop_probe import _restore_exact, _window_rows
         restored = _restore_exact(self.engine, target, _window_rows(self.engine))
         if restored and self.action_original_window is not None:
             self.action_original_window = None
@@ -377,7 +379,7 @@ class Worker:
     def prepare_live_action(self) -> dict:
         if self.desktop_mode != "live" or self.engine is None:
             raise ValueError("live_mode_required")
-        from live_desktop_probe import _active_row, _restore_needle, _window_rows
+        from jevdesktop.live_desktop_probe import _active_row, _restore_needle, _window_rows
         original = _active_row(self.engine)
         if _restore_needle(original, _window_rows(self.engine)) is None:
             raise ValueError("live_original_focus_unrestorable")
@@ -389,7 +391,7 @@ class Worker:
 
     def _stop_live_app(self) -> bool:
         """Terminate only the exact process returned by this task's launch."""
-        from live_desktop_probe import _active_row, _restore_needle, _window_rows
+        from jevdesktop.live_desktop_probe import _active_row, _restore_needle, _window_rows
         focus_snapshot_ok = True
         if self.action_original_window is None:
             try:
@@ -435,7 +437,7 @@ class Worker:
         a11y_ok = True
         if self.original_a11y_flags is not None and self.a11y_address is not None:
             try:
-                from live_desktop_probe import _set_a11y_flags_at
+                from jevdesktop.live_desktop_probe import _set_a11y_flags_at
                 actual = _set_a11y_flags_at(self.a11y_address, self.original_a11y_flags)
                 a11y_ok = actual == self.original_a11y_flags
             except Exception:
@@ -671,7 +673,7 @@ def main() -> int:
 
 def __getattr__(name):
     if name == "DesktopWorkerClient":
-        from desktop_service import DesktopWorkerClient
+        from jevdesktop.desktop_service import DesktopWorkerClient
         return DesktopWorkerClient
     raise AttributeError(name)
 

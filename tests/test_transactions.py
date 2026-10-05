@@ -7,7 +7,7 @@ import time
 import unittest
 from pathlib import Path
 
-from transactions import Action, AuditLog, Policy, TransactionEngine, TransactionError, Verification
+from jevdesktop.transactions import Action, AuditLog, Policy, TransactionEngine, TransactionError, Verification
 
 
 class FakeBackend:

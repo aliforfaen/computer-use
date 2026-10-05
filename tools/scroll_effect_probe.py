@@ -19,8 +19,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from desktop_service import DesktopService
-from transactions import _scroll_viewport, _scroll_witnesses
+from jevdesktop.desktop_service import DesktopService
+from jevdesktop.transactions import _scroll_viewport, _scroll_witnesses
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "run" / f"scroll-{datetime.now(timezone.utc):%Y-%m-%d}"

@@ -105,6 +105,16 @@ template/entry-point drift for both units.
 `graphical-session.target` gating, `Restart=on-failure`). It is never enabled
 automatically either, and `uninstall` removes both units.
 
+## App icon and desktop entry
+
+`assets/jev-icon.svg` is the single source for the app icon, shipped inside the
+package through `src/jevdesktop/assets/` symlinks. `install` copies
+`icons/hicolor/scalable/apps/jev-icon.svg` and
+`applications/jev-desktop.desktop` (`Icon=jev-icon`, `Exec=jev-desktop-tray`)
+into `${XDG_DATA_HOME:-~/.local/share}`, and `uninstall` removes exactly those
+two files; `status` reports `desktop_entry.installed`. This is presentation
+only and does not touch the allowlist, focus or audit paths. See ADR-029.
+
 ## Tray settings
 
 Tray behaviour lives in `~/.config/jev-desktop/tray.json` (0600):
@@ -138,6 +148,13 @@ session and owned apps` (`stop_all` with the cleanup confirmation surfaced),
 a `Service` submenu (start/stop/enable-at-login/disable-at-login), the
 `Stop all and shut down owner` kill switch, and `Quit tray` (tray only).
 
+The indicator icon is the owner's `assets/jev-icon.svg`, rendered by
+`prepare_tray_icon` into `~/.cache/jev-desktop/icons/jev-icon.png` (plus an
+`@2x` variant for HiDPI) and pointed at with `set_icon_theme_path`; the cache is
+re-rendered when the SVG is newer. If the SVG or its loader is unavailable, the
+tray logs `tray_icon_unavailable` and falls back to a stock theme icon
+(`input-mouse`, ...), so it always starts. See ADR-029.
+
 Mode is a **preference**, never an authorization. Selecting `physical` only
 changes which mode a tray-started task requests; an actual live start always
 opens a per-task dialog that must confirm the owner is present **and** that
@@ -166,8 +183,10 @@ Verified: config precedence and fail-closed allowlist, install/status/
 uninstall behaviour including drift and the active-unit refusal, tray-unit
 install, audit rotation and pruning, tray settings round-trip, tray SNI
 registration and coexistence with a sandbox owner, live-gate decisions and
-kill-switch confirmation (stubbed toolkit), and the full affected suite
-(177 cases, all green).
+kill-switch confirmation (stubbed toolkit), the icon cache freshness and tray
+fallback, `service install`/`uninstall` of the desktop entry and icon into a
+temporary XDG data home, and the full affected suite
+(201 cases, all green).
 
 Not verified: clicking every tray item on screen, enabling a unit at login by
 the project, a live task started from the tray, and the tray under a

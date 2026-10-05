@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from desktop_worker import Worker, _ensure_bounded_atspi_worker
+from jevdesktop.desktop_worker import Worker, _ensure_bounded_atspi_worker
 
 
 class FakeEngine:
@@ -82,8 +82,8 @@ class DesktopWorkerDocumentTests(unittest.TestCase):
         def advance(seconds):
             now[0] += seconds
 
-        with patch("desktop_worker.time.monotonic", side_effect=lambda: now[0]), \
-             patch("desktop_worker.time.sleep", side_effect=advance):
+        with patch("jevdesktop.desktop_worker.time.monotonic", side_effect=lambda: now[0]), \
+             patch("jevdesktop.desktop_worker.time.sleep", side_effect=advance):
             worker._wait_for_app_window("kcalc", timeout_seconds=1.0, poll_seconds=0.1)
 
         self.assertEqual(engine.queries, 3)
@@ -103,8 +103,8 @@ class DesktopWorkerDocumentTests(unittest.TestCase):
         def advance(seconds):
             now[0] += seconds
 
-        with patch("desktop_worker.time.monotonic", side_effect=lambda: now[0]), \
-             patch("desktop_worker.time.sleep", side_effect=advance):
+        with patch("jevdesktop.desktop_worker.time.monotonic", side_effect=lambda: now[0]), \
+             patch("jevdesktop.desktop_worker.time.sleep", side_effect=advance):
             with self.assertRaisesRegex(ValueError, "app_window_open_unconfirmed"):
                 worker._wait_for_app_window("kcalc", timeout_seconds=0.25, poll_seconds=0.1)
 
@@ -112,7 +112,7 @@ class DesktopWorkerDocumentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             documents = root / "run" / "documents"
-            with patch("desktop_worker.ROOT", root), patch("desktop_worker.DOCUMENTS", documents):
+            with patch("jevdesktop.desktop_worker.ROOT", root), patch("jevdesktop.desktop_worker.DOCUMENTS", documents):
                 first = Worker._new_document()
                 second = Worker._new_document()
                 self.assertNotEqual(first, second)
@@ -122,11 +122,11 @@ class DesktopWorkerDocumentTests(unittest.TestCase):
 
     def test_engine_reuses_driver_atspi_worker_with_project_cap_shim(self):
         process = FakeProcess()
-        with patch("desktop_worker.subprocess.Popen", return_value=process) as popen:
+        with patch("jevdesktop.desktop_worker.subprocess.Popen", return_value=process) as popen:
             engine = AtspiEngineStub()
             self.assertIs(_ensure_bounded_atspi_worker(engine), process)
         args, kwargs = popen.call_args
-        self.assertEqual(args[0][1:4], ["-m", "jev_accessibility_worker", "--serve"])
+        self.assertEqual(args[0][1:4], ["-m", "jevdesktop.jev_accessibility_worker", "--serve"])
         self.assertEqual(kwargs["stdin"], __import__("subprocess").PIPE)
         self.assertEqual(engine._atspi_bus, "bus")
         self.assertEqual(engine._atspi_a11y, "a11y")
@@ -144,7 +144,7 @@ class DesktopWorkerDocumentTests(unittest.TestCase):
             temporary = Path(folder) / "profile"
             temporary.mkdir()
             worker.paths.append(temporary)
-            with patch("desktop_worker.ROOT", root), patch("desktop_worker.DOCUMENTS", base):
+            with patch("jevdesktop.desktop_worker.ROOT", root), patch("jevdesktop.desktop_worker.DOCUMENTS", base):
                 self.assertEqual(worker._owned_document(), path)
                 worker.cleanup()
                 self.assertTrue(path.exists())
@@ -161,7 +161,7 @@ class DesktopWorkerDocumentTests(unittest.TestCase):
             worker.app = "kate"
             worker.document_path = path
             worker.engine = FakeEngine()
-            with patch("desktop_worker.ROOT", root), patch("desktop_worker.DOCUMENTS", base):
+            with patch("jevdesktop.desktop_worker.ROOT", root), patch("jevdesktop.desktop_worker.DOCUMENTS", base):
                 result = worker.stop()
             self.assertTrue(result["stopped"])
             self.assertIsNone(worker.app)
@@ -181,7 +181,7 @@ class DesktopWorkerDocumentTests(unittest.TestCase):
             worker.document_path = path
             engine = FakeEngine()
             worker.engine = engine
-            with patch("desktop_worker.ROOT", root), patch("desktop_worker.DOCUMENTS", base):
+            with patch("jevdesktop.desktop_worker.ROOT", root), patch("jevdesktop.desktop_worker.DOCUMENTS", base):
                 self.assertEqual(worker.call("document_key", {"operation": "save"}), "pressed")
                 self.assertEqual(worker.call("document_bytes", {}), {
                     "utf8_base64": base64.b64encode(content).decode("ascii")})

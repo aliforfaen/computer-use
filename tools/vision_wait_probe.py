@@ -23,9 +23,9 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.request import Request, urlopen
 
-from observation import ObservationAdapter
-from vision_reader import ReaderConfig, ReaderResult, VisionReader, _question_prompt
-from wait_watcher import AdapterFrameSource, ReaderJudge, WaitSpec, WaitWatcher
+from jevdesktop.observation import ObservationAdapter
+from jevdesktop.vision_reader import ReaderConfig, ReaderResult, VisionReader, _question_prompt
+from jevdesktop.wait_watcher import AdapterFrameSource, ReaderJudge, WaitSpec, WaitWatcher
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "run" / "vision-wait-probe"
@@ -272,7 +272,7 @@ def _case_result_events(server: Any, trial: str) -> list[dict[str, Any]]:
 def _run_case(server: Any, case: dict[str, Any], output: Path, budget_reader: BudgetedReader, *,
               deadline_seconds: float = 2.5, debounce_seconds: float = 0.25,
               on_case_event: Callable[[str, dict[str, Any]], None] | None = None) -> dict[str, Any]:
-    from wait_benchmark import _url, _wait_loaded, _status_tone
+    from scripts.wait_benchmark import _url, _wait_loaded, _status_tone
     from kwin_mcp.core import AutomationEngine
 
     trial = uuid.uuid4().hex
@@ -417,10 +417,10 @@ def run(output: Path = OUT, *, seed: int = 41,
         reader = reader_factory()
         budget_reader = BudgetedReader(reader, max_calls=max_calls, max_case_calls=max_case_calls,
                                        on_attempt_event=journal_event)
-        from wait_benchmark import _versions
+        from scripts.wait_benchmark import _versions
         versions = _versions()
         if server_factory is None:
-            from wait_benchmark import FixtureServer
+            from scripts.wait_benchmark import FixtureServer
             server_factory = FixtureServer
         server = server_factory()
         server.start()

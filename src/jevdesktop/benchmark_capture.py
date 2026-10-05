@@ -3,7 +3,7 @@
 
 This module captures only local, code-owned synthetic fixtures. It does not call
 any vision model. Install/run with ``uv run --with kwin-mcp==0.10.0
---with Pillow python benchmark_capture.py [output-dir]``.
+--with Pillow python -m jevdesktop.benchmark_capture [output-dir]``.
 """
 
 from __future__ import annotations
@@ -24,9 +24,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from jevdesktop import paths
 
-ROOT = Path(__file__).resolve().parent
-FIXTURES = ROOT / "benchmark_fixtures"
+ROOT = paths.repo_root() or paths.PACKAGE_DIR
+FIXTURES = paths.fixtures_dir()
 SCREEN = (1280, 800)
 POEM = "Blue morning opens\nThe river keeps its light\nA bird lifts the day"
 APP_ALLOWLIST = {"kate", "firefox"}

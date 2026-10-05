@@ -15,7 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from desktop_daemon import ALLOW_APPS_ENV, _env_allowed_apps, default_config_path
+from jevdesktop import paths
+from jevdesktop.desktop_daemon import ALLOW_APPS_ENV, _env_allowed_apps, default_config_path
 
 UNIT_NAME = "jev-desktop.service"
 TRAY_UNIT_NAME = "jev-desktop-tray.service"
@@ -84,7 +85,43 @@ def _entry_point() -> str:
     found = shutil.which("jev-desktop")
     if found:
         return _systemd_quote(found)
-    return f"{_systemd_quote(sys.executable)} -m desktop_cli"
+    return f"{_systemd_quote(sys.executable)} -m jevdesktop.desktop_cli"
+
+
+def _desktop_asset_targets() -> tuple[Path, Path]:
+    """Return the installed ``(desktop entry, icon)`` paths under XDG data home."""
+    apps_dir = paths.data_home() / "applications"
+    icon_dir = paths.data_home() / "icons" / "hicolor" / "scalable" / "apps"
+    return apps_dir / paths.DESKTOP_ENTRY_NAME, icon_dir / paths.ICON_NAME
+
+
+def _install_desktop_assets() -> dict[str, str]:
+    """Copy the launcher entry and app icon so menus show the Jev icon."""
+    entry = paths.desktop_entry_path()
+    icon = paths.icon_path()
+    if entry is None or icon is None:
+        return {}
+    entry_target, icon_target = _desktop_asset_targets()
+    entry_target.parent.mkdir(parents=True, exist_ok=True)
+    icon_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(entry, entry_target)
+    shutil.copyfile(icon, icon_target)
+    return {"entry": str(entry_target), "icon": str(icon_target)}
+
+
+def _remove_desktop_assets() -> list[str]:
+    removed: list[str] = []
+    for target in _desktop_asset_targets():
+        if target.exists():
+            target.unlink()
+            removed.append(str(target))
+    return removed
+
+
+def _desktop_asset_status() -> dict[str, Any]:
+    entry_target, icon_target = _desktop_asset_targets()
+    return {"entry": str(entry_target), "icon": str(icon_target),
+            "installed": entry_target.exists() and icon_target.exists()}
 
 
 def render_unit(config_path: Path) -> str:
@@ -189,6 +226,7 @@ def _install(args: Any, unit_dir: Path) -> int:
         unit_path.write_text(content, encoding="utf-8")
         unit_path.chmod(0o644)
         written[name] = "replaced" if replaced else "created"
+    desktop_assets = _install_desktop_assets()
     reload_proc = _systemctl("daemon-reload")
     activelines = [] if reload_proc is None else [line for line in reload_proc.stdout.splitlines() if line.strip()]
     _emit({"ok": True, "command": "install", "unit": str(unit_dir / UNIT_NAME),
@@ -196,6 +234,7 @@ def _install(args: Any, unit_dir: Path) -> int:
            "unit_states": written,
            "config": str(config_path), "config_created": config_created,
            "allow_apps": apps,
+           "desktop_entry": desktop_assets,
            "daemon_reload": "ok" if reload_proc is not None and reload_proc.returncode == 0
                                              else "failed" if reload_proc is not None else "unavailable",
            "daemon_reload_output": activelines,
@@ -230,10 +269,11 @@ def _uninstall(args: Any, unit_dir: Path) -> int:
         proc = _systemctl("disable", name)
         steps[f"disable:{name}"] = "ok" if proc is not None and proc.returncode == 0 else "skipped"
         (unit_dir / name).unlink()
+    removed_assets = _remove_desktop_assets()
     reload_proc = _systemctl("daemon-reload")
     steps["daemon_reload"] = "ok" if reload_proc is not None and reload_proc.returncode == 0 else "failed"
     _emit({"ok": True, "command": "uninstall", "unit": str(unit_dir / UNIT_NAME), "removed": True,
-           "units": installed, "steps": steps})
+           "units": installed, "desktop_entry": removed_assets, "steps": steps})
     return 0
 
 
@@ -258,6 +298,7 @@ def _status(args: Any, unit_dir: Path) -> int:
            "drift": drift,
            "tray": {"unit": TRAY_UNIT_NAME, "unit_path": str(tray_path), "installed": tray_installed,
                     "active": tray_state[0], "enabled": tray_state[1], "drift": tray_drift},
+           "desktop_entry": _desktop_asset_status(),
            "systemd_available": _systemctl("--version") is not None,
            "hint": ("installed unit differs from the current template or entry point; re-run install"
                     if drift or tray_drift else None)})

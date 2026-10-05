@@ -288,9 +288,9 @@ class IsolatedVisionReader:
         if len(payload) > 12 * 1024 * 1024:
             return ReaderResult("error", error="reader_request_too_large", provider=self.config.provider,
                                 model=self.config.model, owner_elapsed_ms=round((time.perf_counter() - started) * 1000, 2))
-        worker_path = os.path.join(os.path.dirname(__file__), "vision_reader_worker.py")
         try:
-            proc = subprocess.Popen([sys.executable, worker_path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            proc = subprocess.Popen([sys.executable, "-m", "jevdesktop.vision_reader_worker"],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, start_new_session=True)
         except OSError:
             elapsed = round((time.perf_counter() - started) * 1000, 2)

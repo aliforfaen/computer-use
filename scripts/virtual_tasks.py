@@ -5,7 +5,7 @@ This is an integration harness, not a daemon or general task runner. It launches
 only the fixed Kate, Firefox and KCalc fixtures below. It never types into a
 terminal, opens external pages, saves user files, or calls a vision provider.
 
-Run with: uv run --with kwin-mcp==0.10.0 --with Pillow --with httpx python virtual_tasks.py
+Run with: uv run --with kwin-mcp==0.10.0 --with Pillow --with httpx python -m scripts.virtual_tasks
 """
 
 from __future__ import annotations
@@ -25,13 +25,13 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
-from benchmark_capture import _atspi_version, _enable_virtual_atspi, _version
-from observation import ObservationAdapter
-from transactions import Action, AuditLog, AutonomyMode, Policy, TransactionEngine, TransactionError, Verification, KwinMcpBackend
+from jevdesktop import paths
+from jevdesktop.benchmark_capture import _atspi_version, _enable_virtual_atspi, _version
+from jevdesktop.observation import ObservationAdapter
+from jevdesktop.transactions import Action, AuditLog, AutonomyMode, Policy, TransactionEngine, TransactionError, Verification, KwinMcpBackend
 
-
-ROOT = Path(__file__).resolve().parent
-FIXTURES = ROOT / "benchmark_fixtures"
+ROOT = paths.repo_root() or Path(__file__).resolve().parent
+FIXTURES = paths.fixtures_dir()
 OUTPUT = ROOT / "run" / "virtual-tasks"
 SCREEN = (1280, 800)
 ALLOWED_APPS = frozenset({"kate", "firefox", "kcalc"})
