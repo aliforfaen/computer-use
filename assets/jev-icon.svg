@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Jev cursor icon</title>
+  <desc id="desc">A light-blue mouse pointer with a curious eye on a transparent background.</desc>
+  <path fill="#91EAF5" d="M17 8C12 5 7 9 8 15L17 109C18 115 24 117 28 113L47 92L64 120C67 125 72 127 77 124L91 116C96 113 98 109 95 104L78 76L106 70C114 68 116 60 109 56Z"/>
+  <circle cx="47" cy="52" r="16" fill="#202426"/>
+  <circle cx="52" cy="47" r="6.5" fill="#FFFDF7"/>
+</svg>
