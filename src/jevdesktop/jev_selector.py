@@ -294,6 +294,12 @@ class JevConfig:
             raise ValueError("max_calls must be positive")
 
 
+def jev_enabled(environ: dict[str, str] | None = None) -> bool:
+    """Return whether paid Jev requests are enabled; default to off."""
+    values = environ if environ is not None else os.environ
+    return values.get("JEV_ENABLED", "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
 class HttpSelector:
     """One request, no retries, hard call cap. The key is read from the environment."""
 
@@ -304,6 +310,8 @@ class HttpSelector:
         self.calls = 0
 
     def _post(self, request: dict[str, Any]) -> Any:
+        if not jev_enabled(self._environ):
+            raise SelectorError("selector_disabled")
         import httpx
 
         key = self._environ.get(self.config.key_env)

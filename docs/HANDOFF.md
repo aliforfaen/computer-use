@@ -1,6 +1,6 @@
 # Handoff — start here
 
-Updated **2026-10-05**. Checkout: `/home/messhias/lamasync/projects/computer-use`.
+Updated **2026-10-06**. Checkout: `/home/messhias/lamasync/projects/computer-use`.
 Origin: [aliforfaen/computer-use](https://github.com/aliforfaen/computer-use).
 Read `AGENTS.md`, this page, then [local CLI/MCP](16-local-owner-and-mcp.md).
 Numbered docs retain earlier experiments; this page is the current summary.
@@ -24,7 +24,16 @@ Useful agent acceptance: [Codex Luna workflow](20-codex-luna-workflow.md),
 [document workflow](21-kate-acceptance-workflow.md),
 [public webpage → Kate](23-public-browser-kate-agent-task.md).
 
-## Latest work — 2026-10-05
+## Latest work — 2026-10-06
+
+**Jev opt-in and perception follow-up (2026-10-06).** Jev network calls now
+require `JEV_ENABLED=true`; the default is disabled, and both paid probes stop
+before loading the key if disabled. This does not connect Jev to the daemon.
+`.env.example` lists the app's current provider and daemon variables with no
+secrets. The OCR study is CPU-only now: the temporary CUDA harness and GPU
+environment were removed after the owner chose cross-host simplicity. Qwen-OCR
+is recorded as a future API comparison interest; no API request or image upload
+was made.
 
 **Package and icon.** The flat root modules are now the installed
 `src/jevdesktop/` package (ADR-028): entry points are `jevdesktop.desktop_cli`,
@@ -38,6 +47,19 @@ with a stock-icon fallback) and the menu: `service install` writes
 `applications/jev-desktop.desktop`, and `service uninstall` removes both
 (ADR-029). Presentation only. `uv run python -m tools.check` is the 101-case core
 set; the full offline suite is 201 cases.
+
+**Tine perception study complete.** [Doc 32](32-tine-perception-study.md)
+summarizes the virtual KCalc/Kate and synthetic-panel run. Window crops helped
+synthetic noise and KCalc latency, but Kate was slightly slower and missed the
+gold `Edit` label. A one-host CUDA comparison across six saved images reduced
+mean warm OCR p50 from 271 ms to 197 ms with the same recognized text; its
+portability/setup cost was not worth retaining. The current benchmark harness
+is CPU-only.
+The 25 focused fusion tests passed. Two virtual OCR-ref clicks happened during
+a queued probe despite the later inspection-only boundary; both display checks
+passed, stale/conflicting refs were rejected, and the reusable click path has
+been removed. No live desktop or runtime integration was used. Reuse
+KWin/kwin-mcp; no Plasma extension is needed at this point.
 
 **Previous work (2026-10-04): the Jev loop runs.**
 
@@ -142,6 +164,9 @@ or physical cancellation/crash recovery.
    Preserve existing routes, bind loopback, reuse official MCP transport.
 5. **Planning/replay:** resolve ADR-011 and broader visual grounding before
    general execution. Jev stays a selector; OCR/Jev acceleration is unproven.
+6. **Future OCR API comparison:** Qwen-OCR is a candidate in [doc 32](32-tine-perception-study.md).
+   Compare only after choosing synthetic/virtual crops and reviewing the external
+   upload, latency, output quality and cost. Do not wire it into the runtime yet.
 
 [Next phases](25-next-phases.md) gives the remaining gates. No remote HTTP
 surface, tailnet deployment or general planner exists.

@@ -447,3 +447,12 @@ removing both again on `service uninstall`. The package ships the icon and entry
 through symlinks into `assets/`, so the checkout file is the only source of truth.
 This changes presentation only: no allowlist, focus, audit or authorization behaviour
 is touched.
+
+### ADR-030 — Jev provider requests are opt-in by environment
+**2026-10-06 · accepted.** HTTP selector requests, including the standalone paid
+probes, require `JEV_ENABLED=true`; missing, false or unrecognized values disable
+the request. The `HttpSelector` enforces this immediately before reading the API
+key or sending a request, and the probes report `jev_disabled` before loading the
+key. Dry-run and recorded-answer modes remain offline and usable. This is a
+provider-call kill switch; it does not wire Jev into the daemon or authorize any
+desktop action. Credential values stay in the existing private config files.

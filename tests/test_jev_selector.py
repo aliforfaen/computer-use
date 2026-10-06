@@ -10,11 +10,13 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
 import jevdesktop.jev_selector as js
-from tools.jev_selector_probe import KEY_NAME, _load_api_key
+from tools.jev_selector_probe import KEY_NAME, _load_api_key, main as selector_probe_main
 
 
 def _candidate(ref, role, label, actions, states=None, **extra):
@@ -137,7 +139,8 @@ class HttpSelectorTests(unittest.TestCase):
 
     def test_http_selector_sends_one_bounded_request_and_never_leaks_the_key_into_state(self):
         client = FakeClient(FakeResponse(200, self.payload))
-        selector = js.HttpSelector(js.JevConfig(), client=client, environ={"JEV_API_KEY": "test-key"})
+        selector = js.HttpSelector(js.JevConfig(), client=client,
+                                   environ={"JEV_ENABLED": "true", "JEV_API_KEY": "test-key"})
         decision = selector.select(self.request, options=self.state.options)
         self.assertEqual((decision.action, decision.target_ref, decision.model), ("click", "cand_a", "jev-1.13.0"))
         self.assertEqual(decision.usage["input_tokens"], 62)
@@ -147,17 +150,30 @@ class HttpSelectorTests(unittest.TestCase):
         with self.assertRaises(js.SelectorError):
             selector.select(self.request, options=self.state.options)  # call cap
 
+    def test_http_selector_is_disabled_by_default_and_accepts_common_true_values(self):
+        for enabled in (None, "false", "0", "off", "no"):
+            env = {"JEV_API_KEY": "test-key"}
+            if enabled is not None:
+                env["JEV_ENABLED"] = enabled
+            client = FakeClient(FakeResponse(200, self.payload))
+            selector = js.HttpSelector(js.JevConfig(), client=client, environ=env)
+            with self.assertRaisesRegex(js.SelectorError, "selector_disabled"):
+                selector.select(self.request, options=self.state.options)
+            self.assertEqual(client.requests, [])
+        for enabled in ("1", "true", "YES", "on"):
+            self.assertTrue(js.jev_enabled({"JEV_ENABLED": enabled}))
+
     def test_missing_key_and_provider_errors_are_safe_and_typed(self):
         with self.assertRaisesRegex(js.SelectorError, "key_not_configured"):
             js.HttpSelector(js.JevConfig(), client=FakeClient(FakeResponse(200, self.payload)),
-                            environ={}).select(self.request, options=self.state.options)
+                            environ={"JEV_ENABLED": "true"}).select(self.request, options=self.state.options)
         for status, expected in ((429, "selector_http_429"), (500, "selector_http_500")):
             selector = js.HttpSelector(js.JevConfig(), client=FakeClient(FakeResponse(status, None)),
-                                       environ={"JEV_API_KEY": "k"})
+                                       environ={"JEV_ENABLED": "true", "JEV_API_KEY": "k"})
             with self.assertRaisesRegex(js.SelectorError, expected):
                 selector.select(self.request, options=self.state.options)
         broken = js.HttpSelector(js.JevConfig(), client=FakeClient(FakeResponse(200, {"answers": []})),
-                                 environ={"JEV_API_KEY": "k"})
+                                 environ={"JEV_ENABLED": "true", "JEV_API_KEY": "k"})
         with self.assertRaisesRegex(js.SelectorError, "response_invalid"):
             broken.select(self.request, options=self.state.options)
 
@@ -200,6 +216,19 @@ class ProbeDotenvTests(unittest.TestCase):
         from jevdesktop.desktop_daemon import default_config_dir
         self.assertEqual(default_config_dir() / "jev.env", Path(os.environ.get(
             "XDG_CONFIG_HOME", Path.home() / ".config")) / "jev-desktop" / "jev.env")
+
+    def test_paid_probe_stops_when_jev_is_disabled_before_loading_key_or_candidates(self):
+        output = StringIO()
+        with mock.patch.dict(os.environ, {"JEV_ENABLED": "false"}, clear=True):
+            with mock.patch("tools.jev_selector_probe._load_api_key") as load_key:
+                with redirect_stdout(output):
+                    result = selector_probe_main([
+                        "--candidates-json", "/missing/never-read.json",
+                        "--goal", "enter 1", "--call",
+                    ])
+        self.assertEqual(result, 2)
+        self.assertIn('"error": "jev_disabled"', output.getvalue())
+        load_key.assert_not_called()
 
 
 class HistoryTests(unittest.TestCase):

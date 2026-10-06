@@ -66,9 +66,12 @@ Three findings worth more than the pass itself:
 
 ### Running it
 
+Recorded and dry-run modes stay offline. A live Jev loop requires both the
+explicit command and `JEV_ENABLED=true`; Jev API calls are disabled otherwise.
+
 ```bash
 uv run jev-desktop session start kcalc
-uv run python -m tools.jev_loop_probe --app kcalc --goal "enter the digits 1, 2 then 3 in order" \
+JEV_ENABLED=true uv run python -m tools.jev_loop_probe --app kcalc --goal "enter the digits 1, 2 then 3 in order" \
     --expect One=1 --expect Two=12 --expect Three=123 --report-dir run/jev-loop-kcalc
 uv run jev-desktop session stop
 ```

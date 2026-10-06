@@ -4,7 +4,14 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
-**Latest work (2026-10-05):** the flat root modules became the installable
+**Latest work (2026-10-06):** Jev HTTP selector calls require
+`JEV_ENABLED=true` and default to disabled, including in the standalone probes.
+The study harness uses CPU-only RapidOCR; the experimental CUDA probe and
+disposable GPU environment were removed for cross-host portability. Qwen-OCR is
+a future API test interest recorded in [doc 32](docs/32-tine-perception-study.md).
+`.env.example` lists current app-specific variables without secrets.
+
+**Previous work (2026-10-05):** the flat root modules became the installable
 `src/jevdesktop/` package; the entry points are now `jevdesktop.desktop_cli`,
 `jevdesktop.desktop_mcp` and `jevdesktop.desktop_tray`, workers start via
 `python -m jevdesktop.<worker>`, and `jevdesktop.paths` resolves the checkout,
@@ -17,6 +24,21 @@ menu entry — `service install` drops
 `applications/jev-desktop.desktop` and `service uninstall` removes them
 (ADR-029). Presentation only; no allowlist, focus, audit or authorization change.
 Full offline suite (201 cases) and `uv run python -m tools.check` (101 cases) pass.
+
+**Tine perception study (2026-10-05):** [doc 32](docs/32-tine-perception-study.md)
+and `run/tine-perception-study-2026-10-05/` record virtual-only tests of
+candidate filtering, AT-SPI/OCR provenance, deduplication, disagreement,
+target-window crops, and a historical CPU/GPU comparison. Reuse KWin/kwin-mcp; do not build a GNOME
+or Plasma extension for this. The study added a research harness and focused
+offline tests; nothing is wired into `src/jevdesktop/`. Two isolated virtual
+KCalc OCR-ref clicks were executed and verified during the study; this is
+historical evidence, not permission for future OCR-grounded actions. Current
+and future study work stops at inspection unless separately reviewed. CUDA
+showed a warm speedup on the saved images but was dropped due to portability and
+setup cost; the probe and GPU environment are removed. Synthetic data only, no
+live desktop captures or paid Jev/reader calls, and no host driver or runtime
+dependency installation. OCR packages may be installed only in a disposable
+CPU venv under ignored `tmp/`. Qwen-OCR remains future test interest only.
 
 **Previous work (2026-10-04):** the Jev selector is exercised for real and the
 driver loop exists. `tools/jev_loop_probe.py` closes
@@ -125,6 +147,8 @@ reader; MiMo is configurable.
   Only a text-argument helper (a small LLM) may produce free text, and only for typing.
   The separate vision reader may report observed text/data under ADR-012;
   its descriptions are not executable targets. Action grounding remains open.
+- Jev provider calls require `JEV_ENABLED=true`; default is disabled. This
+  environment gate does not wire Jev into the daemon.
 - **Every action is verified.** After execution, re-read state (AT-SPI property or
   screenshot diff) before the next decision. `DONE` from the model is a proposal, not proof.
 - **Guardrails live outside the model.** Allow/deny lists, confirmation gates, step and
@@ -175,6 +199,7 @@ The owner chose **tailnet ACLs as the only access gate** and **remote reach equa
 ```
 README.md            project overview, endgoal, reading order
 AGENTS.md            this file
+.env.example         current app-specific environment variables; placeholders only
 HANDOFF.md           (in docs/) start here for a fresh session
 docs/01-jev-primer.md
 docs/02-prior-art.md
@@ -205,7 +230,10 @@ benchmark_fixtures/         local HTML fixtures, resolved by jevdesktop.paths
 one-off harness → `scripts/`. Verification or owner probe → `tools/`. Unit test →
 `tests/`. Icon, image or `.desktop` asset → `assets/`. HTML fixture →
 `benchmark_fixtures/`. Documentation → `docs/`. Captures and trial output → `run/`
-(ignored). Nothing new belongs in the repository root.
+(ignored). Tine study prototypes belong in `scripts/`, their deterministic fusion
+tests in `tests/`, and study-only captures/reports in
+`run/tine-perception-study-YYYY-MM-DD/`. Nothing new belongs in the repository
+root or `src/jevdesktop/` until a reviewed result authorizes runtime work.
 
 ## Conventions
 

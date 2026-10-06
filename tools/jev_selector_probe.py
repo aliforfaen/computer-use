@@ -30,7 +30,7 @@ from pathlib import Path
 
 from jevdesktop.desktop_daemon import _load_dotenv_key, default_config_dir
 from jevdesktop.jev_selector import (HttpSelector, JevConfig, MAX_OPTIONS, RecordedSelector, SelectorError,
-                          build_request, estimate_tokens, render_state_text, state_from_candidates)
+                          build_request, estimate_tokens, jev_enabled, render_state_text, state_from_candidates)
 
 MAX_PROBE_CALLS = 3
 KEY_NAME = "JEV_API_KEY"
@@ -79,6 +79,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     api_key_present: bool | None = None
     if args.call:
+        if not jev_enabled():
+            print(json.dumps({"ok": False, "error": "jev_disabled",
+                              "hint": "set JEV_ENABLED=true to permit Jev API calls; nothing was sent"}))
+            return 2
         api_key_present = _load_api_key(args.dotenv)
         if not api_key_present:
             print(json.dumps({"ok": False, "error": "jev_api_key_missing", "dotenv": str(args.dotenv),

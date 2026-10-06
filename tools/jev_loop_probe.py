@@ -43,7 +43,7 @@ from typing import Any
 
 from jevdesktop.desktop_daemon import _load_dotenv_key, default_config_dir, default_socket_path
 from jevdesktop.jev_selector import (HttpSelector, JevConfig, MAX_OPTIONS, RecordedSelector, SelectorError,
-                          build_request, estimate_tokens, state_from_candidates)
+                          build_request, estimate_tokens, jev_enabled, state_from_candidates)
 from tools.local_service_probe import _socket_request
 
 MAX_STEPS_HARD_CAP = 20
@@ -261,6 +261,10 @@ def main(argv: list[str] | None = None) -> int:
         selector: Any = RecordedSelector(answers, model="recorded")
         counts_provider_calls = False
     else:
+        if not jev_enabled():
+            print(json.dumps({"ok": False, "error": "jev_disabled",
+                              "hint": "set JEV_ENABLED=true to permit Jev API calls; nothing was sent"}))
+            return 2
         key_name = JevConfig().key_env
         dotenv = args.dotenv or (default_config_dir() / "jev.env")
         if not os.environ.get(key_name):
