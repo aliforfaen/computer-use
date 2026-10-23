@@ -21,6 +21,7 @@ CORE_MODULES = (
     "tests.test_desktop_tray_and_service",
     "tests.test_desktop_worker_documents",
     "tests.test_observation",
+    "tests.test_benchmark_atspi",
 )
 
 

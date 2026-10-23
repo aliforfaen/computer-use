@@ -9,6 +9,15 @@ Companion reading: [Tine source repository](https://github.com/smythp/tine),
 [verification runbook](29-verification-runbook.md), and
 [KWin owner contract](16-local-owner-and-mcp.md).
 
+## Current follow-up — 2026-10-11
+
+Jev work is deferred. Apply these perception findings to useful data for the
+calling agent, independent of a selector provider. This study is complete; the
+next step is a small inspection-only observation packet and coverage comparison,
+not rerunning its historical CPU/GPU matrix. Runtime fusion remains unimplemented.
+Qwen-OCR stays a future API interest. No new capture, API call or OCR action is
+authorized by this documentation update.
+
 ## Question
 
 Can local screenshot OCR improve the **quality and coverage** of the current
@@ -145,10 +154,12 @@ synthetic captures is in ignored
 - **CPU speed was acceptable for this small fixture.** Warm CPU OCR p50 ranged
   from 237 to 390 ms for these 640×480 and 1280×800 images. This is a single
   run per app, not a general performance guarantee.
-- **Decision: keep CPU OCR.** The CUDA timing comparison is recorded below;
-  the portability/setup cost across other hosts is not justified, so the
-  reusable harness is CPU-only and the disposable GPU environment has been
-  removed.
+- **CPU remains the supported OCR path.** A short CUDA comparison improved
+  warm timings on five of six saved images (six-image mean p50: 271 ms CPU,
+  197 ms CUDA), with identical text; CUDA also had higher first-use cost on
+  KCalc full. The portability/setup cost across other hosts is not justified,
+  so the reusable harness is CPU-only and the disposable GPU environment has
+  been removed. These are OCR-slice timings, not end-to-end computer-use latency.
 - **The focused offline fusion suite passed 25 tests** covering provenance,
   filtering, duplicate-label ambiguity, deduplication, coordinate conflict,
   private-value redaction and generation-scoped refs.
@@ -181,10 +192,10 @@ and conflict outcomes, and cleanup confirmation.
 
 Keep an idea only if it adds correctly attributed, useful visible candidates
 and does not promote OCR text into assumed controls. Prefer window crop if it
-reduces pixels/latency without losing gold-set labels. Consider the Qwen-OCR
-API comparison only as a separately approved future test. Consider runtime
-wiring only after the owner reviews this report; any future change must still
-preserve code-owned authorization, fresh refs, verification, and audit.
+reduces pixels/latency without losing gold-set labels. Consider the Qwen-OCR API comparison only as a separately approved
+future test. Consider runtime wiring only after the owner reviews this report; any
+future change must still preserve code-owned authorization, fresh refs,
+verification, and audit.
 
 ## File placement
 

@@ -324,29 +324,49 @@ def _wait_for_editable_editor(engine: Any) -> str:
     raise CaptureError(f"Kate has no accessible editable editor yet; observed tree excerpt={last_tree[:500]!r}")
 
 
+# at-spi2-core up to 2.60 exposed both org.a11y.Status properties; 2.62 removed
+# ScreenReaderEnabled and keeps only IsEnabled. IsEnabled is the required switch;
+# any other known flag is enabled only when the bus actually exposes it.
+ATSPI_REQUIRED_PROPERTY = "IsEnabled"
+ATSPI_OPTIONAL_PROPERTIES = ("ScreenReaderEnabled",)
+
+
 def _enable_virtual_atspi(engine: Any) -> dict[str, bool]:
-    """Enable AT-SPI in this isolated session only, then verify both flags."""
+    """Enable AT-SPI in this isolated session and verify the flags it exposes.
+
+    The status interface is discovered first: `IsEnabled` is required and any
+    other known property is set only when the bus exposes it. A missing optional
+    property is not an error, but a permission, transport or write failure is
+    never swallowed, and the bus is closed on every path.
+    """
     try:
         import dbus
     except ImportError as exc:
         raise CaptureError("dbus-python is required to enable isolated AT-SPI status flags") from exc
     session = engine._get_session()
     address = session.info.dbus_address
-    bus = dbus.bus.BusConnection(address)
+    bus = None
     try:
+        bus = dbus.bus.BusConnection(address)
         obj = bus.get_object("org.a11y.Bus", "/org/a11y/bus")
         props = dbus.Interface(obj, "org.freedesktop.DBus.Properties")
-        for name in ("IsEnabled", "ScreenReaderEnabled"):
+        available = props.GetAll("org.a11y.Status")
+        if not isinstance(available, dict) or ATSPI_REQUIRED_PROPERTY not in available:
+            raise CaptureError("isolated AT-SPI status does not expose IsEnabled")
+        names = [ATSPI_REQUIRED_PROPERTY]
+        names += [name for name in ATSPI_OPTIONAL_PROPERTIES if name in available]
+        for name in names:
             props.Set("org.a11y.Status", name, dbus.Boolean(True))
         actual = props.GetAll("org.a11y.Status")
-        result = {name: bool(actual.get(name, False)) for name in ("IsEnabled", "ScreenReaderEnabled")}
+        result = {name: bool(actual.get(name, False)) for name in names}
         if not all(result.values()):
             raise CaptureError(f"isolated AT-SPI flags did not enable: {result}")
         return result
     except dbus.DBusException as exc:
         raise CaptureError(f"could not enable AT-SPI in isolated session ({type(exc).__name__})") from None
     finally:
-        bus.close()
+        if bus is not None:
+            bus.close()
 
 
 def _verify_disabled_button(tree: str) -> None:

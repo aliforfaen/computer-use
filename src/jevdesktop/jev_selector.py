@@ -217,7 +217,13 @@ def validate_answer(answers: Any, *, options: tuple[DecisionOption, ...],
     index = _option_index(target)
     if index is None or not 1 <= index <= len(options):
         raise SelectorError("unenumerated_target")
-    return SelectedDecision(action=action, target_ref=options[index - 1].ref, confidence=confidence,
+    option = options[index - 1]
+    # The action and target are enumerated independently; an enumerated pair that
+    # the target does not actually support is still an invalid answer. Callers must
+    # not reinterpret it as a different action.
+    if action not in option.actions:
+        raise SelectorError("action_not_supported_by_target")
+    return SelectedDecision(action=action, target_ref=option.ref, confidence=confidence,
                             probabilities=probabilities)
 
 
@@ -310,10 +316,10 @@ class HttpSelector:
         self.calls = 0
 
     def _post(self, request: dict[str, Any]) -> Any:
-        if not jev_enabled(self._environ):
-            raise SelectorError("selector_disabled")
         import httpx
 
+        if not jev_enabled(self._environ):
+            raise SelectorError("selector_disabled")
         key = self._environ.get(self.config.key_env)
         if not key:
             raise SelectorError("selector_key_not_configured")

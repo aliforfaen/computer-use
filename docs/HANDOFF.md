@@ -1,9 +1,32 @@
 # Handoff — start here
 
-Updated **2026-10-06**. Checkout: `/home/messhias/lamasync/projects/computer-use`.
+Updated **2026-10-23**. Checkout: `/home/messhias/lamasync/projects/computer-use`.
 Origin: [aliforfaen/computer-use](https://github.com/aliforfaen/computer-use).
 Read `AGENTS.md`, this page, then [local CLI/MCP](16-local-owner-and-mcp.md).
 Numbered docs retain earlier experiments; this page is the current summary.
+
+## Owner follow-up — 2026-10-23
+
+The owner now prioritizes broad desktop use, including browser tasks when this
+plugin is convenient. Review grounding geometry/labels, generic action coverage,
+and separation of permission, input delivery and outcome verification. Reduce
+repeated dialogs through explicit owner policy. These are requested design
+changes, not implemented behavior: existing runtime gates still apply. Investigate
+SSH forwarding of existing app MCP servers independently of desktop actions.
+Jev remains deferred. See the discussion in the October 23 session.
+
+## Current direction — 2026-10-11
+
+The owner deferred Jev selectors, paid comparisons, modal experiments, protocol
+redesign and daemon wiring. Keep existing code and evidence as historical
+experiments; Jev stays disabled by default. The active goal is useful, grounded
+observations for the calling agent across native applications.
+
+Active next work: review the completed Tine-inspired CPU study and design a
+small inspection-only agent observation packet: target-window image/crop,
+fresh semantic candidates, source provenance, OCR-only text, and explicit
+ambiguity/disagreement. OCR observations must not become executable targets by
+assumption. The study adapter is not integrated into the runtime.
 
 ## What works
 
@@ -18,11 +41,70 @@ Numbered docs retain earlier experiments; this page is the current summary.
 | Owner surfaces | JSON config (CLI > env > file > default), `systemd --user` unit via `service install|status|uninstall`, and an AppIndicator tray with status, virtual/physical preference, session cleanup, settings and the kill switch. The Jev icon is the app, tray and menu icon. |
 | Audit retention | Durable audit at `~/.config/jev-desktop/audit.jsonl`, size-rotated (4 MiB, 3 backups) and age-pruned (30 days); stale session journals swept at startup. |
 | Jev selector seam | `src/jevdesktop/jev_selector.py` builds an enumerated decision request from candidate output and validates the typed answer in code. Offline probe, not wired into the loop. |
-| Jev driver loop | `tools/jev_loop_probe.py` closes select → act → verify → re-enumerate against the owner socket (unwired). Virtual KCalc: `done_verified` on 1-2-3 with every click checked on the display; `wrong_choice` caught when the model pressed `Equals` first for 2+2; `verification_unavailable` when no postcondition exists for an operator click. [doc 31](31-jev-control-plan.md), `run/jev-loop-2026-10-04/`. |
+| Jev driver loop | `tools/jev_loop_probe.py` closes select → act → verify → re-enumerate against the owner socket (unwired). Virtual KCalc: `done_verified` on 1-2-3 with every click checked on the display; `wrong_choice` caught when the model pressed `Equals` first for 2+2; `verification_unavailable` when no postcondition exists for an operator click. [doc 31](31-jev-control-plan.md), `run/jev-loop-2026-10-04/`. Virtual Kate: caller-supplied text with `target_text` + `document_saved` and a final saved-revision contract; code and Jev both passed, Jev for ~1.6 s and 5 paid calls more. [doc 33](33-jev-real-task-study.md), `run/jev-real-task-2026-10-10/`. |
 
 Useful agent acceptance: [Codex Luna workflow](20-codex-luna-workflow.md),
 [document workflow](21-kate-acceptance-workflow.md),
 [public webpage → Kate](23-public-browser-kate-agent-task.md).
+
+## Latest work — 2026-10-11
+
+**Study bugfixes.** [Doc 34](34-jev-study-bugfix-handoff.md) records the
+prioritized fixes and the free smoke. All six are implemented and covered by
+focused offline tests; the original study evidence is unchanged.
+
+- **Virtual AT-SPI startup fixed (runtime).** `benchmark_capture._enable_virtual_atspi`
+  now discovers `org.a11y.Status`, requires and verifies `IsEnabled`, and sets
+  `ScreenReaderEnabled` only when the bus exposes it (at-spi2-core 2.62 dropped
+  it). The bus is closed on all paths and arbitrary D-Bus errors are not
+  swallowed. The study shim is deleted. A free `--code-only` virtual Kate smoke
+  on the shipped runtime passed end to end: `run/jev-study-fixes-2026-10-11/`.
+- **Jev is opt-in again.** The harness no longer sets `JEV_ENABLED=true`; `--run`
+  refuses with `jev_disabled` before reading the key or starting anything, and
+  `--dry-run` wins over `--run`.
+- **Ownership cleanup is unconditional.** A disposable-daemon readiness timeout
+  now still stops the owned process, records `cleanup_confirmed` and keeps a
+  bounded stderr tail.
+- **Provenance is real.** KWin, kwin-mcp and AT-SPI versions come from installed
+  facts; requested and observed Jev models and the configured caps are recorded.
+- **Answers are validated.** An action/target pair the target does not support is
+  rejected as `invalid_answer` before `act`; a save can only prove completion if
+  no other action came between the replacement and the save.
+- **Outcomes are truthful.** Attempted provider requests are counted, a separate
+  six-action cap is enforced, and `ok`/exit code now require a completed
+  experiment, passed task contracts and confirmed cleanup.
+
+Checks: focused 76 tests, `tools.check` 108 (8 modules), full offline suite 273.
+No paid Jev call, live input or destructive modal was used. **Live-path AT-SPI
+compatibility is unchanged and remains reliability debt** (the same
+`ScreenReaderEnabled` assumption in `live_desktop_probe`, `desktop_worker` and
+`desktop_service`); it needs a live-safe change and live validation.
+
+## Latest work — 2026-10-10
+
+**Jev versus code on a real Kate document task.** [Doc 33](33-jev-real-task-study.md)
+and `run/jev-real-task-2026-10-10/` record the authorized study. Two fresh
+virtual Kate sessions ran the same scripted draft/save/revise/save task with
+identical caller-owned bytes: a code phase machine and the Jev selector over the
+same candidates. Both reached `done_verified` with the exact final revision
+saved after cleanup (582 bytes, `cd700ffe…70ed`). Jev used 5 calls
+(5,097 in / 845 out tokens) and added ~1.6 s (~14%) over code for the same
+result. Six selection-only cases followed: Jev picked the real Kate editor for
+`replace_document` correctly (0.88–0.90) and avoided Save As, but on synthetic
+native-style modals it chose `save_document` on the Save button (not executable)
+and, with no saving option available, targeted **Discard** instead of `blocked`.
+Confidence did not separate two identical `Save` labels (0.84). Code matched or
+beat Jev on the modal choices. 11 of 12 authorized Jev calls were used; model
+observed `jev-1.13.0`. No runtime wiring, no destructive modal execution.
+
+**Host regression found and worked around.** at-spi2-core 2.62.0.1 (host
+upgrade 2026-10-07) exposes only `org.a11y.Status.IsEnabled`, so the shipped
+`_enable_virtual_atspi` (which also sets `ScreenReaderEnabled`) makes every
+virtual session fail with `worker_failed`. The study ran on a disposable daemon
+with a study-local `scripts/study_shims/sitecustomize.py` shim, keeping
+`src/jevdesktop/` untouched. **Superseded on 2026-10-11:** the shim is removed
+and the runtime compatibility fix in [doc 34](34-jev-study-bugfix-handoff.md)
+restores virtual sessions on the shipped code.
 
 ## Latest work — 2026-10-06
 
@@ -51,8 +133,9 @@ set; the full offline suite is 201 cases.
 **Tine perception study complete.** [Doc 32](32-tine-perception-study.md)
 summarizes the virtual KCalc/Kate and synthetic-panel run. Window crops helped
 synthetic noise and KCalc latency, but Kate was slightly slower and missed the
-gold `Edit` label. A one-host CUDA comparison across six saved images reduced
-mean warm OCR p50 from 271 ms to 197 ms with the same recognized text; its
+gold `Edit` label. A project-local cuDNN fix now enables CUDA inference: across
+the six saved images, mean warm OCR p50 fell 27.5% (271 ms to 197 ms) with the
+same recognized text; this was a one-host OCR-slice comparison, and CUDA's
 portability/setup cost was not worth retaining. The current benchmark harness
 is CPU-only.
 The 25 focused fusion tests passed. Two virtual OCR-ref clicks happened during
@@ -82,7 +165,7 @@ from the reader key in `daemon.env`; `--dotenv` and the loop probe read it, the
 daemon never does. The reader is armed (DeepSeek Flash, 8 calls/session) and
 verified end to end on a virtual app.
 
-**Next, in order:** a Kate verified loop (`replace_document` + `document_saved`);
+**Historical Jev next steps (deferred 2026-10-11):** a Kate verified loop (`replace_document` + `document_saved`);
 close the modal guardrail gaps (destructive risk words, a modal postcondition);
 the modal experiment; ambiguity runs. See doc 31 §6.
 
@@ -149,27 +232,34 @@ AT-SPI opt-in, and own one newly launched allowlisted app. Physical-input idle
 detection is unavailable here. This Kate result does not validate live Firefox
 or physical cancellation/crash recovery.
 
-## What remains
+## What remains — current priorities
 
-1. **Reader wait:** inspect one bounded retained invalid response. Both polling
-   comparison tasks completed; both reader-wait trials returned
-   `invalid_judgment`. Keep ordinary screenshots as the default and heartbeat
-   waiting experimental. [Comparison](24-primary-agent-wait-comparison.md).
-2. **Optional watched live checks:** Firefox and cancellation/crash cleanup,
-   when the owner is present. Keep each check small and useful.
-3. **Optional owner surfaces:** enable the user unit at login and click through
-   the tray menu while watched; this session proved SNI registration and logic
-   but did not enable or click the menu.
-4. **Tailnet:** requires a real peer and approval to change Serve routes.
-   Preserve existing routes, bind loopback, reuse official MCP transport.
-5. **Planning/replay:** resolve ADR-011 and broader visual grounding before
-   general execution. Jev stays a selector; OCR/Jev acceleration is unproven.
-6. **Future OCR API comparison:** Qwen-OCR is a candidate in [doc 32](32-tine-perception-study.md).
-   Compare only after choosing synthetic/virtual crops and reviewing the external
-   upload, latency, output quality and cost. Do not wire it into the runtime yet.
+1. **Observation quality:** define an inspection-only packet for the calling
+   agent that binds an app image/crop and fresh AT-SPI inventory to one capture
+   and candidate generation. Preserve role/state/action meaning, provenance,
+   unresolved duplicates and semantic/OCR disagreement. Reuse the completed
+   [Tine-inspired study](32-tine-perception-study.md); no repeat GPU study.
+2. **Coverage evidence:** compare the current semantic inventory with the
+   filtered/fused packet on a small native task where AT-SPI misses useful
+   visible information. Measure correct useful observations, omissions, noise,
+   ambiguity and capture/OCR latency. Include the known Kate crop `Edit` miss.
+   Keep CPU OCR local, synthetic/virtual and inspection-only pending review.
+3. **Reliability debt:** live AT-SPI property discovery/restoration still needs
+   compatibility work. The study harness also equates forced daemon exit with
+   confirmed resource cleanup; correct that report before reusing the harness.
+   Virtual startup is fixed and the code-only Kate smoke passed (doc 34).
+4. **Deferred:** all Jev selector/loop/modal/protocol/provider experiments and
+   runtime wiring; Qwen-OCR API comparison; general planner and replay; tailnet
+   deployment. Existing evidence remains historical. No new call authorization
+   is implied by this backlog.
+5. **Optional, task-driven:** reader-wait diagnosis (still experimental),
+   nested/live scrolling, watched tray acceptance and live crash recovery.
+   Ordinary polling and app images remain the supported default.
 
-[Next phases](25-next-phases.md) gives the remaining gates. No remote HTTP
-surface, tailnet deployment or general planner exists.
+[Next phases](25-next-phases.md) and [open questions](05-open-questions.md)
+carry the same priority reset. No remote HTTP surface, tailnet deployment or
+general planner exists. The October study, bugfixes and external review are retained in the local
+checkpoint history.
 
 ## Running and checking
 
@@ -197,13 +287,12 @@ See [doc 16](16-local-owner-and-mcp.md) for sockets, actions, images, readers,
 lifecycle and live opt-in. Changes to tool schemas require a host refresh.
 
 Use targeted offline checks and small host probes for changed behavior:
-`uv run python -m tools.check` is the 101-case core set (~4 s), and
+`uv run python -m tools.check` is the 108-case core set (~4 s), and
 [doc 29](29-verification-runbook.md) maps a change type to its cheapest check.
-The suite is 201 cases after collapsing the historical harness matrices; full
-discovery is ~10 s but only needed for cross-module, packaging or contract
-changes. Do not rerun a large matrix solely to reproduce an old test count.
+The latest reported full offline suite is 273 cases; discovery is only needed
+for cross-module, packaging or contract changes. Do not rerun a large matrix solely to reproduce an old test count.
 
-## Cleanup checkpoint
+## Historical packaging cleanup checkpoint — 2026-10-05
 
 The 17 test files live in `tests/`. The installed runtime lives in
 `src/jevdesktop/` (entry points `jevdesktop.desktop_cli`, `jevdesktop.desktop_mcp`,

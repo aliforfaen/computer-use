@@ -1,5 +1,8 @@
 # 31 — Jev control plan: loops, dialogs, ambiguity, browsers
 
+**Deferred by owner on 2026-10-11.** Retained as historical design/evidence;
+no selector, provider, modal or wiring work is currently scheduled. See HANDOFF.
+
 Status: **plan, plus one working proof of concept.** The selector is still
 unwired from the daemon (ADR-023): `tools/jev_loop_probe.py` is a *client* of the
 owner socket, so execution, policy, budgets, focus handling and audit stay where
@@ -66,13 +69,10 @@ Three findings worth more than the pass itself:
 
 ### Running it
 
-Recorded and dry-run modes stay offline. A live Jev loop requires both the
-explicit command and `JEV_ENABLED=true`; Jev API calls are disabled otherwise.
-
 ```bash
 uv run jev-desktop session start kcalc
-JEV_ENABLED=true uv run python -m tools.jev_loop_probe --app kcalc --goal "enter the digits 1, 2 then 3 in order" \
-    --expect One=1 --expect Two=12 --expect Three=123 --report-dir run/jev-loop-kcalc
+uv run python -m tools.jev_loop_probe --app kcalc --goal "enter the digits 1, 2 then 3 in order" \
+    --expect One=1 --expect Two=12 --expect Three=123 --final-expected 123 --report-dir run/jev-loop-kcalc
 uv run jev-desktop session stop
 ```
 
@@ -182,3 +182,31 @@ with **no DOM** — a Qt dialog, a calculator, a native editor.
 Arithmetic on a calculator is deliberately *not* on the list: run C showed it
 cannot be verified from the accessibility tree, and a PoC that has to weaken its
 own verification to pass is not evidence of anything.
+
+## 7. Return-session check (2026-10-10)
+
+The existing 101-case core check and 30 selector/loop tests passed on the
+current checkout. Review found that the probe treated any earlier verified
+step as proof of completion: entering only `1` could satisfy `done` for a goal
+of entering `12`. The probe now requires an explicit caller-owned
+`--final-expected` value matching the latest verified display effect. A later
+successful action clears previous completion evidence. With no final contract,
+`done` returns `done_unverified`. Historical runs above used the earlier rule.
+
+Three regression cases cover partial progress, an omitted final contract, and
+completion evidence invalidated by a later action; 33 selector/loop tests pass.
+These are offline tests with injected owner responses and recorded decisions;
+no new provider accuracy, latency or desktop behavior is established.
+
+Recommended next experiment: a small saved-state comparison of near-duplicate
+native controls, followed by a virtual Kate workflow with caller-supplied text
+and a final saved-file postcondition. Keep per-action verification distinct
+from task completion. Existing uncommitted selector/document edits were
+preserved during this check.
+
+**2026-10-10 result.** That recommended experiment ran: [doc 33](33-jev-real-task-study.md)
+records a code-versus-Jev Kate draft/save/revise/save comparison (both passed,
+Jev ~1.6 s and 5 paid calls more) and six selection-only cases. The two synthetic
+modal cases were unsafe selections (`save_document` on a button; **Discard**
+named when nothing could save), so the modal guardrail gaps in §3.1 are still the
+next thing to close before any Jev-assisted modal work.

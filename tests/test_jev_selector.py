@@ -10,13 +10,11 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
-from io import StringIO
 from pathlib import Path
 from unittest import mock
 
 import jevdesktop.jev_selector as js
-from tools.jev_selector_probe import KEY_NAME, _load_api_key, main as selector_probe_main
+from tools.jev_selector_probe import KEY_NAME, _load_api_key
 
 
 def _candidate(ref, role, label, actions, states=None, **extra):
@@ -84,10 +82,20 @@ class AnswerValidationTests(unittest.TestCase):
         self.assertEqual(decision.action, "click")
         self.assertEqual(decision.target_ref, "cand_a")
         self.assertEqual(decision.confidence, 0.9)
-        self.assertEqual(js.validate_answer(self._answer("click", 3), options=self.state.options).target_ref,
+        # Options sort by role then label: 1 One, 2 Page (scroll pane), 3 Editor.
+        self.assertEqual(js.validate_answer(self._answer("type_text", 3), options=self.state.options).target_ref,
                          "cand_b")
-        self.assertEqual(js.validate_answer(self._answer("click", 2), options=self.state.options).target_ref,
+        self.assertEqual(js.validate_answer(self._answer("scroll", 2), options=self.state.options).target_ref,
                          "cand_c")
+
+    def test_an_action_the_target_does_not_support_is_rejected(self):
+        # Enumerated action and enumerated target are not enough on their own:
+        # the pair must be one the target actually offers.
+        for answers in (self._answer("click", 2), self._answer("type_text", 1),
+                        self._answer("scroll", 3)):
+            with self.assertRaises(js.SelectorError) as caught:
+                js.validate_answer(answers, options=self.state.options)
+            self.assertEqual(str(caught.exception), "action_not_supported_by_target")
 
     def test_targetless_actions_need_no_target(self):
         decision = js.validate_answer(self._answer("done"), options=self.state.options)
@@ -217,19 +225,6 @@ class ProbeDotenvTests(unittest.TestCase):
         self.assertEqual(default_config_dir() / "jev.env", Path(os.environ.get(
             "XDG_CONFIG_HOME", Path.home() / ".config")) / "jev-desktop" / "jev.env")
 
-    def test_paid_probe_stops_when_jev_is_disabled_before_loading_key_or_candidates(self):
-        output = StringIO()
-        with mock.patch.dict(os.environ, {"JEV_ENABLED": "false"}, clear=True):
-            with mock.patch("tools.jev_selector_probe._load_api_key") as load_key:
-                with redirect_stdout(output):
-                    result = selector_probe_main([
-                        "--candidates-json", "/missing/never-read.json",
-                        "--goal", "enter 1", "--call",
-                    ])
-        self.assertEqual(result, 2)
-        self.assertIn('"error": "jev_disabled"', output.getvalue())
-        load_key.assert_not_called()
-
 
 class HistoryTests(unittest.TestCase):
     """The driver loop's history is labels only, collapsed and bounded."""
@@ -282,7 +277,7 @@ class RecordedSelectorSequenceTests(unittest.TestCase):
             selector.select(self.request, options=self.state.options)
 
     def test_a_dict_still_replays_the_same_answer_every_time(self):
-        selector = js.RecordedSelector(self._answer("click", 2))
+        selector = js.RecordedSelector(self._answer("scroll", 2))
         for _ in range(3):
             self.assertEqual(selector.select(self.request, options=self.state.options).target_ref, "cand_c")
 

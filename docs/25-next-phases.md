@@ -1,7 +1,19 @@
 # 25 — Next phases
 
-Updated 2026-10-03 after the scroll fix, owner surfaces, test-suite shrink and
-the Jev selector seam. See [the handoff](HANDOFF.md) for current commands.
+Reviewed 2026-10-14. The milestones below date from 2026-10-03; see
+[the handoff](HANDOFF.md) for the active priorities and current commands.
+
+## Current direction — 2026-10-11
+
+The owner deferred Jev selectors, paid comparisons, modal experiments, protocol
+redesign and daemon wiring. Keep existing code and evidence as historical
+experiments; Jev stays disabled by default. The active goal is useful, grounded
+observations for the calling agent across native applications.
+
+Current work order is observation packet quality, a small native coverage
+comparison, then the remaining compatibility/cleanup debt. See HANDOFF's
+current priorities. Sections below are historical milestones; their Jev next
+steps are deferred and live evidence predates the AT-SPI 2.62 regression.
 
 ## Done 2026-10-03
 
@@ -26,7 +38,7 @@ the Jev selector seam. See [the handoff](HANDOFF.md) for current commands.
    it experimental. Polling is the documented default either way.
 3. Optional watched live checks (Firefox, cancellation/crash). Not important
    enough to block anything; the vision path is already demonstrated.
-4. Jev: run Stage 0 (free) then Stage 1 (one call) from doc 30 and decide
+4. **Deferred:** Jev: run Stage 0 (free) then Stage 1 (one call) from doc 30 and decide
    whether Stage 2 is worth it.
 5. Later, only if a task needs it: nested/horizontal scroll regions.
 

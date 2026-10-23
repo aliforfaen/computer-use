@@ -448,6 +448,7 @@ through symlinks into `assets/`, so the checkout file is the only source of trut
 This changes presentation only: no allowlist, focus, audit or authorization behaviour
 is touched.
 
+
 ### ADR-030 — Jev provider requests are opt-in by environment
 **2026-10-06 · accepted.** HTTP selector requests, including the standalone paid
 probes, require `JEV_ENABLED=true`; missing, false or unrecognized values disable
@@ -456,3 +457,15 @@ key or sending a request, and the probes report `jev_disabled` before loading th
 key. Dry-run and recorded-answer modes remain offline and usable. This is a
 provider-call kill switch; it does not wire Jev into the daemon or authorize any
 desktop action. Credential values stay in the existing private config files.
+
+### ADR-031 — Defer Jev experiments; prioritize agent observation quality
+
+**2026-10-11 · owner decision.** Jev selector/provider comparisons, modal
+experiments, protocol redesign and runtime wiring are deferred. Preserve the
+existing disabled-by-default adapter and historical evidence. The active goal
+is provider-independent, grounded information for a calling agent: target-app
+images, fresh semantic candidates and, where useful, local CPU OCR observations
+with provenance, deduplication and explicit disagreement. Reuse the Tine study
+and KWin/kwin-mcp. Fusion remains a prototype; observation-only OCR is not an
+executable target. General planner/replay work remains deferred. This supersedes
+the active Jev experiment priorities in docs 30/31 and leaves ADR-011 unresolved.

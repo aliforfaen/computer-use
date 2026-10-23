@@ -3,6 +3,26 @@
 Status: ADR-001…010 are locked (ADR-008 confirmed in ADR-009). P0 measurement is
 underway; the owner preferences below remain open.
 
+## Current direction — 2026-10-11
+
+The owner deferred Jev selectors, paid comparisons, modal experiments, protocol
+redesign and daemon wiring. Keep existing code and evidence as historical
+experiments; Jev stays disabled by default. The active goal is useful, grounded
+observations for the calling agent across native applications.
+
+## Active questions
+
+- What useful screen context is missing from the current AT-SPI inventory?
+- Which fields belong in a bounded agent observation packet, with freshness,
+  source evidence and uncertainty explicit?
+- When does cropped CPU OCR add correct information, and when does it miss
+  labels or introduce duplicates? Reuse doc 32's saved evidence first.
+- How will observation-only OCR remain distinct from actionable semantic refs?
+
+The P0 checklist below is historical, not the current work queue. Jev/model
+selection, text-helper selection and server planning are deferred. The repo
+home question is resolved: this checkout is published on GitHub (see HANDOFF).
+
 ## Answered
 
 | # | Question | Answer |

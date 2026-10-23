@@ -1,8 +1,9 @@
 # 29 — Verification runbook
 
-**2026-10-03.** The cheapest check for a change, so a small edit never turns
-into another test marathon. The suite is intentionally ~200 cases; most changes
-need one or two modules, not discovery.
+**Updated 2026-10-14.** The cheapest check for a change, so a small edit never
+turns into another test marathon. Most changes need one or two modules, not
+discovery. Last recorded checks: 108 core cases and 273 full-suite cases
+(2026-10-11); these are historical results, not a fresh run.
 
 ## Core rule
 
@@ -16,7 +17,7 @@ uv run python -m unittest discover -s tests               # everything (~10 s)
 ```
 
 `tools/check.py` runs the shipped-surface set: service, transactions, surfaces,
-tray/service, documents, observation, daemon. It is the "did I break the
+tray/service, documents, observation, daemon and virtual AT-SPI startup. It is the "did I break the
 product" check. Reader/live/harness modules are deliberately excluded.
 
 ## Change → cheapest check
@@ -32,7 +33,10 @@ product" check. Reader/live/harness modules are deliberately excluded.
 | `vision_reader.py` stream bounds, call caps | `tests.test_vision_reader` |
 | `wait_watcher.py` / `owner_wait.py` | `tests.test_wait_watcher` |
 | `live_desktop_probe.py` / live focus restore | `tests.test_live_desktop_probe tests.test_live_owner` |
-| `paths.py`, `scripts/`, `assets/`, `pyproject.toml` | discovery + `uv build` |
+| `benchmark_capture.py` AT-SPI setup | `tests.test_benchmark_atspi` |
+| Study-only `scripts/` changes | owning focused harness test module |
+| `paths.py`, packaging or `pyproject.toml` | discovery + `uv build` |
+| `assets/` | inspect/render the changed asset |
 | Docs only | none; read the diff |
 
 ## The default agent loop

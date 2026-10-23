@@ -1,5 +1,8 @@
 # 30 — Jev selector experiment
 
+**Deferred by owner on 2026-10-11.** Retained as historical design/evidence;
+no selector, provider, modal or wiring work is currently scheduled. See HANDOFF.
+
 **2026-10-03 · seam implemented, not wired into the owner.** ADR-011 stays
 proposed. This doc is the plan for testing the owner's mental model against a
 real decision model, cheaply, without changing the working computer-use loop.
@@ -32,9 +35,7 @@ That is the whole claim. It is falsifiable in a few cheap runs:
   to replay, `--call` for exactly one paid request (hard cap 3). `--call` reads
   the key from `JEV_API_KEY`, falling back to the private
   `~/.config/jev-desktop/jev.env` (0600); it fails closed with
-  `jev_api_key_missing` before sending anything. It also requires
-  `JEV_ENABLED=true`; with the default unset/false value it returns
-  `jev_disabled` before reading the key or sending anything.
+  `jev_api_key_missing` before sending anything.
 - `tools/jev_loop_probe.py` — the driver loop around the seam:
   `candidates -> select -> act + code-owned check -> re-enumerate`, with step and
   call caps, caller-supplied per-step expectations, and an honest outcome that
@@ -67,12 +68,8 @@ under budget (32k state+longest, 64k total)?
 **Stage 1 — one paid call.** Confirm the real contract and latency:
 
 ```bash
-JEV_ENABLED=true uv run python -m tools.jev_selector_probe --candidates-json /tmp/kcalc.json --goal "enter 1" --call
+uv run python -m tools.jev_selector_probe --candidates-json /tmp/kcalc.json --goal "enter 1" --call
 ```
-
-The paid-call probe is still explicit, and the environment gate must also be
-enabled for that shell (`JEV_ENABLED=true`). An API key alone never enables
-Jev calls.
 
 Record the returned model string, latency and usage. One call, one state.
 

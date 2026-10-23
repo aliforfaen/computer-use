@@ -37,3 +37,6 @@ build/
 .idea/
 .vscode/
 *.swp
+
+# disposable study checkouts and environments
+/tmp/

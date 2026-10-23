@@ -4,6 +4,14 @@ Guidance for agents working in this repo (`computer-use`, aka the Jev computer-u
 
 ## Current phase
 
+## Current direction — 2026-10-11
+
+The owner deferred Jev selectors, paid comparisons, modal experiments, protocol
+redesign and daemon wiring. Keep existing code and evidence as historical
+experiments; Jev stays disabled by default. The active goal is useful, grounded
+observations for the calling agent across native applications.
+
+
 **Latest work (2026-10-06):** Jev HTTP selector calls require
 `JEV_ENABLED=true` and default to disabled, including in the standalone probes.
 The study harness uses CPU-only RapidOCR; the experimental CUDA probe and
@@ -204,7 +212,7 @@ HANDOFF.md           (in docs/) start here for a fresh session
 docs/01-jev-primer.md
 docs/02-prior-art.md
 docs/03-wayland-constraints.md
-docs/04-architecture.md       append-only ADR-001..029 log
+docs/04-architecture.md       append-only ADR-001..031 log
 docs/05-open-questions.md     P0 checklist
 docs/06-remote-agents.md      tailnet topology + access model
 docs/07-p1-selector-probe.md  KCalc observation + decision-only Jev probe
