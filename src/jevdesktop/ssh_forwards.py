@@ -519,4 +519,3 @@ class SSHForwardManager:
             target.unlink()
         reload_result = _run("daemon-reload")
         return {"ok": disabled["ok"] and reload_result["ok"], "disabled": disabled, "daemon_reload": reload_result}
-

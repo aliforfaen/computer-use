@@ -287,4 +287,3 @@ def perform_image_input(session: Any, params: dict[str, Any], *, now: datetime |
         except Exception:
             pass
         raise ValueError("visual_input_effect_uncertain") from None
-
