@@ -212,6 +212,7 @@ class TraySettingsTests(unittest.TestCase):
             self.assertEqual(loaded["poll_seconds"], 7.0)
             self.assertFalse(loaded["confirm_kill_switch"])
             self.assertFalse(loaded["confirm_cleanup"])
+            self.assertFalse(loaded["semantic_candidates_live"])
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
             path.write_text('{"desktop_mode": "sideways", "autonomy_mode": "chaos", "poll_seconds": 900}',
@@ -379,6 +380,7 @@ class TrayLogicTests(unittest.TestCase):
         tray.service_state = ("inactive", "disabled")
         tray.owner_state = "running"
         tray.error = None
+        tray.notice = None
         tray._syncing = False
         tray._ipc_lock = threading.Lock()
         tray._stop = threading.Event()
@@ -403,22 +405,53 @@ class TrayLogicTests(unittest.TestCase):
     def test_live_start_requires_the_per_task_confirmation(self):
         tray = self._tray()
         tray.settings["desktop_mode"] = MODE_LIVE
-        tray._confirm_live = lambda app: False
+        tray._confirm_live = lambda app, semantics=False: False
         tray._on_start(None, "kate")
         self.assertEqual([call for call in tray.calls if call[0] == "session_start"], [])
 
         tray = self._tray()
         tray.settings["desktop_mode"] = MODE_LIVE
-        tray._confirm_live = lambda app: True
+        tray._confirm_live = lambda app, semantics=False: True
         tray._on_start(None, "kate")
         method, params = tray.calls[0]
         self.assertEqual(method, "session_start")
         self.assertEqual(params["desktop_mode"], "live")
         self.assertIs(params["owner_present_override"], True)
+        self.assertIs(params["semantic_candidates"], False)
+        self.assertNotIn("temporary_a11y", params)
+
+        tray = self._tray()
+        tray.settings["desktop_mode"] = MODE_LIVE
+        tray.settings["semantic_candidates_live"] = True
+        tray._confirm_live = lambda app, semantics=False: semantics
+        tray._on_start(None, "kate")
+        params = tray.calls[0][1]
+        self.assertIs(params["semantic_candidates"], True)
         self.assertIs(params["temporary_a11y"], True)
+
+    def test_attach_uses_read_only_inventory_and_starts_exact_selected_window(self):
+        tray = self._tray()
+        tray.settings["confirm_live_task"] = False
+        tray._choose_attach_window = lambda profiles, workspace: ("kate", "kwin-id-42")
+        tray.call = lambda method, params=None, timeout=30.0: (
+            tray.calls.append((method, params or {})),
+            {"profiles": []} if method == "profiles" else {"windows": []}
+        )[1]
+        tray._on_attach(None)
+        self.assertEqual([call[0] for call in tray.calls[:2]], ["profiles", "workspace"])
+        method, params = tray.calls[2]
+        self.assertEqual(method, "session_start")
+        self.assertEqual(params["app"], "kate")
+        self.assertEqual(params["desktop_mode"], "live")
+        self.assertIs(params["attach"], True)
+        self.assertEqual(params["window_id"], "kwin-id-42")
+        self.assertIs(params["owner_present_override"], True)
+        self.assertIs(params["semantic_candidates"], False)
+        self.assertNotIn("temporary_a11y", params)
 
     def test_kill_switch_requires_confirmation(self):
         tray = self._tray()
+        tray.settings["confirm_kill_switch"] = True
         tray._confirm = lambda *_: False
         tray._on_kill_switch(None)
         self.assertEqual(tray.calls, [])

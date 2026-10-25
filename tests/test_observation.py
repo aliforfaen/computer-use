@@ -91,6 +91,29 @@ class ObservationTests(unittest.TestCase):
         with self.assertRaises(ObservationError):
             self.adapter.capture("kcalc", scope="region")
 
+    def test_custom_profile_and_selected_window_are_screenshot_only(self):
+        from jevdesktop.app_profiles import AppProfile
+
+        self.engine._run_kwin_query = lambda _query: {
+            "ok": True,
+            "result": [
+                {"id": "background", "app": "writer.desktop", "caption": "One",
+                 "frame": {"x": 0, "y": 0, "width": 10, "height": 10}},
+                {"id": "selected-dialog", "app": "writer.desktop", "caption": "Two",
+                 "frame": {"x": 10, "y": 5, "width": 20, "height": 15}, "transient_for": "background"},
+            ],
+        }
+        self.engine.selected_window_id = "selected-dialog"
+        profile = AppProfile("writer", ("writer",), ("writer.desktop",), "writer-atspi")
+        adapter = ObservationAdapter(self.engine, "session-writer", allowed_apps={"writer"},
+                                     profiles={"writer": profile})
+        ref = adapter.capture("writer")
+        self.assertEqual(ref.window_id, "selected-dialog")
+        self.assertEqual((ref.width, ref.height), (20, 15))
+        caps = adapter.capabilities()
+        self.assertTrue(caps["screenshot_only"])
+        self.assertFalse(caps["semantic_candidates"])
+
     def test_store_expiry_capacity_session_and_integrity(self):
         now = [0.0]
         store = CaptureStore(ttl_seconds=2, max_items=1, clock=lambda: now[0])

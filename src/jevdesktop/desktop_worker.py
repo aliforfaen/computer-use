@@ -14,10 +14,12 @@ import tempfile
 import time
 from types import MethodType
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 
 from jevdesktop import paths
+from jevdesktop.transactions import SHORTCUT_KEYS
 
 ROOT = paths.repo_root() or Path(__file__).resolve().parent
 FIXTURE = paths.fixtures_dir() / "action.html"
@@ -73,10 +75,16 @@ class Worker:
         self.app: str | None = None
         self.document_path: Path | None = None
         self.desktop_mode = "virtual"
+        self.profile: dict[str, Any] | None = None
+        self.semantic_candidates = True
         self.original_window: dict | None = None
         self.action_original_window: dict | None = None
         self.live_process = None
         self.live_window_id: str | None = None
+        self.live_root_window_id: str | None = None
+        self.live_root_pid: int | None = None
+        self.live_selected_window: dict[str, Any] | None = None
+        self.live_attached = False
         self.original_a11y_flags: dict[str, bool] | None = None
         self.a11y_address: str | None = None
 
@@ -158,6 +166,8 @@ class Worker:
                                               "app": self.action_original_window.get("app")}
                                              if self.action_original_window else None),
                   "original_a11y_flags": self.original_a11y_flags,
+                  "attached_window": self.live_attached,
+                  "live_root_window_id": self.live_root_window_id,
                   "a11y_address": self.a11y_address,
                   "atspi_pid": atspi_pid, "atspi_start_ticks": self._start_ticks(atspi_pid),
                   "home_dir": str(getattr(info, "home_dir", "") or ""),
@@ -194,52 +204,102 @@ class Worker:
         self.app = None
         self.document_path = None
         self.desktop_mode = "virtual"
+        self.profile = None
+        self.semantic_candidates = True
         self.original_window = None
         self.action_original_window = None
         self.live_process = None
         self.live_window_id = None
+        self.live_root_window_id = None
+        self.live_root_pid = None
+        self.live_selected_window = None
+        self.live_attached = False
         self.original_a11y_flags = None
         self.a11y_address = None
         self.journal_path = None
         return {"stopped": True, "cleanup_paths": []}
 
+    @staticmethod
+    def _validate_profile(app: str, profile: dict[str, Any] | None) -> dict[str, Any]:
+        if profile is None:
+            from jevdesktop.app_profiles import profile_for
+
+            resolved = profile_for(app)
+            profile = {"id": resolved.id, "command": list(resolved.command),
+                       "window_app_ids": list(resolved.window_app_ids),
+                       "atspi_app": resolved.atspi_app, "aliases": list(resolved.aliases)}
+        if (not isinstance(profile, dict) or profile.get("id") != app
+                or set(profile) - {"id", "command", "window_app_ids", "atspi_app", "aliases"}):
+            raise ValueError("invalid_worker_profile")
+        command = profile.get("command")
+        app_ids = profile.get("window_app_ids")
+        atspi_app = profile.get("atspi_app")
+        aliases = profile.get("aliases", [])
+        if (not isinstance(command, list) or not command or len(command) > 32
+                or any(not isinstance(item, str) or not item or "\x00" in item for item in command)
+                or not isinstance(app_ids, list) or not app_ids
+                or any(not isinstance(item, str) or not item for item in app_ids)
+                or not isinstance(atspi_app, str) or not atspi_app
+                or not isinstance(aliases, list)
+                or any(not isinstance(item, str) or not item for item in aliases)):
+            raise ValueError("invalid_worker_profile")
+        return {"id": app, "command": list(command), "window_app_ids": list(app_ids),
+                "atspi_app": atspi_app, "aliases": list(aliases)}
+
     def start(self, app: str, journal_path: str | None = None, desktop_mode: str = "virtual",
-              temporary_a11y: bool = False) -> dict:
-        if app not in {"kate", "firefox", "kcalc"} or self.engine is not None:
+              temporary_a11y: bool = False, *, profile: dict[str, Any] | None = None,
+              window_id: str | None = None, attach: bool = False,
+              semantic_candidates: bool = True) -> dict:
+        if (not isinstance(app, str) or not app or self.engine is not None
+                or type(temporary_a11y) is not bool or type(attach) is not bool
+                or type(semantic_candidates) is not bool):
             raise ValueError("invalid_worker_start")
         if desktop_mode not in {"virtual", "live"}:
             raise ValueError("invalid_worker_start")
+        if desktop_mode == "virtual" and (attach or window_id is not None):
+            raise ValueError("invalid_worker_start")
+        if desktop_mode == "live" and (attach is not (window_id is not None)):
+            raise ValueError("invalid_worker_start")
+        if window_id is not None and (not isinstance(window_id, str) or not window_id):
+            raise ValueError("invalid_worker_start")
         if not isinstance(journal_path, str) or not journal_path:
             raise ValueError("invalid_worker_start")
+        self.profile = self._validate_profile(app, profile)
         self.journal_path = Path(journal_path)
         self.app = app
         self.desktop_mode = desktop_mode
+        self.semantic_candidates = semantic_candidates
         from kwin_mcp.core import AutomationEngine
 
         if desktop_mode == "live":
-            return self._start_live(app, temporary_a11y=temporary_a11y)
+            return self._start_live(temporary_a11y=temporary_a11y, window_id=window_id, attach=attach)
 
-        env = {"QT_ACCESSIBILITY": "1", "GTK_MODULES": "gail:atk-bridge"}
-        if app == "kate":
+        env = ({"QT_ACCESSIBILITY": "1", "GTK_MODULES": "gail:atk-bridge"}
+               if self.semantic_candidates else {})
+        profile = self.profile
+        if profile is None:
+            raise ValueError("invalid_worker_profile")
+        command_argv = list(profile["command"])
+        if profile["id"] == "kate":
             document = self._new_document()
             self.document_path = document
-            command = f"kate {shlex.quote(str(document))}"
-        elif app == "firefox":
+            command_argv.append(str(document))
+        elif profile["id"] == "firefox":
             if not FIXTURE.is_file():
                 raise ValueError("fixture_unavailable")
-            profile = _profile()
-            self.paths.append(profile)
-            command = " ".join(("firefox", "--no-remote", "--new-instance", "--profile",
-                                shlex.quote(str(profile)), shlex.quote("file://" + quote(str(FIXTURE.resolve())))))
-            env["MOZ_ENABLE_ACCESSIBILITY"] = "1"
-        else:
-            command = "kcalc"
+            firefox_profile = _profile()
+            self.paths.append(firefox_profile)
+            command_argv.extend(("--profile", str(firefox_profile),
+                                 "file://" + quote(str(FIXTURE.resolve()))))
+            if self.semantic_candidates:
+                env["MOZ_ENABLE_ACCESSIBILITY"] = "1"
+        command = shlex.join(command_argv)
         self.engine = AutomationEngine()
         # kwin-mcp 0.10.0 launches its accessibility reader in a child process.
         # Kate needs complete text for owned-document verification, so reuse
         # its bus identity, retry, timeout and teardown machinery with our
         # bounded text cap only for Kate sessions.
-        if app == "kate":
+        if profile["id"] == "kate" and self.semantic_candidates:
             self.engine._ensure_atspi_worker = MethodType(_ensure_bounded_atspi_worker, self.engine)
         try:
             start = self.engine.session_start(app_command=command, screen_width=1280, screen_height=800,
@@ -247,13 +307,17 @@ class Worker:
             if not isinstance(start, str) or "Input backend: KWin EIS" not in start:
                 raise ValueError("virtual_session_unavailable")
             self._write_journal()
-            from jevdesktop.benchmark_capture import _enable_virtual_atspi
-            flags = _enable_virtual_atspi(self.engine)
-            if not all(flags.values()):
-                raise ValueError("atspi_setup_failed")
+            flags = {}
+            if self.semantic_candidates:
+                from jevdesktop.benchmark_capture import _enable_virtual_atspi
+                flags = _enable_virtual_atspi(self.engine)
+                if not all(flags.values()):
+                    raise ValueError("atspi_setup_failed")
             self._wait_for_app_window(app, document_path=self.document_path, timeout_seconds=8.0)
             self._write_journal()
-            return {"started": True, "atspi": flags, "cleanup_paths": [str(p) for p in self.paths],
+            return {"started": True, "atspi": flags,
+                    "semantic_candidates": self.semantic_candidates,
+                    "cleanup_paths": [str(p) for p in self.paths],
                     **({"document_path": str(self.document_path)} if self.document_path else {})}
         except Exception:
             failed_document = self.document_path
@@ -262,80 +326,113 @@ class Worker:
                 self._remove_empty_failed_document(failed_document)
             raise
 
-    def _start_live(self, app: str, *, temporary_a11y: bool = False) -> dict:
-        """Connect to the owner desktop and launch one PID-owned allowlisted app."""
+    def _start_live(self, *, temporary_a11y: bool = False, window_id: str | None = None,
+                    attach: bool = False) -> dict[str, Any]:
+        """Connect to KWin and bind this task to an exact launched or attached window."""
         from kwin_mcp.core import AutomationEngine
-        from jevdesktop.live_desktop_probe import (_active_row, _a11y_address, _a11y_flags, _raw_window_rows,
-                                        _set_a11y_flags_at,
-                                        _raw_pid_for_window_id, _restore_exact, _window_rows)
+        from jevdesktop.live_desktop_probe import _a11y_address, _a11y_flags, _active_row, _set_a11y_flags_at
         self.engine = AutomationEngine()
+        self.live_attached = attach
         try:
             connected = self.engine.session_connect(keep_screenshots=False)
             if not isinstance(connected, str) or "Connected to live KWin session" not in connected:
                 raise ValueError("live_session_unavailable")
             if "Input backend: KWin EIS" not in connected:
                 raise ValueError("live_input_unavailable")
-            self.original_window = _active_row(self.engine)
-            initial_windows = _window_rows(self.engine)
-            app_ids = {"kate": {"kate", "org.kde.kate"},
-                       "firefox": {"firefox", "org.mozilla.firefox"},
-                       "kcalc": {"kcalc", "org.kde.kcalc"}}[app]
-            if any(str(row.get("app", "")).casefold() in app_ids for row in initial_windows):
-                raise ValueError("live_app_already_open")
-            flags = _a11y_flags(self.engine)
-            if not all(flags.values()):
-                if not temporary_a11y:
-                    raise ValueError("live_temporary_a11y_required")
-                self.original_a11y_flags = dict(flags)
-                self.a11y_address = _a11y_address(self.engine)
-                self._write_journal()
-                enabled = _set_a11y_flags_at(self.a11y_address,
-                                             {"IsEnabled": True, "ScreenReaderEnabled": True})
-                if not all(enabled.values()):
-                    raise ValueError("live_atspi_unavailable")
-            self._write_journal()
-            if app == "kate":
-                self.document_path = self._new_document()
-                # Kate detaches by default, so launch_app() would track only
-                # the short-lived CLI process while the window belongs to an
-                # untracked child. --block keeps the owned window in the
-                # launched process for PID verification and exact cleanup.
-                command = ["kate", "--new", "--block", str(self.document_path)]
-                env = {"QT_ACCESSIBILITY": "1", "GTK_MODULES": "gail:atk-bridge"}
-                self.engine._ensure_atspi_worker = MethodType(_ensure_bounded_atspi_worker, self.engine)
-            elif app == "firefox":
-                profile = _profile()
-                self.paths.append(profile)
-                command = ["firefox", "--no-remote", "--new-instance", "--profile", str(profile)]
-                env = {"MOZ_ENABLE_ACCESSIBILITY": "1"}
+            from jevdesktop.native_windows import collect_windows
+
+            initial_rows = collect_windows()
+            active = next((row for row in initial_rows if row.get("active")), None)
+            if active is None:
+                raise ValueError("live_original_focus_unavailable")
+            self.original_window = active
+
+            if self.semantic_candidates:
+                flags = _a11y_flags(self.engine)
+                if not all(flags.values()):
+                    if not temporary_a11y:
+                        raise ValueError("live_temporary_a11y_required")
+                    self.original_a11y_flags = dict(flags)
+                    self.a11y_address = _a11y_address(self.engine)
+                    self._write_journal()
+                    enabled = _set_a11y_flags_at(self.a11y_address, {key: True for key in flags})
+                    if not all(enabled.values()):
+                        raise ValueError("live_atspi_unavailable")
+
+            profile = self.profile
+            if profile is None:
+                raise ValueError("invalid_worker_profile")
+            app_ids = {value.casefold() for value in profile["window_app_ids"]}
+            if attach:
+                matches = [row for row in initial_rows if row.get("id") == window_id]
+                if len(matches) != 1:
+                    raise ValueError("live_selected_window_unavailable")
+                selected = matches[0]
+                if str(selected.get("app", "")).casefold() not in app_ids:
+                    raise ValueError("live_window_app_mismatch")
+                if type(selected.get("pid")) is not int or selected["pid"] <= 0:
+                    raise ValueError("live_window_pid_unavailable")
+                self.live_root_window_id = selected["id"]
+                self.live_root_pid = selected["pid"]
+                self.live_selected_window = selected
             else:
-                command = ["kcalc"]
-                env = {"QT_ACCESSIBILITY": "1", "GTK_MODULES": "gail:atk-bridge"}
-            self.live_process = self.engine._get_session().launch_app(command, extra_env=env)
+                if any(str(row.get("app", "")).casefold() in app_ids for row in initial_rows):
+                    raise ValueError("live_app_already_open")
+                command = list(profile["command"])
+                env = ({"QT_ACCESSIBILITY": "1", "GTK_MODULES": "gail:atk-bridge"}
+                       if self.semantic_candidates else {})
+                if profile["id"] == "kate":
+                    self.document_path = self._new_document()
+                    command.append(str(self.document_path))
+                    if self.semantic_candidates:
+                        self.engine._ensure_atspi_worker = MethodType(_ensure_bounded_atspi_worker, self.engine)
+                elif profile["id"] == "firefox" and self.semantic_candidates:
+                    env = {"MOZ_ENABLE_ACCESSIBILITY": "1"}
+                self.live_process = self.engine._get_session().launch_app(command, extra_env=env)
+                self._write_journal()
+                deadline = time.monotonic() + 8.0
+                selected = None
+                while time.monotonic() < deadline:
+                    rows = collect_windows()
+                    matches = [row for row in rows
+                               if str(row.get("app", "")).casefold() in app_ids
+                               and row.get("pid") == self.live_process.pid]
+                    if len(matches) > 1:
+                        roots = [row for row in matches if row.get("normal") and not row.get("dialog")
+                                 and not row.get("popup") and not row.get("transient")]
+                        if len(roots) != 1:
+                            raise ValueError("live_app_window_ambiguous")
+                        selected = roots[0]
+                    elif matches:
+                        selected = matches[0]
+                    if selected is not None:
+                        break
+                    time.sleep(0.1)
+                if selected is None:
+                    raise ValueError("live_app_window_unavailable")
+                self.live_root_window_id = selected["id"]
+                self.live_root_pid = selected["pid"]
+                self.live_selected_window = selected
+
+            self.live_window_id = self.live_root_window_id
             self._write_journal()
-            deadline = time.monotonic() + 8.0
-            selected = None
-            while time.monotonic() < deadline:
-                rows = _window_rows(self.engine)
-                matches = [row for row in rows if str(row.get("app", "")).casefold() in app_ids]
-                if len(matches) > 1:
-                    raise ValueError("live_app_window_ambiguous")
-                if matches:
-                    selected = matches[0]
-                    raw_pid = _raw_pid_for_window_id(_raw_window_rows(self.engine), selected["id"])
-                    if raw_pid != self.live_process.pid:
-                        raise ValueError("live_app_not_owned")
-                    self.live_window_id = selected["id"]
-                    break
-                time.sleep(0.1)
-            if selected is None:
-                raise ValueError("live_app_window_unavailable")
+            focus = self._focus_live_app(allow_switch=True)
+            if not focus.get("focused"):
+                raise ValueError("live_target_focus_failed")
             self._write_journal()
-            if not _restore_exact(self.engine, self.original_window, _window_rows(self.engine)):
-                raise ValueError("live_focus_restore_failed")
-            return {"started": True, "desktop_mode": "live", "input_idle_detection": "unavailable",
-                    "owner_present_override": True, "task_owned_window_id": self.live_window_id,
-                    **({"document_path": str(self.document_path)} if self.document_path else {})}
+            return {
+                "started": True,
+                "desktop_mode": "live",
+                "semantic_candidates": self.semantic_candidates,
+                "input_idle_detection": "unavailable",
+                "attached": self.live_attached,
+                "task_owned_window_id": None if self.live_attached else self.live_root_window_id,
+                "root_window_id": self.live_root_window_id,
+                "selected_window_id": self.live_window_id,
+                "selected_window": self.live_selected_window,
+                "atspi_flags": _a11y_flags(self.engine) if self.semantic_candidates else None,
+                **({"document_path": str(self.document_path)} if self.document_path else {}),
+            }
         except Exception:
             failed_document = self.document_path
             try:
@@ -346,112 +443,273 @@ class Worker:
                 self._remove_empty_failed_document(failed_document)
             raise
 
-    def _focus_live_app(self) -> bool:
-        if self.desktop_mode != "live" or self.engine is None or not self.live_window_id:
-            return False
-        from jevdesktop.live_desktop_probe import _active_row, _restore_needle, _window_rows
-        rows = _window_rows(self.engine)
-        matches = [row for row in rows if row.get("id") == self.live_window_id]
-        if len(matches) != 1 or not isinstance(matches[0].get("app"), str):
-            return False
-        row = matches[0]
-        caption = row.get("caption")
-        if not isinstance(caption, str) or not caption:
-            return False
-        needle = _restore_needle(row, rows)
-        if needle is None:
-            return False
-        response = self.engine._run_kwin_query({"op": "activate", "app_name": needle})
-        return (isinstance(response, dict) and response.get("ok") is True and bool(response.get("result"))
-                and _active_row(self.engine).get("id") == self.live_window_id)
+    def _native_windows(self) -> list[dict[str, Any]]:
+        from jevdesktop.native_windows import collect_windows
+
+        return collect_windows()
+
+    @staticmethod
+    def _format_window_row(row: dict[str, Any], *, active: bool | None = None) -> str:
+        frame, client = row.get("frame"), row.get("client")
+        if not isinstance(frame, dict) or not isinstance(client, dict):
+            raise ValueError("live_window_geometry_unavailable")
+        marker = " [active]" if (row.get("active") if active is None else active) else ""
+        title = json.dumps(str(row.get("caption", "")), ensure_ascii=False)[1:-1]
+        return (f'Windows (1):\n- {row["app"]} "{title}"{marker}\n'
+                f'    id:     {row["id"]}\n'
+                f'    frame:  ({frame["x"]}, {frame["y"]}, {frame["width"]}x{frame["height"]})\n'
+                f'    client: ({client["x"]}, {client["y"]}, {client["width"]}x{client["height"]})')
+
+    def _workspace_discover(self) -> dict[str, Any]:
+        from jevdesktop.native_windows import workspace_snapshot
+
+        if self.engine is not None and self.desktop_mode == "live":
+            return workspace_snapshot()
+        from kwin_mcp.core import AutomationEngine
+
+        engine = AutomationEngine()
+        try:
+            connected = engine.session_connect(keep_screenshots=False)
+            if not isinstance(connected, str) or "Connected to live KWin session" not in connected:
+                raise ValueError("live_session_unavailable")
+            return workspace_snapshot()
+        finally:
+            try:
+                engine.session_stop()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _window_for_element(element: dict[str, Any], rows: list[dict[str, Any]]) -> str | None:
+        if element.get("mapped") is not True:
+            return None
+        try:
+            x, y, width, height = (int(element[key]) for key in ("x", "y", "width", "height"))
+        except (KeyError, TypeError, ValueError):
+            return None
+        if width <= 0 or height <= 0:
+            return None
+        matches = []
+        for row in rows:
+            client = row.get("client")
+            if not isinstance(client, dict):
+                continue
+            left, top = client["x"], client["y"]
+            right, bottom = left + client["width"], top + client["height"]
+            if x >= left and y >= top and x + width <= right and y + height <= bottom:
+                matches.append((client["width"] * client["height"], row["id"]))
+        if not matches:
+            return None
+        smallest = min(area for area, _window_id in matches)
+        winners = [window_id for area, window_id in matches if area == smallest]
+        return winners[0] if len(winners) == 1 else None
+
+    def _require_live_focus(self) -> dict[str, Any] | None:
+        if self.desktop_mode != "live":
+            return None
+        if self.engine is None or not self.live_window_id:
+            raise ValueError("live_target_window_unavailable")
+        state = self._task_window_state(self._native_windows())
+        active = state["active_window"]
+        if (not state["active_is_related"] or active is None
+                or active.get("id") != self.live_window_id):
+            raise ValueError("live_selected_window_not_active")
+        return active
+
+    def _require_live_point(self, x: int, y: int) -> None:
+        row = self._require_live_focus()
+        if row is None:
+            return
+        client = row.get("client")
+        if not isinstance(client, dict):
+            raise ValueError("live_target_geometry_unavailable")
+        if not (client["x"] <= x < client["x"] + client["width"]
+                and client["y"] <= y < client["y"] + client["height"]):
+            raise ValueError("live_input_outside_target")
+
+    def _task_window_state(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        """Classify app windows by selected ID, PID and KWin transient ancestry."""
+        root_id = self.live_root_window_id
+        profile = self.profile
+        if not root_id or not profile:
+            raise ValueError("live_target_window_unavailable")
+        by_id = {row["id"]: row for row in rows if isinstance(row.get("id"), str)}
+        root = by_id.get(root_id)
+        app_ids = {str(value).casefold() for value in profile["window_app_ids"]}
+        root_pid = self.live_root_pid if self.live_root_pid is not None else (root.get("pid") if root else None)
+        related_ids = {root_id}
+        changed = True
+        while changed:
+            changed = False
+            for row in rows:
+                row_id = row.get("id")
+                if not isinstance(row_id, str) or row_id in related_ids:
+                    continue
+                parent_id = row.get("transient_for")
+                identity_match = (str(row.get("app", "")).casefold() in app_ids
+                                  or (type(root_pid) is int and root_pid > 0 and row.get("pid") == root_pid))
+                same_process_dialog = (not parent_id and type(root_pid) is int and root_pid > 0 and row.get("pid") == root_pid
+                                       and (row.get("dialog") or row.get("popup") or row.get("transient")))
+                if ((parent_id in related_ids and identity_match) or same_process_dialog):
+                    related_ids.add(row_id)
+                    changed = True
+        related = [row for row in rows if row.get("id") in related_ids]
+        background = [row for row in rows if row.get("id") not in related_ids]
+        external_transients = [row for row in background if row.get("transient_for") in related_ids]
+        active = next((row for row in rows if row.get("active") is True), None)
+        return {
+            "root_window": root,
+            "related_windows": related,
+            "background_windows": background,
+            "external_transients": external_transients,
+            "active_window": active,
+            "active_is_related": bool(active and active.get("id") in related_ids),
+            "related_ids": related_ids,
+        }
+
+    def _focus_live_app(self, *, allow_switch: bool = False) -> dict[str, Any]:
+        if self.desktop_mode != "live" or self.engine is None or not self.live_root_window_id:
+            raise ValueError("live_mode_required")
+        from jevdesktop.native_windows import activate_window_id
+
+        rows = self._native_windows()
+        state = self._task_window_state(rows)
+        active = state["active_window"]
+        selected = None
+        interruption = None
+        if state["active_is_related"] and active is not None:
+            selected = active
+        elif active and not allow_switch and (active.get("popup") or active.get("dialog") or active.get("transient")):
+            interruption = active
+        else:
+            target = state["root_window"]
+            if target is None:
+                remaining = [row for row in state["related_windows"] if row.get("id") != self.live_root_window_id]
+                if len(remaining) == 1:
+                    target = remaining[0]
+                elif remaining:
+                    interruption = {"reason": "task_window_ambiguous", "windows": remaining}
+                else:
+                    interruption = {"reason": "task_window_unavailable"}
+            if target is None:
+                self.live_window_id = None
+                self.live_selected_window = None
+                return {
+                    "focused": False,
+                    "root_window_id": self.live_root_window_id,
+                    "selected_window_id": None,
+                    "selected_window": None,
+                    "related_windows": state["related_windows"],
+                    "background_windows": state["background_windows"],
+                    "unrelated_popups": [row for row in state["background_windows"]
+                                         if row.get("popup") or row.get("dialog") or row.get("transient")],
+                    "interruption": interruption,
+                }
+            if not activate_window_id(target["id"]):
+                return {"focused": False, "root_window_id": self.live_root_window_id,
+                        "selected_window_id": None, "selected_window": None,
+                        "related_windows": state["related_windows"],
+                        "background_windows": state["background_windows"],
+                        "unrelated_popups": [], "interruption": {"reason": "live_target_focus_failed"}}
+            rows = self._native_windows()
+            state = self._task_window_state(rows)
+            active = state["active_window"]
+            if state["active_is_related"] and active is not None:
+                selected = active
+            else:
+                return {"focused": False, "root_window_id": self.live_root_window_id,
+                        "selected_window_id": None, "selected_window": None,
+                        "related_windows": state["related_windows"],
+                        "background_windows": state["background_windows"],
+                        "unrelated_popups": [row for row in state["background_windows"]
+                                             if row.get("popup") or row.get("dialog") or row.get("transient")],
+                        "interruption": {"reason": "live_target_focus_failed"}}
+        if selected is not None:
+            self.live_window_id = selected["id"]
+            self.live_selected_window = selected
+        result = {
+            "focused": selected is not None,
+            "root_window_id": self.live_root_window_id,
+            "selected_window_id": self.live_window_id,
+            "selected_window": self.live_selected_window,
+            "related_windows": state["related_windows"],
+            "background_windows": state["background_windows"],
+            "unrelated_popups": [row for row in state["background_windows"]
+                                 if row.get("popup") or row.get("dialog") or row.get("transient")],
+            "interruption": interruption,
+        }
+        return result
 
     def restore_live_focus(self, *, baseline: bool = False) -> bool:
-        target = self.action_original_window or (self.original_window if baseline else None)
-        if self.desktop_mode != "live" or self.engine is None or not target:
+        """Restore the focus captured when the live task started, normally at stop."""
+        if self.desktop_mode != "live" or self.engine is None or not self.original_window:
             return False
-        from jevdesktop.live_desktop_probe import _restore_exact, _window_rows
-        restored = _restore_exact(self.engine, target, _window_rows(self.engine))
-        if restored and self.action_original_window is not None:
-            self.action_original_window = None
-            self._write_journal()
-        return restored
+        from jevdesktop.native_windows import activate_window_id
 
-    def prepare_live_action(self) -> dict:
-        if self.desktop_mode != "live" or self.engine is None:
-            raise ValueError("live_mode_required")
-        from jevdesktop.live_desktop_probe import _active_row, _restore_needle, _window_rows
-        original = _active_row(self.engine)
-        if _restore_needle(original, _window_rows(self.engine)) is None:
-            raise ValueError("live_original_focus_unrestorable")
-        self.action_original_window = original
-        self._write_journal()
-        if not self._focus_live_app():
-            raise ValueError("live_target_focus_failed")
-        return {"focused": True}
+        target_id = self.original_window.get("id")
+        return (isinstance(target_id, str) and activate_window_id(target_id)
+                and next((row.get("id") for row in self._native_windows() if row.get("active")), None) == target_id)
+
+    def prepare_live_action(self) -> dict[str, Any]:
+        """Keep task focus in front; surface unrelated popups without acting on them."""
+        return self._focus_live_app()
+
+    def _restore_a11y_flags(self) -> bool:
+        if self.original_a11y_flags is None or self.a11y_address is None:
+            return True
+        try:
+            from jevdesktop.live_desktop_probe import _set_a11y_flags_at
+
+            return _set_a11y_flags_at(self.a11y_address, self.original_a11y_flags) == self.original_a11y_flags
+        except Exception:
+            return False
 
     def _stop_live_app(self) -> bool:
-        """Terminate only the exact process returned by this task's launch."""
-        from jevdesktop.live_desktop_probe import _active_row, _restore_needle, _window_rows
-        focus_snapshot_ok = True
-        if self.action_original_window is None:
-            try:
-                current = _active_row(self.engine)
-                if current.get("id") != self.live_window_id:
-                    if _restore_needle(current, _window_rows(self.engine)) is None:
-                        focus_snapshot_ok = False
-                    else:
-                        self.action_original_window = current
-                        self._write_journal()
-            except Exception:
-                focus_snapshot_ok = False
-        launched = self.live_process
-        process = getattr(launched, "process", launched)
+        """Stop only a task-launched process; an attached application is never closed."""
+        from jevdesktop.native_windows import collect_windows
+
         process_ok = True
-        if process is not None:
-            try:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=3)
-                    except Exception:
-                        process.kill()
-                        process.wait(timeout=2)
-                process_ok = process.poll() is not None
-            except Exception:
-                process_ok = False
         window_ok = True
-        if self.live_window_id:
-            try:
-                until = time.monotonic() + 3
-                while time.monotonic() < until:
-                    if not any(row.get("id") == self.live_window_id for row in _window_rows(self.engine)):
-                        break
-                    time.sleep(0.1)
-                window_ok = not any(row.get("id") == self.live_window_id for row in _window_rows(self.engine))
-            except Exception:
-                window_ok = False
+        if not self.live_attached:
+            launched = self.live_process
+            process = getattr(launched, "process", launched)
+            if process is not None:
+                try:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=3)
+                        except Exception:
+                            process.kill()
+                            process.wait(timeout=2)
+                    process_ok = process.poll() is not None
+                except Exception:
+                    process_ok = False
+            if self.live_root_window_id:
+                try:
+                    until = time.monotonic() + 3
+                    while time.monotonic() < until:
+                        if not any(row.get("id") == self.live_root_window_id for row in collect_windows()):
+                            break
+                        time.sleep(0.1)
+                    window_ok = not any(row.get("id") == self.live_root_window_id for row in collect_windows())
+                except Exception:
+                    window_ok = False
         try:
-            restored = (self.restore_live_focus(baseline=True) if focus_snapshot_ok else False)
+            restored = self.restore_live_focus(baseline=True)
         except Exception:
             restored = False
-        a11y_ok = True
-        if self.original_a11y_flags is not None and self.a11y_address is not None:
-            try:
-                from jevdesktop.live_desktop_probe import _set_a11y_flags_at
-                actual = _set_a11y_flags_at(self.a11y_address, self.original_a11y_flags)
-                a11y_ok = actual == self.original_a11y_flags
-            except Exception:
-                a11y_ok = False
-        return process_ok and window_ok and restored and a11y_ok
+        return process_ok and window_ok and restored and self._restore_a11y_flags()
 
     def _wait_for_app_window(self, app: str, *, document_path: Path | None = None,
                              timeout_seconds: float = 8.0, poll_seconds: float = 0.1) -> None:
         """Wait for one fresh, mapped window of the app launched in this virtual session."""
-        app_ids = {
-            "kate": {"kate", "org.kde.kate"},
-            "firefox": {"firefox", "org.mozilla.firefox"},
-            "kcalc": {"kcalc", "org.kde.kcalc"},
-        }.get(app)
+        app_ids = ({value.casefold() for value in self.profile["window_app_ids"]}
+                   if self.profile is not None else {
+                       "kate": {"kate", "org.kde.kate"},
+                       "firefox": {"firefox", "org.mozilla.firefox"},
+                       "kcalc": {"kcalc", "org.kde.kcalc"},
+                   }.get(app))
         if app_ids is None:
             raise ValueError("invalid_worker_start")
         deadline = time.monotonic() + timeout_seconds
@@ -483,7 +741,12 @@ class Worker:
     def call(self, method: str, params: dict):
         if method == "start":
             return self.start(params.get("app"), params.get("journal_path"), params.get("desktop_mode", "virtual"),
-                              params.get("temporary_a11y", False))
+                              params.get("temporary_a11y", False),
+                              profile=params.get("profile"), window_id=params.get("window_id"),
+                              attach=params.get("attach", False),
+                              semantic_candidates=params.get("semantic_candidates", True))
+        if method == "workspace_discover":
+            return self._workspace_discover()
         if method == "focus_live_app":
             return self.prepare_live_action()
         if method == "restore_live_focus":
@@ -493,40 +756,114 @@ class Worker:
         if self.engine is None:
             raise ValueError("session_not_started")
         if method == "window_query":
+            if self.desktop_mode == "live":
+                rows = self._native_windows()
+                state = (self._task_window_state(rows) if self.live_root_window_id else None)
+                related_ids = state["related_ids"] if state else set()
+                result = [{**row, "task_related": row.get("id") in related_ids,
+                           "selected": row.get("id") == self.live_window_id,
+                           "root": row.get("id") == self.live_root_window_id}
+                          for row in rows]
+                selected_row = next((row for row in rows if row.get("id") == self.live_window_id), None)
+                return {"ok": True, "result": result,
+                        "root_window_id": self.live_root_window_id,
+                        "selected_window_id": self.live_window_id,
+                        "selected_window_present": selected_row is not None,
+                        **({"selected_window": selected_row} if selected_row is not None else {})}
             return self.engine._run_kwin_query({})
         if method == "atspi_find":
             app = params.get("app")
-            if app not in {"kate", "firefox", "kcalc"}:
-                raise ValueError("app_not_allowed")
+            if not self.semantic_candidates:
+                raise ValueError("semantic_candidates_disabled")
+            if self.desktop_mode == "live":
+                if self.profile is None or app not in {self.profile["id"], self.profile["atspi_app"]}:
+                    raise ValueError("app_not_allowed")
+                app = self.profile["atspi_app"]
+            else:
+                if self.profile is None or app not in {self.profile["id"], self.profile["atspi_app"]}:
+                    raise ValueError("app_not_allowed")
+                app = self.profile["atspi_app"]
             # Make the pinned private worker explicit and journal its PID
             # before the first AT-SPI request can outlive a failed RPC.
             self.engine._ensure_atspi_worker()
             self._write_journal()
             result = self.engine._run_atspi("find", query="", app_name=app)
             self._write_journal()
+            if self.desktop_mode == "live" and isinstance(result, dict) and result.get("ok") is True:
+                rows = self._native_windows()
+                state = self._task_window_state(rows)
+                active = state["active_window"]
+                if (not state["active_is_related"] or active is None
+                        or active.get("id") != self.live_window_id):
+                    raise ValueError("live_selected_window_changed")
+                visible_rows = state["related_windows"]
+                selected_id = self.live_window_id
+                elements = result.get("result")
+                if not isinstance(elements, list):
+                    raise ValueError("atspi_result_invalid")
+                scoped = []
+                for element in elements:
+                    if not isinstance(element, dict):
+                        continue
+                    mapped_id = self._window_for_element(element, visible_rows)
+                    if mapped_id == selected_id:
+                        scoped.append({**element, "window_id": mapped_id})
+                result = {**result, "result": scoped, "selected_window_id": selected_id}
             return result
         if method == "window_geometry":
+            if self.desktop_mode == "live":
+                rows = self._native_windows()
+                target = next((row for row in rows if row.get("id") == self.live_window_id), None)
+                if target is None:
+                    raise ValueError("live_target_window_unavailable")
+                self.live_selected_window = target
+                return self._format_window_row(target)
             return self.engine.window_geometry(app_name=params["app"])
         if method == "active_window":
+            if self.desktop_mode == "live":
+                active = next((row for row in self._native_windows() if row.get("active")), None)
+                return self._format_window_row(active) if active else "No active window."
             return self.engine.active_window()
         if method == "screenshot":
             return self.engine.screenshot(include_cursor=False)
         if method == "mouse_click":
-            return self.engine.mouse_click(params["x"], params["y"], button="left")
+            x, y = params.get("x"), params.get("y")
+            button = params.get("button", "left")
+            double = params.get("double", False)
+            if (type(x) is not int or type(y) is not int or button not in {"left", "middle", "right"}
+                    or type(double) is not bool):
+                raise ValueError("mouse_argument_invalid")
+            self._require_live_point(x, y)
+            return self.engine.mouse_click(x, y, button=button, double=double)
+        if method == "mouse_drag":
+            coordinates = tuple(params.get(key) for key in ("x", "y", "end_x", "end_y"))
+            button = params.get("button", "left")
+            if (any(type(value) is not int for value in coordinates)
+                    or button not in {"left", "middle", "right"}):
+                raise ValueError("mouse_argument_invalid")
+            self._require_live_point(coordinates[0], coordinates[1])
+            self._require_live_point(coordinates[2], coordinates[3])
+            return self.engine.mouse_drag(*coordinates, button=button)
         if method == "mouse_scroll":
             delta, steps = params.get("delta"), params.get("steps")
-            if (type(delta) is not int or not 1 <= abs(delta) <= 8
-                    or type(steps) is not int or not 1 <= steps <= 8):
+            horizontal = params.get("horizontal", False)
+            if (type(params.get("x")) is not int or type(params.get("y")) is not int
+                    or type(delta) is not int or not 1 <= abs(delta) <= 8
+                    or type(steps) is not int or not 1 <= steps <= 8
+                    or type(horizontal) is not bool):
                 raise ValueError("scroll_argument_invalid")
+            self._require_live_point(params["x"], params["y"])
             return self.engine.mouse_scroll(params["x"], params["y"], delta,
-                                            discrete=True, steps=steps)
+                                            horizontal=horizontal, discrete=True, steps=steps)
         if method == "keyboard_key":
             key = params.get("key")
-            if key not in {"Return", "ctrl+a"}:
+            if key not in SHORTCUT_KEYS and key != "Return":
                 raise ValueError("unsupported_key")
+            self._require_live_focus()
             return self.engine.keyboard_key(key)
         if method == "keyboard_type":
             value = params["text"]
+            self._require_live_focus()
             # Long ASCII notes are slow when sent character-by-character through
             # EIS. Kate's document workflow can use the driver's bounded paste
             # path, which snapshots and restores the clipboard. Keep other app
@@ -537,6 +874,7 @@ class Worker:
         if method == "document_key":
             if self.app != "kate" or self.document_path is None:
                 raise ValueError("document_unavailable")
+            self._require_live_focus()
             # Keep the input surface closed: callers cannot supply key names or
             # combinations. Transactions select only these two app operations.
             keys = {"select_all": "ctrl+a", "save": "ctrl+s"}

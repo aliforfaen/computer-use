@@ -14,6 +14,8 @@ from typing import Any
 
 from jevdesktop.desktop_daemon import MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, default_socket_path
 
+from jevdesktop.transactions import SHORTCUT_KEYS
+
 MAX_DESKTOP_TEXT_CHARS = 4096
 
 
@@ -118,7 +120,7 @@ def _build_parser() -> argparse.ArgumentParser:
     tray.add_argument("--unit", default="jev-desktop", help="systemd --user unit name the tray controls")
     tray.add_argument("--settings", type=Path, default=None,
                       help="tray settings file (default: ~/.config/jev-desktop/tray.json)")
-    for name, help_text in (("capabilities", "show owner capabilities"), ("status", "show owner/session status")):
+    for name, help_text in (("capabilities", "show owner capabilities"), ("status", "show owner/session status"), ("workspace", "discover live windows without taking focus"), ("profiles", "list configured app profiles"), ("relays", "report named MCP relay state")):
         sub = commands.add_parser(name, help=help_text)
         _add_socket(sub)
     start = commands.add_parser("session-start", aliases=["start"], help="start an allowlisted virtual or explicitly authorized live task")
@@ -129,6 +131,9 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="assert the owner is present; required because physical input detection is unavailable")
     start.add_argument("--temporary-a11y", action="store_true",
                        help="allow task-scoped AT-SPI enablement, restoring the exact prior flags on cleanup")
+    start.add_argument("--attach-window", help="attach to this exact live window; never close the attached app")
+    start.add_argument("--semantic-candidates", action=argparse.BooleanOptionalAction, default=None,
+                       help="opt into AT-SPI for live tasks (virtual default: enabled)")
     _add_socket(start)
     stop = commands.add_parser("session-stop", help="stop a session, or the sole active session")
     stop.add_argument("--session-id")
@@ -143,6 +148,8 @@ def _build_parser() -> argparse.ArgumentParser:
                               help="assert the owner is present; required because physical input detection is unavailable")
     nested_start.add_argument("--temporary-a11y", action="store_true",
                               help="allow task-scoped AT-SPI enablement and exact restoration on cleanup")
+    nested_start.add_argument("--attach-window", help="attach to this exact live window")
+    nested_start.add_argument("--semantic-candidates", action=argparse.BooleanOptionalAction, default=None)
     _add_socket(nested_start)
     nested_stop = session_commands.add_parser("stop", help="stop a session, or the sole active session")
     nested_stop.add_argument("--session-id")
@@ -155,6 +162,7 @@ def _build_parser() -> argparse.ArgumentParser:
     observe.add_argument("--output", choices=("metadata", "image", "data", "both"), default="metadata")
     observe.add_argument("--scope", choices=("app", "full", "crop"), default="app")
     observe.add_argument("--crop", help="JSON crop object: {\"x\":int,\"y\":int,\"width\":int,\"height\":int}")
+    observe.add_argument("--include-candidates", action="store_true", help="pair a fresh capture with semantic refs and image geometry; costs two extra state reads")
     observe.add_argument("--capture-id", help="reuse an unexpired capture ID")
     observe.add_argument("--questions-json", help="reader questions as a JSON list of field/type/description objects")
     _add_socket(observe)
@@ -165,15 +173,32 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_socket(wait)
     act = commands.add_parser("act", help="execute and verify one grounded action")
     act.add_argument("app")
-    act.add_argument("action", choices=("click", "type_text", "replace_document", "save_document", "navigate_url", "scroll"))
+    act.add_argument("action", choices=("click", "type_text", "replace_document", "save_document", "navigate_url", "scroll", "keyboard_shortcut"))
     act.add_argument("target_ref")
     act.add_argument("--approved", action="store_true", help="record approval for supervised or guarded actions")
-    act.add_argument("--verification", choices=("target_focused", "target_text", "fixture_state", "display_text", "document_saved", "navigation_url", "window_title", "visible_text", "scroll_changed"), required=True)
+    act.add_argument("--verification", choices=("target_focused", "target_text", "fixture_state", "display_text", "document_saved", "navigation_url", "window_title", "visible_text", "scroll_changed", "observed"), required=True)
+    act.add_argument("--key", choices=sorted(SHORTCUT_KEYS), help="bounded shortcut such as ctrl+s, Escape, Tab; requires keyboard_shortcut action")
     act.add_argument("--expected", help="exact expected visible text (kept as a string)")
     act.add_argument("--text-file", help="read typing payload from this file; '-' reads stdin")
     act.add_argument("--direction", choices=("up", "down"))
     act.add_argument("--steps", type=int)
     _add_socket(act)
+    reconcile = commands.add_parser("reconcile", help="inspect uncertain input and acknowledge continuation without replay")
+    reconcile.add_argument("app")
+    reconcile.add_argument("--acknowledge-uncertain", action="store_true", required=True)
+    _add_socket(reconcile)
+    image_input = commands.add_parser("input", help="one input grounded in a fresh capture; outcome remains uncertain")
+    image_input.add_argument("app")
+    image_input.add_argument("capture_id")
+    image_input.add_argument("action", choices=("click", "double_click", "right_click", "keyboard_shortcut", "type_text", "scroll", "drag"))
+    for coordinate in ("x", "y", "end-x", "end-y"):
+        image_input.add_argument("--" + coordinate, type=int)
+    image_input.add_argument("--key", choices=sorted(SHORTCUT_KEYS))
+    image_input.add_argument("--text-file")
+    image_input.add_argument("--approved", action="store_true")
+    image_input.add_argument("--direction", choices=("up", "down", "left", "right"))
+    image_input.add_argument("--steps", type=int, default=1)
+    _add_socket(image_input)
     cancel = commands.add_parser("cancel", help="cancel current work for a session")
     cancel.add_argument("--session-id")
     _add_socket(cancel)
@@ -234,13 +259,17 @@ def main(argv: list[str] | None = None) -> int:
         return tray_main(socket=args.socket, unit=args.unit, settings_path=args.settings)
     method_params: dict[str, Any]
     method = args.command
-    if method in {"capabilities", "status"}:
+    if method in {"capabilities", "status", "workspace", "profiles", "relays"}:
         method_params = {}
     elif method in {"session-start", "start"} or (method == "session" and args.session_command == "start"):
         method, method_params = "session_start", {"app": args.app, "mode": args.mode,
             "desktop_mode": "live" if args.live else "virtual",
             "owner_present_override": args.owner_present_override,
             "temporary_a11y": args.temporary_a11y}
+        if args.semantic_candidates is not None:
+            method_params["semantic_candidates"] = args.semantic_candidates
+        if args.attach_window:
+            method_params.update(attach=True, window_id=args.attach_window)
     elif method in {"session-stop", "session"}:
         if method == "session" and args.session_command != "stop":
             raise ValueError("unknown session command")
@@ -249,6 +278,8 @@ def main(argv: list[str] | None = None) -> int:
         method_params = {"app": args.app}
     elif method == "observe":
         method_params = {"app": args.app, "scope": args.scope, "output": args.output}
+        if args.include_candidates:
+            method_params["include_candidates"] = True
         if args.crop:
             crop = json.loads(args.crop)
             if not isinstance(crop, dict):
@@ -261,6 +292,21 @@ def main(argv: list[str] | None = None) -> int:
             if not isinstance(questions, list) or not all(isinstance(item, dict) for item in questions):
                 raise ValueError("--questions-json must be a list of question objects")
             method_params["questions"] = questions
+    elif method == "reconcile":
+        method_params = {"app": args.app, "acknowledge_uncertain": args.acknowledge_uncertain}
+    elif method == "input":
+        method_params = {"app": args.app, "capture_id": args.capture_id,
+                         "action": args.action, "approved": args.approved}
+        for key in ("x", "y", "end_x", "end_y", "key", "direction"):
+            value = getattr(args, key)
+            if value is not None:
+                method_params[key] = value
+        if args.action == "scroll":
+            method_params["steps"] = args.steps
+        if args.action == "type_text":
+            method_params["text"] = _read_text_file(args.text_file)
+        elif args.text_file is not None:
+            raise ValueError("--text-file requires type_text")
     elif method == "wait":
         if len(args.expected) > 500:
             raise ValueError("expected_condition_too_long")
@@ -273,6 +319,8 @@ def main(argv: list[str] | None = None) -> int:
         method_params = {"app": args.app, "action": args.action, "target_ref": args.target_ref,
                          "approved": args.approved,
                          "verification": args.verification}
+        if args.key is not None:
+            method_params["key"] = args.key
         if args.expected is not None:
             method_params["expected"] = args.expected
         if args.action in {"type_text", "navigate_url"}:

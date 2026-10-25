@@ -36,6 +36,7 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -244,6 +245,16 @@ def stop_session(socket_path: Path) -> dict[str, Any]:
     return _socket_request(socket_path, "session_stop", {})
 
 
+def _socket_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        info = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+        return None
+    return info.st_dev, info.st_ino
+
+
 class StudyDaemon:
     """A disposable owner daemon on a private socket, using the shipped runtime.
 
@@ -262,6 +273,7 @@ class StudyDaemon:
         self.stderr_path = self.runtime / "daemon.stderr.log"
         self.process: subprocess.Popen[bytes] | None = None
         self._stderr_handle: Any = None
+        self.socket_identity: tuple[int, int] | None = None
 
     def start(self) -> None:
         self.runtime.mkdir(parents=True, exist_ok=True)
@@ -287,6 +299,7 @@ class StudyDaemon:
             if self.socket.exists():
                 try:
                     if _socket_request(self.socket, "status", {}).get("ok") is True:
+                        self.socket_identity = _socket_identity(self.socket)
                         return
                 except ProbeError:
                     pass
@@ -310,28 +323,44 @@ class StudyDaemon:
     def stop(self) -> dict[str, Any]:
         """Stop the owned process on every path and report whether cleanup held."""
         result: dict[str, Any] = {"shutdown_requested": False, "process_exited": False,
+                                  "shutdown_acknowledged": False, "returncode_zero": False,
+                                  "socket_gone": False, "forced_shutdown": False,
                                   "cleanup_confirmed": False}
         try:
             if self.process is not None:
-                try:
-                    _socket_request(self.socket, "shutdown", {})
-                    result["shutdown_requested"] = True
-                except ProbeError:
-                    pass
+                if self.process.poll() is None:
+                    try:
+                        response = _socket_request(self.socket, "shutdown", {})
+                        result["shutdown_requested"] = True
+                        result["shutdown_acknowledged"] = (
+                            isinstance(response, dict) and response.get("ok") is True
+                            and response.get("stopped") is True
+                            and response.get("cleanup", "confirmed") == "confirmed"
+                        )
+                    except ProbeError:
+                        pass
                 try:
                     self.process.wait(timeout=15)
-                    result["process_exited"] = True
                 except subprocess.TimeoutExpired:
+                    result["forced_shutdown"] = True
                     self.process.terminate()
                     try:
                         self.process.wait(timeout=10)
-                        result["process_exited"] = True
                     except subprocess.TimeoutExpired:
+                        result["forced_shutdown"] = True
                         self.process.kill()
                         self.process.wait(timeout=10)
-                        result["process_exited"] = True
+                result["process_exited"] = self.process.poll() is not None
                 result["returncode"] = self.process.returncode
-                result["cleanup_confirmed"] = result["process_exited"] and self.process.returncode is not None
+                result["returncode_zero"] = self.process.returncode == 0
+                current_socket_identity = _socket_identity(self.socket)
+                result["socket_gone"] = (self.socket_identity is not None
+                                         and current_socket_identity != self.socket_identity)
+                result["cleanup_confirmed"] = bool(
+                    result["shutdown_acknowledged"] and result["process_exited"]
+                    and result["returncode_zero"] and result["socket_gone"]
+                    and not result["forced_shutdown"]
+                )
         finally:
             self._close_stderr()
         result["stderr_tail"] = self._stderr_tail()

@@ -469,3 +469,36 @@ with provenance, deduplication and explicit disagreement. Reuse the Tine study
 and KWin/kwin-mcp. Fusion remains a prototype; observation-only OCR is not an
 executable target. General planner/replay work remains deferred. This supersedes
 the active Jev experiment priorities in docs 30/31 and leaves ADR-011 unresolved.
+
+
+### ADR-032 — Grounded observations and exploratory input outcomes
+
+**2026-10-24 · owner-authorized implementation.** Reuse kwin-mcp and existing
+semantic/capture adapters. Return control names separately from private editable
+values, screen geometry, short generation-scoped refs and optional sequential
+image mapping. Allowed actions may use `observed`: input call returned plus a
+fresh semantic snapshot, effect uncertain. Strong checks retain explicit
+postconditions; neither input delivery nor model DONE proves task completion.
+Saved tray owner policy may replace repeated live dialogs while passing existing
+explicit runtime overrides. Named local MCP TCP forwards reuse OpenSSH and
+systemd user units, independently of desktop action policy. No MCP protocol
+implementation or live service activation is implied. See docs 36–39.
+
+
+### ADR-033 — Live workspace attachment and caller-grounded desktop input
+
+**2026-10-25 · owner direction.** Reuse kwin-mcp/KWin identity queries, OpenSSH
+and systemd. Configured application profiles specify argv and identity, separate
+from the explicit allowlist. A live task may launch or attach an exact window.
+Bring the task window/related dialog foreground for work without restoring
+focus between calls; restore baseline focus at stop. This supersedes earlier
+per-call focus policy. Attached apps are never terminated by task cleanup.
+Unrelated popups are context/interruption, not implicitly authorized targets.
+Live AT-SPI is opt-in; screenshots need no temporary accessibility. The calling
+agent may issue image-relative input against fresh, consumed, session/window-
+scoped captures. These coordinates do not come from Jev. A fresh post-input
+observation reports uncertain effect; failed delivery/readback never triggers
+automatic replay. Explicit reconciliation and worker-loss cleanup support
+reconnection. Relay monitoring is read-only and distinguishes process, local
+listener and untested MCP health. Offline checks do not validate the new host
+behavior; watched acceptance remains separate. See doc 40.

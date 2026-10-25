@@ -1,5 +1,40 @@
 # 16 — Local owner, CLI and MCP surface
 
+## Current contract — 2026-10-25
+
+This current section supersedes any conflicting live-session, app-registry,
+focus-restoration, action, or MCP-tool details in the historical dated text
+below. The full acceptance checklist is in
+[doc 40](40-live-workspace-and-profiles.md).
+
+- Profiles describe launch argv and window/AT-SPI identities; they do not
+  authorize access. The explicit `--allow-app`/`allowed_apps` allowlist remains
+  required. Built-in profiles are Kate, Firefox and KCalc. Custom profiles use
+  `${XDG_CONFIG_HOME:-~/.config}/jev-desktop/app_profiles.json`.
+- The runtime offers `workspace`, `profiles`, and `relays` commands/tools.
+  Live sessions can launch a configured app or attach to an exact window ID.
+  Attached windows are preserved; only a task-launched app is closed.
+- During live work the task app stays foreground. The original focused window
+  is restored at session stop, not after each operation. Live mode still needs
+  `owner_present_override=true`; physical-input idle detection is unavailable.
+- Semantic candidates default off for live sessions. To opt in, set
+  `semantic_candidates=true` and `temporary_a11y=true`; original accessibility
+  properties are restored during cleanup. Screenshot observation/input works
+  with semantic candidates disabled.
+- `verification=observed` and image-grounded input return fresh state and an
+  explicitly uncertain effect. Use a strong verifier where available. After
+  uncertain input, `reconcile --acknowledge-uncertain` inspects fresh state and
+  never replays the input. Image pointer coordinates must come from the caller's
+  fresh capture; Jev cannot supply coordinates.
+- Relay process/listener status does not establish MCP endpoint health; relay
+  `mcp_health`/`endpoint_health` may remain `not_checked`. Capture mapping
+  currently refuses unsupported scaled and multi-monitor layouts.
+- Generic configured-app live operation is source-reviewed but not yet
+  validated by a watched host acceptance run. Do not treat historical Kate
+  evidence below as proof of the newer attach/profile/dialog contract.
+
+## Historical implementation details (dated 2026-10-01 onward)
+
 **2026-10-01 · M3 local surface implementation; updated 2026-10-02 for live opt-in.**
 The checkout has one `jev-desktop` owner process, a thin CLI client, and an MCP
 stdio client. Both clients use the same private Unix socket and the same

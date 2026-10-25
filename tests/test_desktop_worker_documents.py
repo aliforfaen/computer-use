@@ -27,7 +27,7 @@ class FakeEngine:
         self.unicode_typed.append(text)
         return "typed-unicode"
 
-    def mouse_scroll(self, x, y, delta, *, discrete=False, steps=1):
+    def mouse_scroll(self, x, y, delta, *, horizontal=False, discrete=False, steps=1):
         self.scrolls = (x, y, delta, discrete, steps)
         return "scrolled"
 

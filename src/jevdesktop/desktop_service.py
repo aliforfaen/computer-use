@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any
 
 from jevdesktop import paths
+from jevdesktop.app_profiles import load_profiles, profile_for
+from jevdesktop.ssh_forwards import SSHForwardManager
 from jevdesktop.observation import ObservationAdapter, ObservationError
 from jevdesktop.audit_log import DEFAULT_ROTATION, AuditRotation, append_jsonl, prune_directory
 from jevdesktop.owner_wait import run_owner_wait
@@ -34,9 +36,8 @@ from jevdesktop.transactions import (Action, AuditLog, AutonomyMode, Candidate, 
                           _scroll_witnesses)
 
 
-APPS = frozenset({"kate", "firefox", "kcalc"})
 METHODS = frozenset({"capabilities", "status", "session_start", "session_stop", "observe",
-                     "wait", "candidates", "act", "cancel", "stop_all"})
+                     "wait", "candidates", "act", "cancel", "stop_all", "workspace", "relays", "profiles", "reconcile", "input"})
 
 
 def _safe_error(value: str) -> dict[str, str]:
@@ -57,7 +58,7 @@ def _safe_error(value: str) -> dict[str, str]:
         "document_create_failed": "The task document could not be created safely.",
         "document_open_unconfirmed": "Kate did not confirm that the task document opened.",
         "navigation_url_not_allowed": "Browser navigation accepts only an HTTP or HTTPS URL without embedded credentials.",
-        "target_ambiguous": "This accessible control is ambiguous; choose a uniquely named fresh target.",
+        "target_ambiguous": "This control is ambiguous; use a distinct fresh target or image-grounded input.",
         "scroll_position_unavailable": "The app does not expose a measurable scroll position, so scrolling was not attempted.",
         "scroll_unsupported": "The current driver does not support this scroll action.",
         "scroll_argument_invalid": "Scroll direction or step count is invalid.",
@@ -135,10 +136,15 @@ class DesktopWorkerClient:
             return response.get("result")
 
     def start(self, app: str, journal_path: str | None = None, desktop_mode: str = "virtual",
-              temporary_a11y: bool = False):
+              temporary_a11y: bool = False, *, profile=None, window_id=None,
+              attach=False, semantic_candidates=True):
+        self.profile = profile
         result = self.rpc("start", app=app, journal_path=journal_path, desktop_mode=desktop_mode,
-                          temporary_a11y=temporary_a11y)
+                          temporary_a11y=temporary_a11y, profile=profile, window_id=window_id,
+                          attach=attach, semantic_candidates=semantic_candidates)
         self.cleanup_paths = result.get("cleanup_paths", []) if isinstance(result, dict) else []
+        if isinstance(result, dict):
+            self.selected_window_id = result.get("selected_window_id") or result.get("task_owned_window_id") or window_id
         return result
 
     def stop(self):
@@ -237,7 +243,7 @@ class DesktopWorkerClient:
                 flags = record.get("original_a11y_flags")
                 address = record.get("a11y_address")
                 if (isinstance(address, str) and address and isinstance(flags, dict)
-                        and set(flags) == {"IsEnabled", "ScreenReaderEnabled"}
+                        and set(flags) in ({"IsEnabled"}, {"IsEnabled", "ScreenReaderEnabled"})
                         and all(type(value) is bool for value in flags.values())):
                     try:
                         from jevdesktop.live_desktop_probe import _set_a11y_flags_at
@@ -340,17 +346,23 @@ class DesktopWorkerClient:
     def window_geometry(self, app=None, *, app_name=None): return self.rpc("window_geometry", app=app or app_name)
     def active_window(self): return self.rpc("active_window")
     def screenshot(self, include_cursor=False): return self.rpc("screenshot")
-    def mouse_click(self, x, y, button="left"): return self.rpc("mouse_click", x=x, y=y)
+    def mouse_click(self, x, y, button="left", double=False):
+        if button not in {"left", "right"} or type(double) is not bool:
+            raise ValueError("invalid_params")
+        return self.rpc("mouse_click", x=x, y=y, button=button, double=double)
+    def mouse_drag(self, x, y, end_x, end_y, button="left"):
+        return self.rpc("mouse_drag", x=x, y=y, end_x=end_x, end_y=end_y, button=button)
     def mouse_scroll(self, x, y, delta, *, horizontal=False, discrete=True, steps=1):
-        if (horizontal or not discrete or type(steps) is not int or not 1 <= steps <= 8
+        if (type(horizontal) is not bool or not discrete or type(steps) is not int or not 1 <= steps <= 8
                 or type(delta) is not int or delta not in {-8, -7, -6, -5, -4, -3, -2, -1,
                                                             1, 2, 3, 4, 5, 6, 7, 8}):
             raise ValueError("scroll_argument_invalid")
-        return self.rpc("mouse_scroll", x=x, y=y, delta=delta, steps=steps)
+        return self.rpc("mouse_scroll", x=x, y=y, delta=delta, steps=steps, horizontal=horizontal)
     def keyboard_type(self, text): return self.rpc("keyboard_type", text=text)
     def keyboard_type_unicode(self, text): return self.keyboard_type(text)
     def keyboard_key(self, key):
-        if key not in {"Return", "ctrl+a"}: raise ValueError("unsupported_key")
+        from jevdesktop.transactions import SHORTCUT_KEYS
+        if key not in SHORTCUT_KEYS and key != "Return": raise ValueError("unsupported_key")
         return self.rpc("keyboard_key", key=key)
     def document_key(self, operation):
         if operation not in {"select_all", "save"}:
@@ -369,7 +381,13 @@ class DesktopWorkerClient:
             return data
         except (ValueError, UnicodeDecodeError):
             raise RuntimeError("worker_protocol_error") from None
-    def focus_live_app(self): return self.rpc("focus_live_app")
+    def focus_live_app(self):
+        result = self.rpc("focus_live_app")
+        if isinstance(result, dict):
+            self.focus_context = result
+            self.selected_window_id = result.get("selected_window_id")
+            self.selected_window = result.get("selected_window")
+        return result
     def restore_live_focus(self):
         result = self.rpc("restore_live_focus")
         return isinstance(result, dict) and result.get("restored") is True
@@ -390,8 +408,16 @@ class _Session:
     def __init__(self, app, mode, worker, session_id, reader=None, audit_path=None, max_reader_calls=0,
                  *, idle_timeout=180.0, max_session_lifetime=1800.0, max_actions=64,
                  max_observations=256, monotonic=time.monotonic, desktop_mode="virtual",
-                 audit_rotation: AuditRotation = DEFAULT_ROTATION):
+                 audit_rotation: AuditRotation = DEFAULT_ROTATION, profile=None,
+                 attached=False, semantic_candidates=True):
         self.app = app
+        self.profile = profile
+        self.attached = attached
+        self.semantic_candidates = semantic_candidates
+        self.focus_context = None
+        self.valid_input_captures = set()
+        self.pending_input_captures = set()
+        self.visual_input_uncertain = False
         self.desktop_mode = desktop_mode
         self.mode = mode
         self.worker = worker
@@ -421,7 +447,7 @@ class _Session:
         self.max_reader_calls = self.reader_budget.max_calls if self.reader_budget else 0
         self.adapter = ObservationAdapter(worker, session_id, reader=self.reader_budget, allowed_apps={app})
         self.tx = TransactionEngine(KwinMcpBackend(worker), audit=AuditLog(audit_path, rotation=self.audit_rotation),
-                                    policy=Policy(allowed_apps=APPS, max_actions=max_actions,
+                                    policy=Policy(allowed_apps=frozenset({app}), max_actions=max_actions,
                                                   max_observations=max_observations,
                                                   max_duration_seconds=max_session_lifetime,
                                                   max_text_chars=4096))
@@ -476,9 +502,11 @@ class DesktopService:
         if type(max_reader_calls) is not int or max_reader_calls < 0:
             raise ValueError("max_reader_calls must be a non-negative integer")
         self.max_reader_calls = max_reader_calls
-        self.allowed_apps = frozenset(allowed_apps)
-        if not self.allowed_apps.issubset(APPS):
-            raise ValueError("allowed_apps must be a subset of the virtual fixture registry")
+        self.profiles = load_profiles()
+        if not all(isinstance(name, str) and name.casefold() in self.profiles for name in allowed_apps):
+            raise ValueError("allowed_apps must name configured app profiles")
+        self.allowed_apps = frozenset(profile_for(name, self.profiles).id for name in allowed_apps)
+        self.relay_manager = SSHForwardManager()
         self.stop_timeout = stop_timeout
         for name, value in (("idle_timeout", idle_timeout), ("max_session_lifetime", max_session_lifetime),
                             ("watchdog_interval", watchdog_interval)):
@@ -512,6 +540,9 @@ class DesktopService:
 
     def _expiry_reason(self, s, now=None):
         now = self._monotonic() if now is None else now
+        proc = getattr(s.worker, "proc", None)
+        if getattr(s.worker, "_poisoned", False) or (proc is not None and proc.poll() is not None):
+            return "worker_disconnected"
         if now - s.started_clock >= s.max_session_lifetime:
             return "max_lifetime"
         if now - s.last_activity_clock >= s.idle_timeout:
@@ -540,10 +571,10 @@ class DesktopService:
                duration_ms=None, request_id=None, desktop_mode="virtual"):
         record = {"timestamp": datetime.now(timezone.utc).isoformat(),
                   "caller_node": _context(ctx, "caller_node"), "transport": _context(ctx, "transport"),
-                  "tool": method, "app": app if app in APPS else "", "autonomy_mode": mode,
+                  "tool": method, "app": app if app in self.allowed_apps else "", "autonomy_mode": mode,
                   "desktop_mode": desktop_mode,
                   "event": method, "status": status, "jev_answers": None,
-                  "action": method if method == "act" else None,
+                  "action": method if method in {"act", "input"} else None,
                   "verification": verification, "reason": reason,
                   "request_id": request_id,
                   "duration_ms": round(max(0.0, duration_ms), 3) if duration_ms is not None else None}
@@ -562,6 +593,11 @@ class DesktopService:
         idle = max(0.0, now - s.last_activity_clock)
         return {"session_id": s.session_id, "app": s.app, "mode": s.mode.value,
                 "desktop_mode": s.desktop_mode,
+                "ownership": "attached" if s.attached else "launched",
+                "semantic_candidates": s.semantic_candidates,
+                "uncertain_input": bool(s.visual_input_uncertain or s.tx._blocked.get(s.session_id)),
+                "focus_policy": "foreground_during_task" if s.desktop_mode == "live" else "virtual",
+                "workspace": s.focus_context,
                 "state": "stopping" if s.stopping else "busy" if busy else s.state, "started_at": s.started_at,
                 "age_seconds": round(age, 3), "last_activity_at": s.last_activity_at,
                 "idle_seconds": round(idle, 3), "idle_timeout_seconds": s.idle_timeout,
@@ -578,6 +614,20 @@ class DesktopService:
                     "owner_elapsed_total_ms": 0.0, "reported_usage": {}},
                 "document_path": s.document_path}
 
+    def _public_workspace(self, value):
+        """Retain window context without exposing unallowlisted captions."""
+        aliases = {name.casefold() for app in self.allowed_apps
+                   for name in profile_for(app, self.profiles).window_app_ids}
+        if isinstance(value, list):
+            return [self._public_workspace(item) for item in value]
+        if isinstance(value, dict):
+            result = {key: self._public_workspace(item) for key, item in value.items()}
+            if "app" in result and str(result["app"]).casefold() not in aliases:
+                result.pop("caption", None)
+                result.pop("title", None)
+            return result
+        return value
+
     def _require_session(self, params):
         with self._lock: s = self._session
         if s is None: raise ValueError("session_not_found")
@@ -585,7 +635,7 @@ class DesktopService:
         if s.expiring: raise ValueError("session_expiring")
         if s.stopping: raise ValueError("session_busy")
         proc = getattr(s.worker, "proc", None)
-        if proc is not None and proc.poll() is not None:
+        if getattr(s.worker, "_poisoned", False) or (proc is not None and proc.poll() is not None):
             s.state = "broken"
             raise ValueError("session_broken")
         if s.state == "broken": raise ValueError("session_broken")
@@ -597,14 +647,22 @@ class DesktopService:
         params = params if isinstance(params, dict) else {}
         context = context if isinstance(context, dict) else {}
         app = params.get("app", "")
+        if isinstance(app, str) and app.casefold() in self.profiles:
+            app = profile_for(app, self.profiles).id
         s = None
-        live_restore_failed = False
         try:
             if method not in METHODS: raise ValueError("method_not_found")
             if method == "capabilities":
                 result = {"allowed_apps": sorted(self.allowed_apps), "virtual_only": False, "one_active_session": True,
-                          "desktop_modes": {"virtual": "available", "live": "explicit_owner_present_override_required"},
+                          "desktop_modes": {"virtual": "available", "live": "foreground; launch_or_attach; explicit_owner_override"},
+                          "semantic_candidates": "opt_in_for_live; virtual_default_enabled",
+                          "input": {"grounding": "single_use_capture", "effect": "uncertain"},
+                          "focus_policy": "task_foreground; restore_original_on_stop",
+                          "workspace": "live_window_inventory; captions_only_for_allowed_profiles",
                           "physical_input_detection": "unavailable",
+                          "grounding": {"bounds": "screen_logical", "paired_capture": "include_candidates",
+                                        "capture_relation": "sequential_not_atomic"},
+                          "exploratory_actions": {"verification": "observed", "effect": "uncertain"},
                           "methods": sorted(METHODS), "driver": "kwin-mcp==0.10.0",
                           "lifecycle": {"idle_timeout_seconds": self.idle_timeout,
                                         "max_session_lifetime_seconds": self.max_session_lifetime,
@@ -620,6 +678,42 @@ class DesktopService:
                                    "evidence": "docs/24-primary-agent-wait-comparison.md"},
                           "audit": {"path": str(self.audit_path), "rotation": self.audit_rotation.summary(),
                                     "retention": "size-based backups pruned by age"}}
+            elif method == "profiles":
+                result = {"profiles": [{"id": name,
+                          "window_app_ids": list(profile_for(name, self.profiles).window_app_ids),
+                          "allowed": name in self.allowed_apps} for name in sorted({item.id for item in self.profiles.values()})]}
+            elif method == "relays":
+                if params: raise ValueError("invalid_params")
+                result = self.relay_manager.snapshot()
+            elif method == "workspace":
+                if params: raise ValueError("invalid_params")
+                with self._lock:
+                    current = self._session
+                    if current is not None and current.desktop_mode == "live":
+                        if not current.busy.acquire(blocking=False): raise ValueError("session_busy")
+                        try:
+                            result = current.worker.rpc("workspace_discover")
+                        finally:
+                            current.busy.release()
+                    else:
+                        worker = self.worker_factory()
+                        try:
+                            result = worker.rpc("workspace_discover")
+                        finally:
+                            worker.close()
+                # Captions are application data; reveal them only for allowlisted profiles.
+                aliases = {alias.casefold() for name in self.allowed_apps
+                           for alias in profile_for(name, self.profiles).window_app_ids}
+                if isinstance(result, dict):
+                    for row in result.get("windows", []):
+                        identity = str(row.get("app", "")).casefold()
+                        row["allowed"] = identity in aliases
+                        row["profile_id"] = next((name for name in sorted(self.allowed_apps)
+                            if identity in {value.casefold() for value in profile_for(name, self.profiles).window_app_ids}), None)
+                        if not row["allowed"]:
+                            row.pop("caption", None)
+                            row.pop("title", None)
+                    result["session"] = self._status(current)
             elif method == "status":
                 self._expire_if_needed()
                 with self._lock: current = self._session
@@ -632,8 +726,20 @@ class DesktopService:
                 if desktop_mode not in {"virtual", "live"}: raise ValueError("invalid_params")
                 if desktop_mode == "live" and params.get("owner_present_override") is not True:
                     raise ValueError("owner_present_override_required")
-                if desktop_mode == "live" and params.get("temporary_a11y") is not True:
+                semantics = params.get("semantic_candidates", desktop_mode != "live")
+                attach = params.get("attach", False)
+                window_id = params.get("window_id")
+                if type(semantics) is not bool or type(attach) is not bool:
+                    raise ValueError("invalid_params")
+                if attach and (desktop_mode != "live" or not isinstance(window_id, str) or not window_id):
+                    raise ValueError("invalid_params")
+                if window_id is not None and not attach:
+                    raise ValueError("invalid_params")
+                if desktop_mode == "live" and semantics and params.get("temporary_a11y") is not True:
                     raise ValueError("live_temporary_a11y_required")
+                profile = profile_for(app, self.profiles)
+                profile_data = {"id": profile.id, "command": list(profile.command),
+                                "window_app_ids": list(profile.window_app_ids), "atspi_app": profile.atspi_app}
                 mode = AutonomyMode(params.get("mode", "guarded"))
                 with self._lock:
                     if self._session is not None: raise ValueError("session_exists")
@@ -645,18 +751,25 @@ class DesktopService:
                                  max_reader_calls=self.max_reader_calls, idle_timeout=self.idle_timeout,
                                  max_session_lifetime=self.max_session_lifetime, max_actions=self.max_actions,
                                  max_observations=self.max_observations, monotonic=self._monotonic,
-                                 desktop_mode=desktop_mode, audit_rotation=self.audit_rotation)
+                                 desktop_mode=desktop_mode, audit_rotation=self.audit_rotation,
+                                 profile=profile_data, attached=attach, semantic_candidates=semantics)
                     s.state = "starting"
                     self._last_stop_reason = None
                     self._last_stop_at = None
                     try:
                         started = (worker.start(app, str(journal_path), desktop_mode,
-                                                temporary_a11y=params.get("temporary_a11y") is True)
+                                                temporary_a11y=params.get("temporary_a11y") is True,
+                                                profile=profile_data, window_id=window_id, attach=attach,
+                                                semantic_candidates=semantics)
                                    if isinstance(worker, DesktopWorkerClient)
                                    else worker.start(app))
                         if isinstance(started, dict):
                             path = started.get("document_path")
                             if isinstance(path, str): s.document_path = path
+                            if isinstance(started.get("selected_window"), dict):
+                                s.focus_context = self._public_workspace({"selected_window": started["selected_window"],
+                                    "selected_window_id": started.get("selected_window_id"),
+                                    "root_window_id": started.get("root_window_id")})
                     except Exception as exc:
                         safe_start_codes = {
                             "invalid_worker_start", "session_stop_unconfirmed", "session_not_started",
@@ -723,7 +836,7 @@ class DesktopService:
                             requested_reason = context.get("_stop_reason")
                             if (_context(context, "transport") == "watchdog"
                                     and context.get("caller_node") == "local-owner"
-                                    and requested_reason in {"idle_timeout", "max_lifetime"}):
+                                    and requested_reason in {"idle_timeout", "max_lifetime", "worker_disconnected"}):
                                 self._last_stop_reason = requested_reason
                                 self._last_stop_at = datetime.now(timezone.utc).isoformat()
                             elif cleanup == "confirmed" and self._last_stop_reason is None:
@@ -748,22 +861,29 @@ class DesktopService:
                 s = self._require_session(params)
                 if app and app != s.app: raise ValueError("app_session_mismatch")
                 app = s.app
-                if method not in {"observe", "wait", "candidates", "act"}: raise ValueError("method_not_found")
+                if method not in {"observe", "wait", "candidates", "act", "reconcile", "input"}: raise ValueError("method_not_found")
                 if self._expiry_reason(s) is not None:
                     self._expire_if_needed()
                     raise ValueError("session_expiring")
                 if not s.busy.acquire(blocking=False): raise ValueError("session_busy")
-                restore_live_focus_after_call = s.desktop_mode == "live" and method in {
-                    "observe", "wait", "candidates", "act"
+                focus_live_for_call = s.desktop_mode == "live" and method in {
+                    "observe", "wait", "candidates", "act", "reconcile", "input"
                 }
                 try:
-                    if restore_live_focus_after_call:
+                    if focus_live_for_call:
                         # Live AT-SPI fingerprints include state such as
                         # focused, and compositor captures include the active
                         # surface. Run desktop reads and actions with the task
-                        # window focused, then restore the exact caller window.
-                        if not s.worker.focus_live_app():
-                            raise ValueError("live_target_focus_failed")
+                        # window focused. It remains foreground between calls;
+                        # the baseline focus is restored only at task stop.
+                        focus = s.worker.focus_live_app()
+                        if isinstance(focus, dict):
+                            s.focus_context = self._public_workspace(focus)
+                            s.worker.selected_window_id = focus.get("focused_window_id") or focus.get("selected_window_id")
+                        if not focus or (isinstance(focus, dict) and focus.get("focused") is not True):
+                            raise ValueError("live_desktop_interrupted")
+                    if method in {"candidates", "act"} and not s.semantic_candidates:
+                        raise ValueError("semantic_candidates_disabled")
                     s.cancel.clear()
                     s.tx.audit.caller_node = _context(context, "caller_node")
                     s.tx.audit.transport = _context(context, "transport")
@@ -772,10 +892,26 @@ class DesktopService:
                     if method == "observe":
                         if s.observations >= s.max_observations: raise ValueError("task_observation_budget_exceeded")
                         if s.cancel.is_set(): raise ValueError("cancelled")
+                        include_candidates = params.get("include_candidates", False)
+                        if type(include_candidates) is not bool:
+                            raise ValueError("invalid_params")
+                        if include_candidates and not s.semantic_candidates:
+                            raise ValueError("semantic_candidates_disabled")
+                        if include_candidates and params.get("capture_id") is not None:
+                            # A retained image cannot ground newly enumerated controls.
+                            raise ValueError("invalid_params")
+                        if include_candidates and s.observations + 3 > s.max_observations:
+                            raise ValueError("task_observation_budget_exceeded")
+                        before_grounding = (s.tx.observe(s.session_id, app, mode=s.mode)
+                                            if include_candidates else None)
+                        if before_grounding is not None:
+                            s.observations += 1
                         capture_id = params.get("capture_id")
                         if capture_id is None:
                             ref = s.adapter.capture(app, scope=params.get("scope", "app"), crop=params.get("crop"))
                             capture_id = ref.capture_id
+                            if not s.visual_input_uncertain:
+                                s.pending_input_captures.add(capture_id)
                         if s.cancel.is_set(): raise ValueError("cancelled")
                         output = params.get("output", "metadata")
                         if output not in {"metadata", "image", "data", "both"}: raise ValueError("invalid_params")
@@ -785,11 +921,22 @@ class DesktopService:
                                 raise ValueError("invalid_params")
                         obs = s.adapter.observe(capture_id, mode=output, questions=params.get("questions"))
                         if s.cancel.is_set(): raise ValueError("cancelled")
+                        if (obs.image is not None and capture_id in s.pending_input_captures
+                                and not s.visual_input_uncertain):
+                            s.valid_input_captures.add(capture_id)
                         result = {"observation": {"capture": obs.metadata,
                                                   **({"image_base64": base64.b64encode(obs.image).decode("ascii")} if obs.image is not None else {}),
                                                   **({"data": obs.data, "reader": asdict(obs.reader)} if obs.reader is not None else {}),
                                                   "errors": list(obs.errors)}}
                         s.observations += 1
+                        if include_candidates:
+                            snap = s.tx.observe(s.session_id, app, mode=s.mode)
+                            s.observations += 1
+                            if s.cancel.is_set(): raise ValueError("cancelled")
+                            stable = (before_grounding.window_id == snap.window_id and
+                                      before_grounding.window_bounds == snap.window_bounds)
+                            result["observation"]["grounding"] = _grounding(
+                                snap, obs.metadata, geometry_stable=stable)
                     elif method == "wait":
                         if not isinstance(params.get("expected"), str):
                             raise ValueError("invalid_params")
@@ -800,22 +947,56 @@ class DesktopService:
                         if s.cancel.is_set(): raise ValueError("cancelled")
                         snap = s.tx.observe(s.session_id, app, mode=s.mode)
                         if s.cancel.is_set(): raise ValueError("cancelled")
-                        result = {"app": app, "generation": snap.generation,
-                                  "candidates": [_candidate(c) for c in snap.candidates]}
+                        result = _grounding(snap)
                         s.observations += 1
+                    elif method == "reconcile":
+                        if params.get("acknowledge_uncertain") is not True:
+                            raise ValueError("uncertain_action_acknowledgement_required")
+                        if s.observations >= s.max_observations:
+                            raise ValueError("task_observation_budget_exceeded")
+                        if s.visual_input_uncertain:
+                            ref = s.adapter.capture(app, scope="app")
+                            result = {"capture": s.adapter.observe(ref.capture_id).metadata}
+                            s.valid_input_captures.clear()
+                            s.pending_input_captures = {ref.capture_id}
+                        elif s.semantic_candidates:
+                            recovered = s.tx.reconcile(s.session_id, app, mode=s.mode,
+                                                       acknowledge_uncertain=True)
+                            result = {"grounding": _grounding(recovered["snapshot"]),
+                                      "previous_block": recovered["previous_block"]}
+                        else:
+                            raise ValueError("no_recovery_pending")
+                        s.visual_input_uncertain = False
+                        s.observations += 1
+                        result.update(effect="uncertain", input_replayed=False)
+                    elif method == "input":
+                        if s.actions >= s.max_actions: raise ValueError("task_action_budget_exceeded")
+                        if s.observations + 1 > s.max_observations:
+                            raise ValueError("task_observation_budget_exceeded")
+                        from jevdesktop.image_input import perform_image_input
+                        result = perform_image_input(s, params)
+                        if isinstance(getattr(s.worker, "focus_context", None), dict):
+                            s.focus_context = self._public_workspace(s.worker.focus_context)
+                            result["workspace"] = s.focus_context
                     elif method == "act":
                         if s.actions >= s.max_actions: raise ValueError("task_action_budget_exceeded")
                         if s.observations + 2 > s.max_observations:
                             raise ValueError("task_observation_budget_exceeded")
                         kind, target, verification = params.get("action"), params.get("target_ref"), params.get("verification")
                         text = params.get("text")
-                        if kind not in {"click", "type_text", "replace_document", "save_document", "navigate_url", "scroll"} or not isinstance(target, str): raise ValueError("invalid_params")
+                        if kind != "keyboard_shortcut" and params.get("key") is not None:
+                            raise ValueError("invalid_params")
+                        if kind not in {"click", "type_text", "replace_document", "save_document", "navigate_url", "scroll", "keyboard_shortcut"} or not isinstance(target, str): raise ValueError("invalid_params")
+                        if ((kind == "keyboard_shortcut") != ("key" in params)
+                                or (kind == "keyboard_shortcut" and "text" in params)):
+                            raise ValueError("invalid_params")
                         self._check_verifier(s, verification, params.get("expected"), target)
                         direction, steps = params.get("direction"), params.get("steps", 1)
                         action = Action(kind, target,
                                         text if kind in {"type_text", "replace_document", "navigate_url"} else None,
                                         direction=direction if kind == "scroll" else None,
-                                        steps=steps if kind == "scroll" else 1)
+                                        steps=steps if kind == "scroll" else 1,
+                                        key=params.get("key") if kind == "keyboard_shortcut" else None)
                         approval = params.get("approved") is True
                         if s.mode is AutonomyMode.SUPERVISED and not approval: raise ValueError("approval_required")
                         prior = s.tx._last.get((s.session_id, app))
@@ -831,11 +1012,15 @@ class DesktopService:
                         verifier = self._verifier(s, verification, params.get("expected"), candidate,
                                                   before_snapshot, direction=direction)
                         precondition = self._precondition(s, kind, verification, params.get("expected"), text, candidate)
+                        s.valid_input_captures.clear()
+                        s.pending_input_captures.clear()
                         acted = s.tx.act(s.session_id, app, action, verifier=verifier, mode=s.mode,
                                          approve=(lambda *_: approval), cancel=s.cancel, precondition=precondition)
                         s.actions += 1
                         result = {"status": acted.status, "verification": acted.verification,
-                                  "evidence": acted.evidence if isinstance(acted.evidence, (str, int, float, bool, dict, list, type(None))) else None}
+                                  "verified": acted.verification == "passed", "reason": acted.reason,
+                                  "evidence": acted.evidence if isinstance(acted.evidence, (str, int, float, bool, dict, list, type(None))) else None,
+                                  "grounding": _grounding(acted.after) if acted.after is not None else None}
                         s.observations += 2
                     else: raise ValueError("method_not_found")
                     # Only completed observe/wait/candidate/action work extends the
@@ -846,30 +1031,19 @@ class DesktopService:
                 except Exception as exc:
                     proc = getattr(getattr(s.worker, "proc", None), "poll", None)
                     if (isinstance(exc, (BrokenPipeError, TimeoutError)) or "worker" in str(exc)
+                            or getattr(s.worker, "_poisoned", False)
                             or (callable(proc) and proc() is not None)):
                         s.state = "broken"
                     raise
                 finally:
-                    try:
-                        if restore_live_focus_after_call:
-                            try:
-                                live_restore_failed = not s.worker.restore_live_focus()
-                            except Exception:
-                                live_restore_failed = True
-                            if live_restore_failed:
-                                s.state = "broken"
-                                try:
-                                    self._audit("live_focus_restore", context, app, s.mode.value, "failed",
-                                                "original_focus_not_restored", request_id=request_id,
-                                                desktop_mode="live")
-                                except OSError:
-                                    pass
-                    finally:
-                        s.busy.release()
-                if live_restore_failed:
-                    raise ValueError("live_focus_restore_failed")
+                    s.busy.release()
             completed_reason = self._last_stop_reason if _context(context, "transport") == "watchdog" else "completed"
             verification = result.get("verification") if isinstance(result, dict) else None
+            if method == "input" and isinstance(result, dict):
+                completed_reason = "input_delivered_effect_uncertain"
+                verification = {"verified": False, "effect": "uncertain", "action": result.get("action")}
+            elif method == "act" and isinstance(result, dict) and result.get("verified") is False:
+                completed_reason = "effect_uncertain"
             if method == "wait" and isinstance(result, dict):
                 waiting = result.get("wait", {})
                 verification = {key: waiting.get(key) for key in
@@ -880,8 +1054,7 @@ class DesktopService:
                         desktop_mode=s.desktop_mode if s else params.get("desktop_mode", "virtual"))
             return {"ok": True, **result}
         except Exception as exc:
-            raw = ("live_focus_restore_failed" if live_restore_failed else
-                   exc.code if isinstance(exc, ObservationError) else
+            raw = (exc.code if isinstance(exc, ObservationError) else
                    str(exc) if isinstance(exc, (ValueError, TransactionError, RuntimeError)) else
                    "operation_failed")
             code = raw if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", raw or "") else "operation_failed"
@@ -896,9 +1069,16 @@ class DesktopService:
                         s.mode.value if s else "guarded", "failed", err["code"], verification=failure_evidence,
                         duration_ms=(self._monotonic() - dispatch_started) * 1000, request_id=request_id,
                         desktop_mode=s.desktop_mode if s else params.get("desktop_mode", "virtual"))
+            if s is not None and (s.visual_input_uncertain or s.tx._blocked.get(s.session_id)):
+                err["input_may_have_been_delivered"] = True
+                err["automatic_retry_allowed"] = False
             return {"ok": False, "error": err}
 
     def _check_verifier(self, s, verification, expected, target):
+        if verification == "observed":
+            if expected is not None:
+                raise ValueError("invalid_params")
+            return
         allowed = {"target_focused", "target_text", "fixture_state", "display_text", "document_saved",
                    "navigation_url", "window_title", "visible_text", "scroll_changed"}
         if verification not in allowed: raise ValueError("unsupported_verification")
@@ -913,10 +1093,16 @@ class DesktopService:
         if verification == "display_text" and s.app != "kcalc":
             raise ValueError("unsupported_verification")
         if verification == "document_saved" and s.app != "kate": raise ValueError("unsupported_verification")
-        if verification in {"navigation_url", "window_title", "visible_text", "scroll_changed"} and s.app != "firefox":
+        if verification in {"navigation_url", "scroll_changed"} and s.app != "firefox":
             raise ValueError("unsupported_verification")
 
     def _check_action_policy(self, s, kind, candidate, verification, expected, text):
+        if kind == "keyboard_shortcut" and verification != "observed":
+            raise ValueError("unsupported_verification")
+        if verification == "observed":
+            # This mode makes no postcondition claim. The transaction still
+            # applies normal target, policy, focus, and fresh-observation checks.
+            return
         if verification == "display_text":
             # Any KCalc button click may be verified by the display showing the
             # caller-supplied expected string. The expectation comes from policy,
@@ -947,10 +1133,10 @@ class DesktopService:
                     and isinstance(text, str) and text == expected and _valid_web_url(text)):
                 raise ValueError("unsupported_verification")
         elif verification == "window_title":
-            if not (s.app == "firefox" and kind == "click" and candidate.role == "link" and expected.strip()):
+            if not (kind == "click" and candidate.role in {"link", "button"} and expected.strip()):
                 raise ValueError("unsupported_verification")
         elif verification == "visible_text":
-            if not (s.app == "firefox" and kind in {"click", "type_text"}
+            if not (kind in {"click", "type_text"}
                     and kind in candidate.actions and expected.strip()):
                 raise ValueError("unsupported_verification")
         elif verification == "scroll_changed":
@@ -962,10 +1148,12 @@ class DesktopService:
     def _precondition(self, s, kind, verification, expected, text, prior_candidate):
         def check(snapshot):
             current = [c for c in snapshot.candidates
-                       if (c.role, c.label) == (prior_candidate.role, prior_candidate.label)
+                       if (c.role, c.label, c.bounds) == (prior_candidate.role, prior_candidate.label, prior_candidate.bounds)
                        and {"enabled", "sensitive", "showing", "visible"}.issubset(c.states)]
             if len(current) != 1: return False
             target = current[0]
+            if verification == "observed":
+                return True
             if verification == "target_text":
                 return bool(text and text.strip() and expected != target.value and "type_text" in target.actions)
             if verification == "display_text":
@@ -998,7 +1186,7 @@ class DesktopService:
                         and c.value_number is not None]
                 return kind == "scroll" and (len(bars) == 1 or bool(_scroll_witnesses(snapshot, target)))
             if verification == "window_title":
-                return kind == "click" and target.role == "link" and snapshot.window_title != expected
+                return kind == "click" and target.role in {"link", "button"} and snapshot.window_title != expected
             if verification == "visible_text":
                 if kind == "click" and "click" not in target.actions: return False
                 try:
@@ -1014,8 +1202,11 @@ class DesktopService:
         return check
 
     def _verifier(self, s, verification, expected, candidate, before_snapshot=None, *, direction=None):
+        if verification == "observed":
+            return None
         def verify(snapshot):
-            target = [c for c in snapshot.candidates if (c.role, c.label) == (candidate.role, candidate.label)]
+            target = [c for c in snapshot.candidates
+                      if (c.role, c.label, c.bounds) == (candidate.role, candidate.label, candidate.bounds)]
             if verification == "target_focused":
                 return Verification(len(target) == 1 and "focused" in target[0].states, {"target_focused": len(target) == 1 and "focused" in target[0].states})
             if verification == "target_text":
@@ -1214,8 +1405,41 @@ class DesktopService:
 
 
 def _candidate(candidate: Candidate) -> dict[str, Any]:
-    # Editable contents and coordinates never leave the owner process.
-    label = "editable text" if "type_text" in candidate.actions else candidate.label
+    # Names identify controls; editable values remain private. Some toolkits put
+    # the current value into the accessible name, so suppress that exact alias.
+    private = "password" in candidate.role or "protected" in candidate.states
+    aliases_value = bool(candidate.value) and candidate.value in candidate.label
+    label = ("protected field" if private else "editable text"
+             if "type_text" in candidate.actions and aliases_value else candidate.label)
     return {"ref": candidate.ref, "role": candidate.role, "label": label,
+            "bounds": asdict(candidate.bounds), "coordinate_space": "screen_logical",
+            "source": "atspi",
             "states": sorted(candidate.states), "actions": list(candidate.actions),
             **({"unavailable_reason": candidate.unavailable_reason} if candidate.unavailable_reason else {})}
+
+
+def _grounding(snapshot, capture=None, *, geometry_stable=False) -> dict[str, Any]:
+    """Describe a fresh semantic inventory; never imply atomic screenshot capture."""
+    result = {"app": snapshot.app, "generation": snapshot.generation,
+              "observed_at": snapshot.observed_at,
+              "window": {"id": snapshot.window_id, "bounds": asdict(snapshot.window_bounds)},
+              "coordinate_space": "screen_logical",
+              "candidates": [_candidate(c) for c in snapshot.candidates]}
+    if capture is not None:
+        result["capture_id"] = capture["capture_id"]
+        result["capture_relation"] = "sequential_not_atomic"
+        rect = capture.get("mapping", {}).get("selected_rect")
+        same_window = capture.get("window", {}).get("id") == snapshot.window_id
+        result["geometry_stable_during_capture"] = geometry_stable
+        result["image_mapping_available"] = bool(same_window and rect and geometry_stable)
+        if same_window and rect and geometry_stable:
+            result["image_transform"] = {"screen_origin": {"x": rect["x"], "y": rect["y"]},
+                                         "scale_x": 1, "scale_y": 1,
+                                         "formula": "image_x = screen_x - screen_origin.x; image_y = screen_y - screen_origin.y"}
+            for item in result["candidates"]:
+                bounds = item["bounds"]
+                x, y = bounds["x"] - rect["x"], bounds["y"] - rect["y"]
+                item["image_bounds"] = {**bounds, "x": x, "y": y}
+                item["inside_image"] = (x >= 0 and y >= 0 and
+                    x + bounds["width"] <= rect["width"] and y + bounds["height"] <= rect["height"])
+    return result

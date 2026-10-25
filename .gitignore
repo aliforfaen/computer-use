@@ -38,5 +38,5 @@ build/
 .vscode/
 *.swp
 
-# disposable study checkouts and environments
+# Disposable research checkouts and environments
 /tmp/

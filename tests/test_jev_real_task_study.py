@@ -10,6 +10,8 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -19,7 +21,7 @@ from unittest import mock
 import jevdesktop.jev_selector as js
 from scripts.jev_real_task_study import (CodeSelector, DRAFT, REVISION, build_ambiguity_cases,
                                          code_label_rule, evaluate_decision, main, render_markdown,
-                                         study_summary, text_record)
+                                         study_summary, text_record, StudyDaemon)
 from tools.jev_loop_probe import state_from_probe_candidates
 
 
@@ -225,6 +227,68 @@ class HarnessControlTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse(json.loads(output)["ok"])
         self.assertFalse(json.loads(output)["task_contracts_passed"])
+
+
+class StudyDaemonCleanupTests(unittest.TestCase):
+    class Process:
+        def __init__(self, *, waits_before_exit=0, returncode=0):
+            self.waits_before_exit = waits_before_exit
+            self.returncode = None
+            self.final_returncode = returncode
+            self.terminate_calls = 0
+            self.kill_calls = 0
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout):
+            if self.waits_before_exit:
+                self.waits_before_exit -= 1
+                raise subprocess.TimeoutExpired("study-daemon", timeout)
+            if self.returncode is None:
+                self.returncode = self.final_returncode
+            return self.returncode
+
+        def terminate(self):
+            self.terminate_calls += 1
+
+        def kill(self):
+            self.kill_calls += 1
+            self.final_returncode = -9
+
+    def _daemon(self, tmp, process):
+        daemon = StudyDaemon(Path(tmp))
+        daemon.process = process
+        daemon.socket_identity = (10, 20)
+        return daemon
+
+    def test_graceful_shutdown_requires_ack_zero_exit_and_owned_socket_gone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            daemon = self._daemon(tmp, self.Process())
+            with mock.patch("scripts.jev_real_task_study._socket_request",
+                            return_value={"ok": True, "stopped": True}), \
+                 mock.patch("scripts.jev_real_task_study._socket_identity", return_value=None):
+                result = daemon.stop()
+        self.assertTrue(result["shutdown_acknowledged"])
+        self.assertTrue(result["returncode_zero"])
+        self.assertTrue(result["socket_gone"])
+        self.assertFalse(result["forced_shutdown"])
+        self.assertTrue(result["cleanup_confirmed"])
+
+    def test_forced_terminate_and_kill_never_confirm_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            process = self.Process(waits_before_exit=2, returncode=0)
+            daemon = self._daemon(tmp, process)
+            with mock.patch("scripts.jev_real_task_study._socket_request",
+                            return_value={"ok": True, "stopped": True}), \
+                 mock.patch("scripts.jev_real_task_study._socket_identity", return_value=None):
+                result = daemon.stop()
+        self.assertTrue(result["shutdown_acknowledged"])
+        self.assertTrue(result["forced_shutdown"])
+        self.assertEqual(process.terminate_calls, 1)
+        self.assertEqual(process.kill_calls, 1)
+        self.assertTrue(result["process_exited"])
+        self.assertFalse(result["cleanup_confirmed"])
 
 
 if __name__ == "__main__":

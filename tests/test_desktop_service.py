@@ -10,6 +10,7 @@ from pathlib import Path
 
 from jevdesktop.desktop_service import DesktopService, DesktopWorkerClient
 from jevdesktop.observation import ObservationError
+from jevdesktop.transactions import Bounds
 from jevdesktop.vision_reader import ReaderResult
 
 
@@ -361,12 +362,12 @@ class DesktopServiceTests(unittest.TestCase):
         thread.join(1)
         self.assertFalse(thread.is_alive())
 
-    def test_dead_worker_marks_session_broken_and_stop_all_is_truthful(self):
+    def test_dead_worker_cleanup_is_automatic_and_stop_all_is_truthful(self):
         self.start()
         self.worker.proc.dead = True
-        status = self.service.dispatch("status")["session"]
-        self.assertEqual(status["state"], "broken")
-        self.assertIsNotNone(status["worker_pid"])
+        response = self.service.dispatch("status")
+        self.assertIsNone(response["session"])
+        self.assertEqual(response["lifecycle"]["last_stop_reason"], "worker_disconnected")
         stopped = self.service.dispatch("stop_all")
         self.assertTrue(stopped["ok"], stopped)
         self.assertIsNone(self.service.dispatch("status")["session"])
@@ -613,6 +614,7 @@ class _StubSession:
 class _StubCandidate:
     def __init__(self, role, label, states=("enabled", "sensitive", "showing", "visible")):
         self.role, self.label, self.states = role, label, tuple(states)
+        self.bounds = Bounds(10, 20, 30, 20)
         self.value, self.actions, self.value_number = "", ("click",), None
 
 

@@ -8,13 +8,14 @@ venv, inspected the shipped MCP surface, and read the agent-facing artefacts in 
 I did **not** evaluate live behaviour: this host is Ubuntu 24.04 `dev-vm` with no KWin,
 and `pygobject`/`pycairo` are not installable here (no sudo, no cairo headers).
 
-## Host reconciliation — 2026-10-23
+## Owner checkout reconciliation — 2026-10-25
 
-This review describes a copied checkout on dev-vm. The owner checkout has a
-working `.git` and the October changes are retained in its local checkpoint.
-The disposable GPU venv was indeed still present here (2.7 GB); it has now been
-removed and `/tmp/` explicitly ignored. Grounding and verifier restrictions were
-confirmed in current source. Other recommendations remain review proposals.
+The review below describes a copied checkout on dev-vm. The owner checkout has
+Git history. October work is now being checkpointed and pushed, `/tmp/` is
+explicitly ignored, and the current entry docs have been shortened with dated
+status preserved in `docs/archive/`. Grounding and verifier restrictions prompted
+the changes documented in docs 36–40. Review recommendations remain historical
+analysis; offline checks do not establish live acceptance.
 
 ## Verdict
 

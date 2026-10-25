@@ -4,71 +4,48 @@
 
 # Computer Use
 
-Screenshot-driven computer use for agents on **CachyOS, KDE Plasma and Wayland**.
-Built on [kwin-mcp](https://github.com/isac322/kwin-mcp), with a local CLI and MCP
-client. Jev is an optional future accelerator.
+Grounded desktop observation and control for KDE Plasma on Wayland. The local
+owner service uses [kwin-mcp](https://github.com/isac322/kwin-mcp); CLI and MCP
+clients share its policy, allowlist, audit and session state. Jev remains an
+optional selector experiment and is not wired into the runtime.
 
-## Where things stand — 2026-10-05
+## Current contract — 2026-10-25
 
-- **Package and icon:** the runtime is the installable `src/jevdesktop/` package
-  ([ADR-028](docs/04-architecture.md)), standalone benchmarks live in `scripts/`,
-  and `assets/jev-icon.svg` is the app icon in the README, the tray and the menu
-  entry installed by `service install`
-  ([ADR-029](docs/04-architecture.md), [tray and service](docs/28-tray-and-user-service.md)).
-- **Working:** virtual Firefox/Kate/KCalc, app screenshots, grounded navigation,
-  links, text entry and scrolling, saved Kate documents, automatic cleanup,
-  CLI and MCP.
-- **Owner surfaces:** a private JSON config (CLI > env > file > default), a
-  `systemd --user` unit with `service install|status|uninstall`, and an
-  AppIndicator tray with status, a virtual/physical **preference**, session
-  cleanup, settings and the kill switch. The tray never pre-authorizes live
-  mode, and the app icon comes from `assets/jev-icon.svg`.
-  [Tray, service and config](docs/28-tray-and-user-service.md).
-- **Audit retention:** the audit log is durable at
-  `~/.config/jev-desktop/audit.jsonl`, size-rotated and age-pruned; stale session
-  journals are swept at startup. [ADR-021](docs/04-architecture.md).
-- **Jev selector seam:** `src/jevdesktop/jev_selector.py` turns candidate output into an
-  enumerated decision request and validates the typed answer in code. Offline by
-  default, one-call `HttpSelector`, not wired into the loop.
-  [Experiment plan](docs/30-jev-selector-experiment.md).
-- **Jev driver loop:** `tools/jev_loop_probe.py` closes
-  select → act + code-owned check → re-enumerate as a client of the owner socket.
-  Every step needs a verification the policy accepts, and `done` is only success
-  if a check already passed. Virtual KCalc: verified 1-2-3, caught a wrong first
-  choice, and refused an unverifiable operator click. Still unwired.
-  [Plan and results](docs/31-jev-control-plan.md).
-- **Scroll fixed:** the verifier now resolves the live scroll pane instead of an
-  ambiguous `(role, label)` match, and failed verifications keep their evidence.
-  Host-verified down and up on an offline fixture.
-  [Evidence](docs/27-scroll-effect-verification.md).
-- **Useful Luna task passed:** read Python.org, recover from a failed navigation,
-  draft/revise/save a sourced Kate note. [Workflow](docs/23-public-browser-kate-agent-task.md).
-- **DeepSeek:** explicit image interpretation is enabled with call limits and
-  cancellable requests. The heartbeat is experimental: both wait trials returned
-  invalid judgments; ordinary screenshot polling completed both tasks.
-  [Comparison](docs/24-primary-agent-wait-comparison.md).
-- **Local live mode:** implemented for one newly launched allowlisted app per
-  session. It requires `--live --owner-present-override --temporary-a11y`,
-  focuses the task window for candidate, screenshot, wait and action calls,
-  restores exact prior focus, and closes only its owned app. The owner-watched
-  Kate draft/save/revise/save and screenshot checks passed; original focus,
-  AT-SPI flags and app cleanup were independently confirmed. Physical-input
-  idle detection remains unavailable on this host.
-  [Contract and evidence](docs/26-live-owner.md).
-- **Still pending:** live Firefox, forced cancellation/crash recovery, tailnet
-  deployment and Jev replay have not been validated. Nested/live scrolling,
-  tray menu clicks and enabling the unit at login are untested.
+- **Observation and input:** fresh app captures and semantic candidates are
+  available. Strong code-owned verifiers remain available for supported actions.
+  `verification=observed` and image-grounded input return fresh state while
+  reporting effect as uncertain; they never prove task completion. Uncertain
+  input is reconciled by observing again, with no automatic replay.
+- **Live desktop:** requires an explicit owner-present override. Sessions can
+  launch an allowlisted configured app or attach to one exact window ID. The
+  task app stays foreground until stop; stop restores original focus, closes
+  only an app launched by the task, and preserves attached apps. Physical input
+  idle detection is unavailable.
+- **Semantic access:** AT-SPI candidates are disabled by default in live mode.
+  Enabling them requires `--semantic-candidates --temporary-a11y`; original
+  accessibility properties are restored at cleanup. Virtual mode enables
+  semantic candidates by default.
+- **Profiles and authorization:** built-in profiles cover Kate, Firefox and
+  KCalc. Custom profiles are read from
+  `${XDG_CONFIG_HOME:-~/.config}/jev-desktop/app_profiles.json`; a profile does
+  not authorize its app. Add the canonical app separately to the explicit
+  allowlist. [Profile and live contract](docs/40-live-workspace-and-profiles.md).
+- **Workspace and relays:** `workspace`, `profiles` and `relays` report window,
+  profile and SSH-forward state. Relay process/listener state does not guarantee
+  remote MCP endpoint health. Capture mapping currently rejects unsupported
+  scaled and multi-monitor layouts.
+- **Validation:** current implementation is source-reviewed and covered by
+  offline checks. The newer live workspace/profile contract still needs an
+  owner-watched host acceptance run; see the checklist in doc 40.
 
-Start with [the handoff](docs/HANDOFF.md). [Local commands](docs/16-local-owner-and-mcp.md)
-· [next phases](docs/25-next-phases.md). A fixed physical KCalc smoke test passed
-previously; [its scope](docs/22-live-desktop-smoke.md) remains separate from the
-new local live-task service. The owner-watched Kate service check is recorded in
-[doc 26](docs/26-live-owner.md).
+Start with [the handoff](docs/HANDOFF.md), [local commands and MCP](docs/16-local-owner-and-mcp.md),
+[verification guidance](docs/29-verification-runbook.md), and the
+[live workspace acceptance checklist](docs/40-live-workspace-and-profiles.md).
 
-## Local quick start
+## Quick start
 
-Requires Python 3.13+, `uv`, KDE Wayland and the system dependencies described
-in [the platform notes](docs/03-wayland-constraints.md).
+Requires Python 3.13+, `uv`, KDE Wayland and the system dependencies in
+[platform notes](docs/03-wayland-constraints.md).
 
 ```bash
 uv sync
@@ -79,6 +56,7 @@ In another terminal:
 
 ```bash
 uv run jev-desktop capabilities
+uv run jev-desktop profiles
 uv run jev-desktop session start kcalc
 uv run jev-desktop observe kcalc
 uv run jev-desktop candidates kcalc
@@ -87,68 +65,54 @@ uv run jev-desktop stop --all
 uv run jev-desktop shutdown
 ```
 
-For an MCP host, run `uv run jev-desktop-mcp` in this checkout. It connects to
-that same local owner. Images are returned only when explicitly requested;
-reader interpretation requires explicit provider configuration and a positive
-per-session call limit. Use `image` for screenshots; `data` or `both` also
-requires reader questions. Provider usage and caller inference billing are distinct. See [doc 16](docs/16-local-owner-and-mcp.md)
-for actions, reader configuration and lifecycle limits.
-
-As a user service plus tray (the installer seeds a private config, never enables
-anything, and does not change the kill switch):
+For a watched live task, first ensure its app is explicitly allowlisted. Launch
+the app with screenshots only by default, or attach to an exact discovered
+window ID:
 
 ```bash
-uv run jev-desktop service install --allow-app kate --allow-app firefox
-systemctl --user enable --now jev-desktop.service
-uv run jev-desktop tray
+uv run jev-desktop workspace
+uv run jev-desktop session start dolphin --live --owner-present-override --no-semantic-candidates
+# Or attach to an exact existing window instead of launching it:
+uv run jev-desktop session start dolphin --live --owner-present-override --attach-window WINDOW_ID
 ```
 
-`service install` also drops the launcher entry and the app icon into the XDG
-data home (`applications/jev-desktop.desktop` and
-`icons/hicolor/scalable/apps/jev-icon.svg`), so the Jev icon shows up in menus
-and the tray; `service uninstall` removes them again. The icon is the same file
-shown at the top of this README.
-
-## Repository layout
-
-New files go by kind: runtime → `src/jevdesktop/`; benchmarks/harnesses → `scripts/`;
-probes → `tools/`; tests → `tests/`; icons, images and `.desktop` entries → `assets/`;
-HTML fixtures → `benchmark_fixtures/`; captures → `run/` (ignored). Keep the root clean.
-
-| Location | Contents |
-| --- | --- |
-| `src/jevdesktop/` | Installed package: service, CLI, MCP, tray, workers and shared runtime helpers. |
-| `scripts/` | Standalone development benchmarks and one-off harnesses (not installed). |
-| `tests/` | Offline unit tests, grouped by module. |
-| `tools/` | Standalone probes and the fast core check: `check`, service probe, MCP trial client, vision-wait probe, scroll-effect probe. |
-| `assets/` | App icon (`jev-icon.svg`) and the `.desktop` launcher entry; installed by `service install`. |
-| `benchmark_fixtures/` | Reusable local HTML fixtures. |
-| `docs/` | Current handoff, contracts, decisions and historical results. |
-| `run/` (ignored) | Captures, documents, timelines and trial evidence. |
-
-Run a targeted check from the repo root:
+The Dolphin example requires a configured Dolphin profile and a separate
+`--allow-app dolphin` daemon setting. Semantic opt-in is explicit and requires
+temporary accessibility consent:
 
 ```bash
-uv run python -m tools.check                      # fast core set (~4 s, 96 cases)
-uv run python -m unittest tests.test_live_owner   # one module
-uv run python -m unittest discover -s tests       # everything (~10 s, 199 cases)
+uv run jev-desktop session start dolphin --live --owner-present-override --semantic-candidates --temporary-a11y
 ```
 
-[Verification runbook](docs/29-verification-runbook.md) maps a change type to its
-cheapest check. Probe commands can launch apps or call a provider; read their
-documented limits before running them. Runtime modules live in the installed
-`src/jevdesktop/` package; development benchmarks run from `scripts/`.
+For an MCP host, run `uv run jev-desktop-mcp` as a local stdio client of the
+same owner. Images are returned only when requested. Reader interpretation
+requires explicit provider configuration and a positive per-session cap. Relay
+and reader status do not claim provider/endpoint billing or health guarantees.
 
-## Benchmarks and design
+## Repository and checks
 
-- [Vision benchmark](docs/13-runnable-vision-benchmark.md): saved screenshots,
-  configurable DeepSeek/MiMo readers and earlier measured results.
-- [Dynamic wait baseline](docs/17-dynamic-wait-baseline.md): loading, error,
-  animation, no-change and outside-region dialog cases.
-- [Build plan](docs/14-app-build-plan.md): milestones and deferred decisions.
-- [Architecture and ADRs](docs/04-architecture.md): decisions and proposal history.
-- [Prior art](docs/02-prior-art.md): the projects we reuse.
+Runtime modules live in `src/jevdesktop/`; tests in `tests/`; standalone probes
+in `tools/`; development harnesses in `scripts/`; docs in `docs/`; local
+captures and reports in ignored `run/`.
 
-Credentials stay in ignored `.env`; captures, results and interrupted-run
-records stay in ignored `run/`. Neither is published. Small provider tests are
-owner-authorized; keep explicit call limits and usage accounting. Historical single-probe caps do not describe the current reader policy.
+```bash
+uv run python -m tools.check
+uv run python -m unittest tests.test_transactions
+```
+
+Use the [verification runbook](docs/29-verification-runbook.md) to choose a
+targeted check. Live actions and provider probes are separate owner-authorized
+acceptance work, not part of offline checks.
+
+## Design and evidence
+
+- [Grounding and capture mapping](docs/39-grounding.md)
+- [SSH forward configuration and status](docs/38-ssh-forwards.md)
+- [Tray, user service and configuration](docs/28-tray-and-user-service.md)
+- [Architecture and append-only ADR history](docs/04-architecture.md)
+- [Prior art and reused drivers](docs/02-prior-art.md)
+- [Historical live Kate evidence](docs/26-live-owner.md)
+
+Credentials belong in private files or the invoking process environment, never
+tracked files or audit logs. `.env.example` contains names and path guidance
+only; provider calls remain opt-in.

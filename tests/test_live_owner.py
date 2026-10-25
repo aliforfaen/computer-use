@@ -15,7 +15,7 @@ import jevdesktop.desktop_service as desktop_service
 import jevdesktop.desktop_worker as desktop_worker
 import jevdesktop.live_desktop_probe as live_desktop_probe
 from jevdesktop.desktop_service import DesktopService, DesktopWorkerClient
-from test_desktop_service import FakeWorker
+from tests.test_desktop_service import FakeWorker
 
 
 class _Process:
@@ -47,7 +47,8 @@ class _Launched:
 
 class _LiveEngine:
     def __init__(self):
-        self.windows = [{"id": "original", "app": "org.kde.konsole", "caption": "Terminal"}]
+        self.windows = [{"id": "original", "app": "org.kde.konsole", "caption": "Terminal",
+                         "pid": 1234, "active": True}]
         self.proc = _Process()
         self.proc.on_terminate = lambda: setattr(
             self, "windows", [row for row in self.windows if row["id"] != "owned"])
@@ -68,7 +69,8 @@ class _LiveEngine:
         self.command = command
         self.env = extra_env
         app = {"kate": ("org.kde.kate", "Kate"), "kcalc": ("org.kde.kcalc", "KCalc")}[command[0]]
-        self.windows.append({"id": "owned", "app": app[0], "caption": app[1]})
+        self.windows.append({"id": "owned", "app": app[0], "caption": app[1],
+                             "pid": self.proc.pid, "active": False})
         return self.launched
 
     def _run_kwin_query(self, request):
@@ -81,15 +83,28 @@ class _LiveFakeWorker(FakeWorker):
     def __init__(self):
         super().__init__()
         self.live_calls = []
-        self.restore_results = [True, True, False]
 
     def focus_live_app(self):
         self.live_calls.append("focus")
-        return True
+        return {"focused": True, "focused_window_id": "window-1"}
 
     def restore_live_focus(self):
         self.live_calls.append("restore")
-        return self.restore_results.pop(0)
+        return True
+
+    def stop(self):
+        self.restore_live_focus()
+        return super().stop()
+
+
+def _native_rows(engine: _LiveEngine) -> list[dict]:
+    rows = []
+    for row in engine.windows:
+        rect = {"x": 0, "y": 0, "width": 900, "height": 700}
+        rows.append({**row, "normal": row["id"] != "original", "popup": False,
+                     "dialog": False, "transient": False, "transient_for": None,
+                     "frame": dict(rect), "client": dict(rect)})
+    return rows
 
 
 class LiveOwnerTests(unittest.TestCase):
@@ -97,11 +112,28 @@ class LiveOwnerTests(unittest.TestCase):
         engine = _LiveEngine()
         flags = {"IsEnabled": False, "ScreenReaderEnabled": False}
         writes = []
+        clock = {"value": 0.0}
 
         def set_flags(_address, value):
             flags.update(value)
             writes.append(dict(value))
             return dict(flags)
+
+        def rows_with_wrong_owner_pid():
+            rows = _native_rows(engine)
+            for row in rows:
+                if row["id"] == "owned":
+                    row["pid"] += 1
+            return rows
+
+        def activate(window_id):
+            for row in engine.windows:
+                row["active"] = row["id"] == window_id
+            return True
+
+        def monotonic():
+            clock["value"] += 0.1
+            return clock["value"]
 
         fake_core = types.ModuleType("kwin_mcp.core")
         fake_core.AutomationEngine = lambda: engine
@@ -109,16 +141,16 @@ class LiveOwnerTests(unittest.TestCase):
         fake_pkg.core = fake_core
         with tempfile.TemporaryDirectory() as folder, \
              patch.dict(sys.modules, {"kwin_mcp": fake_pkg, "kwin_mcp.core": fake_core}), \
-             patch.object(live_desktop_probe, "_active_row", return_value=engine.windows[0]), \
-             patch.object(live_desktop_probe, "_window_rows", side_effect=lambda _engine: list(engine.windows)), \
-             patch.object(live_desktop_probe, "_raw_window_rows", return_value=[{"id": "owned", "pid": 99999}]), \
              patch.object(live_desktop_probe, "_a11y_flags", return_value=dict(flags)), \
              patch.object(live_desktop_probe, "_a11y_address", return_value="session-bus"), \
              patch.object(live_desktop_probe, "_set_a11y_flags_at", side_effect=set_flags), \
-             patch.object(live_desktop_probe, "_restore_exact", return_value=True):
+             patch("jevdesktop.native_windows.collect_windows", side_effect=rows_with_wrong_owner_pid), \
+             patch("jevdesktop.native_windows.activate_window_id", side_effect=activate), \
+             patch.object(desktop_worker.time, "monotonic", side_effect=monotonic), \
+             patch.object(desktop_worker.time, "sleep"):
             worker = desktop_worker.Worker()
             journal = Path(folder) / "live.json"
-            with self.assertRaisesRegex(ValueError, "live_app_not_owned"):
+            with self.assertRaisesRegex(ValueError, "live_app_window_unavailable"):
                 worker.start("kate", str(journal), "live", temporary_a11y=True)
             # A Kate launch must keep the window in the process whose PID the
             # owner tracks; Kate otherwise detaches by default.
@@ -213,29 +245,36 @@ class LiveOwnerTests(unittest.TestCase):
                 child.kill()
                 child.wait()
 
-    def test_live_mode_requires_owner_presence_and_temporary_a11y_opt_ins(self):
+    def test_live_mode_requires_owner_presence_and_only_requires_a11y_for_semantics(self):
         with tempfile.TemporaryDirectory() as folder:
-            worker = DesktopService(Path(folder) / "audit.jsonl", allowed_apps={"kate"})
+            worker = DesktopService(Path(folder) / "audit.jsonl", allowed_apps={"kate"},
+                                    worker_factory=FakeWorker)
             try:
                 missing_owner = worker.dispatch("session_start", {"app": "kate", "desktop_mode": "live"})
                 self.assertEqual(missing_owner["error"]["code"], "owner_present_override_required")
                 missing_a11y = worker.dispatch("session_start", {"app": "kate", "desktop_mode": "live",
-                    "owner_present_override": True})
+                    "owner_present_override": True, "semantic_candidates": True})
                 self.assertEqual(missing_a11y["error"]["code"], "live_temporary_a11y_required")
                 self.assertIsNone(worker._session)
+                screenshot_only = worker.dispatch("session_start", {"app": "kate", "desktop_mode": "live",
+                    "owner_present_override": True})
+                self.assertTrue(screenshot_only["ok"], screenshot_only)
             finally:
                 worker.close()
 
-    def test_live_action_reports_focus_restore_failure_and_releases_task_lock(self):
+    def test_live_focus_is_retained_between_calls_and_restored_when_session_stops(self):
         with tempfile.TemporaryDirectory() as folder:
             fake = _LiveFakeWorker()
             service = DesktopService(Path(folder) / "audit.jsonl", allowed_apps={"kate"},
                                     worker_factory=lambda: fake)
             try:
                 started = service.dispatch("session_start", {"app": "kate", "desktop_mode": "live",
-                    "owner_present_override": True, "temporary_a11y": True})
+                    "owner_present_override": True, "temporary_a11y": True,
+                    "semantic_candidates": True})
                 self.assertTrue(started["ok"], started)
-                candidate = service.dispatch("candidates", {"app": "kate"})["candidates"][0]
+                candidates = service.dispatch("candidates", {"app": "kate"})
+                self.assertTrue(candidates["ok"], candidates)
+                candidate = candidates["candidates"][0]
                 session = service._session
                 session.adapter.capture = lambda *args, **kwargs: types.SimpleNamespace(capture_id="capture")
                 session.adapter.observe = lambda *args, **kwargs: types.SimpleNamespace(
@@ -245,18 +284,16 @@ class LiveOwnerTests(unittest.TestCase):
                 acted = service.dispatch("act", {"app": "kate", "action": "type_text",
                     "target_ref": candidate["ref"], "text": "verified text",
                     "verification": "target_text", "expected": "verified text"})
-                self.assertFalse(acted["ok"])
-                self.assertEqual(acted["error"]["code"], "live_focus_restore_failed")
-                self.assertEqual(fake.live_calls, [
-                    "focus", "restore",  # candidates
-                    "focus", "restore",  # screenshot observation
-                    "focus", "restore",  # action
-                ])
+                self.assertTrue(acted["ok"], acted)
+                self.assertEqual(fake.live_calls, ["focus", "focus", "focus"])
                 self.assertFalse(service._session.busy.locked())
                 records = [json.loads(line) for line in (Path(folder) / "audit.jsonl").read_text().splitlines()]
                 owner_records = [row for row in records if "desktop_mode" in row]
                 self.assertTrue(owner_records)
                 self.assertTrue(all(row["desktop_mode"] == "live" for row in owner_records))
+                stopped = service.dispatch("session_stop", {"app": "kate"})
+                self.assertTrue(stopped["ok"], stopped)
+                self.assertEqual(fake.live_calls, ["focus", "focus", "focus", "restore"])
             finally:
                 service.close()
 

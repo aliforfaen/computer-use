@@ -2,8 +2,10 @@
 
 Runs as its own process and talks to the owner over the same private Unix
 socket as the CLI and MCP clients. It never reads or writes session state, and
-it cannot pre-authorize a live task: starting a physical-desktop task always
-needs the owner's explicit confirmation in a dialog for that one task.
+live starts use either per-task owner confirmation or the owner's explicitly
+saved local-tray policy to supply the required owner-present override. Temporary
+accessibility is requested only when live semantic candidates are enabled. Other
+clients must supply their own required live authorization fields.
 
 Settings live in ``~/.config/jev-desktop/tray.json`` (0600). The desktop-mode
 entry is a *preference* for tray-started tasks, never an authorization.
@@ -38,8 +40,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "desktop_mode": MODE_VIRTUAL,
     "autonomy_mode": "guarded",
     "poll_seconds": 3.0,
-    "confirm_kill_switch": True,
-    "confirm_cleanup": True,
+    "confirm_kill_switch": False,
+    "confirm_cleanup": False,
+    "confirm_live_task": True,
+    "semantic_candidates_live": False,
 }
 
 
@@ -66,6 +70,10 @@ def load_settings(path: Path) -> dict[str, Any]:
     for key in ("confirm_kill_switch", "confirm_cleanup"):
         if isinstance(data.get(key), bool):
             settings[key] = data[key]
+    if isinstance(data.get("confirm_live_task"), bool):
+        settings["confirm_live_task"] = data["confirm_live_task"]
+    if isinstance(data.get("semantic_candidates_live"), bool):
+        settings["semantic_candidates_live"] = data["semantic_candidates_live"]
     return settings
 
 
@@ -73,6 +81,9 @@ def save_settings(path: Path, settings: dict[str, Any]) -> None:
     validated = dict(DEFAULT_SETTINGS)
     validated.update({key: value for key, value in settings.items() if key in DEFAULT_SETTINGS})
     if validated["desktop_mode"] not in VALID_MODES or validated["autonomy_mode"] not in VALID_AUTONOMY:
+        raise ValueError("invalid_tray_settings")
+    if any(type(validated[key]) is not bool for key in
+           ("confirm_kill_switch", "confirm_cleanup", "confirm_live_task", "semantic_candidates_live")):
         raise ValueError("invalid_tray_settings")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
@@ -166,6 +177,7 @@ class DesktopTray:
         self.service_state: tuple[str, str] = ("unknown", "unknown")
         self.owner_state = "unknown"
         self.error: str | None = None
+        self.notice: str | None = None
         self._syncing = False
         self._ipc_lock = threading.Lock()
         self._stop = threading.Event()
@@ -240,6 +252,10 @@ class DesktopTray:
         self.start_root.set_submenu(self.start_menu)
         menu.append(self.start_root)
 
+        self.item_attach = gtk.MenuItem(label="Attach live window…")
+        self.item_attach.connect("activate", self._on_attach)
+        menu.append(self.item_attach)
+
         self.item_cleanup = gtk.MenuItem(label="Clean up session and owned apps")
         self.item_cleanup.connect("activate", self._on_cleanup)
         menu.append(self.item_cleanup)
@@ -259,6 +275,10 @@ class DesktopTray:
         service_root.set_submenu(service_menu)
         menu.append(service_root)
         menu.append(gtk.SeparatorMenuItem())
+
+        self.item_forwards = gtk.MenuItem(label="SSH forwards…")
+        self.item_forwards.connect("activate", self._on_forwards)
+        menu.append(self.item_forwards)
 
         self.item_settings = gtk.MenuItem(label="Settings…")
         self.item_settings.connect("activate", self._on_settings)
@@ -331,10 +351,14 @@ class DesktopTray:
             self.item_session.set_label(f"Session: {self._session_summary(session)}")
             self.item_cleanup.set_sensitive(True)
             self.start_root.set_sensitive(False)
+            self.item_attach.set_sensitive(False)
         else:
-            self.item_session.set_label("Session: none")
+            notice_suffix = f" · {self.notice}" if self.notice else ""
+            self.item_session.set_label(f"Session: none{notice_suffix}")
             self.item_cleanup.set_sensitive(self.owner_state == "running")
             self.start_root.set_sensitive(self.owner_state == "running" and bool(
+                (self.capabilities or {}).get("allowed_apps")))
+            self.item_attach.set_sensitive(self.owner_state == "running" and bool(
                 (self.capabilities or {}).get("allowed_apps")))
         active, enabled = self.service_state
         if active == "unavailable":
@@ -404,19 +428,33 @@ class DesktopTray:
         self.settings["desktop_mode"] = mode
         self._persist_settings()
         if mode == MODE_LIVE:
-            self._inform("Physical desktop selected",
-                         "A live task is only started after you confirm, in the dialog, that you are "
-                         "present and that temporary accessibility is allowed for that one task.")
+            if self.settings["confirm_live_task"]:
+                policy = ("Each live start asks you to confirm owner presence. "
+                          "Temporary accessibility is requested only when live semantic candidates are enabled.")
+            else:
+                policy = ("Physical presence is not detected; the saved tray policy supplies the required "
+                          "owner-present override. Temporary accessibility is requested only when live "
+                          "semantic candidates are enabled.")
+            self._inform("Physical desktop selected", policy)
         self._refresh_labels()
 
     def _on_start(self, item: Any, app: str) -> None:
         mode = self.settings["desktop_mode"]
+        self.notice = None
         params: dict[str, Any] = {"app": app, "mode": self.settings["autonomy_mode"], "desktop_mode": mode}
-        if mode == MODE_LIVE:
-            if not self._confirm_live(app):
+        if mode == MODE_VIRTUAL:
+            params["semantic_candidates"] = True
+        else:
+            semantics = bool(self.settings["semantic_candidates_live"])
+            if self.settings["confirm_live_task"] and not self._confirm_live(app, semantics):
                 return
-            params.update(owner_present_override=True, temporary_a11y=True)
+            params.update(owner_present_override=True, semantic_candidates=semantics)
+            if semantics:
+                params["temporary_a11y"] = True
 
+        self._submit_start(params)
+
+    def _submit_start(self, params: dict[str, Any]) -> None:
         def done(ok: bool, value: Any) -> None:
             if ok:
                 self.status = value
@@ -428,6 +466,78 @@ class DesktopTray:
 
         self._async(lambda: self.call("session_start", params), done)
 
+    def _on_attach(self, item: Any) -> None:
+        """Discover windows read-only, then attach only to a selected allowed window."""
+        def work() -> tuple[dict[str, Any], dict[str, Any]]:
+            profiles = self.call("profiles", timeout=10.0)
+            workspace = self.call("workspace", timeout=20.0)
+            return profiles, workspace
+
+        def done(ok: bool, value: Any) -> None:
+            if not ok:
+                self.error = str(value)
+                self._inform("Could not discover live windows", str(value))
+                self._refresh_labels()
+                return
+            profiles, workspace = value
+            selected = self._choose_attach_window(profiles, workspace)
+            if selected is None:
+                return
+            app, window_id = selected
+            semantics = bool(self.settings["semantic_candidates_live"])
+            if self.settings["confirm_live_task"] and not self._confirm_live(app, semantics):
+                return
+            params: dict[str, Any] = {
+                "app": app, "mode": self.settings["autonomy_mode"], "desktop_mode": MODE_LIVE,
+                "attach": True, "window_id": window_id, "owner_present_override": True,
+                "semantic_candidates": semantics,
+            }
+            if semantics:
+                params["temporary_a11y"] = True
+            self.notice = None
+            self._submit_start(params)
+
+        self._async(work, done)
+
+    def _choose_attach_window(self, profiles: dict[str, Any],
+                              workspace: dict[str, Any]) -> tuple[str, str] | None:
+        """Show only windows the owner allowlist maps to an exact configured profile."""
+        profile_rows = profiles.get("profiles", []) if isinstance(profiles, dict) else []
+        allowed_profiles = {row.get("id") for row in profile_rows
+                            if isinstance(row, dict) and row.get("allowed") is True
+                            and isinstance(row.get("id"), str)}
+        window_rows = workspace.get("windows", []) if isinstance(workspace, dict) else []
+        choices = [row for row in window_rows if isinstance(row, dict)
+                   and row.get("allowed") is True and row.get("profile_id") in allowed_profiles
+                   and isinstance(row.get("id"), str) and row.get("id")]
+        if not choices:
+            self._inform("No allowed live windows", "No current window matches an allowed app profile.")
+            return None
+        gtk = self.gtk
+        dialog = gtk.Dialog(title="Attach to live window")
+        dialog.add_buttons("Cancel", gtk.ResponseType.CANCEL, "Attach", gtk.ResponseType.OK)
+        area = dialog.get_content_area()
+        area.set_spacing(8)
+        area.add(gtk.Label(label="Window discovery does not change focus. Select the exact existing window to attach."))
+        chooser = gtk.ComboBoxText()
+        by_id: dict[str, dict[str, Any]] = {}
+        for row in choices:
+            window_id = row["id"]
+            app = row["profile_id"]
+            caption = row.get("caption") or "(title hidden)"
+            chooser.append(window_id, f"{app} · {caption} · {window_id}")
+            by_id[window_id] = row
+        chooser.set_active(0)
+        area.add(chooser)
+        dialog.show_all()
+        response = dialog.run()
+        window_id = chooser.get_active_id()
+        dialog.destroy()
+        row = by_id.get(window_id) if response == gtk.ResponseType.OK else None
+        if row is None:
+            return None
+        return row["profile_id"], row["id"]
+
     def _on_cleanup(self, item: Any) -> None:
         if self.settings["confirm_cleanup"] and not self._confirm(
                 "Stop the active session and close its owned app?",
@@ -437,12 +547,13 @@ class DesktopTray:
         def done(ok: bool, value: Any) -> None:
             if ok:
                 cleanup = value.get("cleanup") if isinstance(value, dict) else None
-                detail = f"Cleanup: {cleanup}" if cleanup else "Cleanup reported without a confirmation field."
-                self._inform("Desktop cleaned up" if cleanup == "confirmed" else "Cleanup unconfirmed", detail)
+                self.notice = (f"cleanup {cleanup}" if cleanup else
+                               "cleanup reported without confirmation")
             else:
                 self.error = str(value)
-                self._inform("Cleanup failed", str(value))
+                self.notice = f"cleanup failed: {str(value)[:40]}"
             self._poll_once()
+            self._refresh_labels()
 
         self._async(lambda: self.call("stop_all"), done)
 
@@ -505,6 +616,279 @@ class DesktopTray:
 
         self._async(work, done)
 
+    def _on_forwards(self, item: Any) -> None:
+        from jevdesktop.ssh_forwards import SSHForwardManager
+
+        manager = SSHForwardManager()
+        gtk = self.gtk
+        dialog = gtk.Dialog(title="Named SSH forwards")
+        dialog.add_buttons("Close", gtk.ResponseType.CLOSE)
+        dialog.set_default_size(520, 360)
+        area = dialog.get_content_area()
+        area.set_spacing(8)
+        selector = gtk.ComboBoxText()
+        area.add(selector)
+        detail = gtk.Label(label="No forwards configured")
+        detail.set_xalign(0)
+        detail.set_selectable(True)
+        area.add(detail)
+        area.add(gtk.Label(label=("Local TCP listener reachability is checked; MCP endpoint health is not probed. "
+                                 "Reverse forward URLs are on the SSH host.")))
+        settings_button = gtk.Button(label="Settings…")
+        area.add(settings_button)
+        status = gtk.Label(label="")
+        status.set_xalign(0)
+        area.add(status)
+        actions = gtk.Grid(column_spacing=6, row_spacing=6)
+        area.add(actions)
+        entries: dict[str, Any] = {}
+        action_buttons: dict[str, Any] = {}
+        busy = False
+        checking = False
+        action_error: str | None = None
+
+        def selected_name() -> str | None:
+            return selector.get_active_id()
+
+        def load_entries() -> None:
+            nonlocal entries
+            previous = selected_name()
+            try:
+                entries = {forward.name: forward for forward in manager.list()}
+            except Exception as exc:
+                entries = {}
+                status.set_text(str(exc))
+            selector.remove_all()
+            for name in sorted(entries):
+                selector.append(name, name)
+            if previous in entries:
+                selector.set_active_id(previous)
+            elif entries:
+                selector.set_active(0)
+            else:
+                detail.set_text("No forwards configured")
+                status.set_text("")
+            update_selection()
+
+        def update_selection(*_args: Any) -> None:
+            nonlocal checking
+            name = selected_name()
+            if not name or name not in entries:
+                detail.set_text("No forwards configured")
+                status.set_text("")
+                for key, button in action_buttons.items():
+                    if key != "add-form":
+                        button.set_sensitive(False)
+                return
+            forward = entries[name]
+            source_port = (forward.local_port if forward.direction == "local"
+                           else forward.forwarded_port)
+            url_scope = "local" if forward.direction == "local" else f"on {forward.ssh_host}"
+            detail.set_text(f"{forward.direction} · {forward.ssh_host} · {forward.endpoint} → "
+                            f"http://127.0.0.1:{source_port}{forward.endpoint_path} ({url_scope})")
+            for key, button in action_buttons.items():
+                if key != "add-form":
+                    button.set_sensitive(False)
+            status.set_text("Checking systemd status…")
+            if checking:
+                return
+            checking = True
+
+            def got_snapshot(ok: bool, value: Any) -> None:
+                nonlocal checking
+                checking = False
+                if not dialog.get_visible() or selected_name() != name:
+                    return
+                if not ok:
+                    status.set_text(str(value))
+                    return
+                state = next((item for item in value.get("forwards", [])
+                              if item.get("name") == name), None)
+                if state is None:
+                    status.set_text(str(value.get("config_error") or "Forward status unavailable"))
+                    return
+                active_state = state.get("process_active")
+                active = "running" if active_state is True else "stopped" if active_state is False else "unknown state"
+                enabled_state = state.get("enabled_state")
+                enabled = ("enabled at login" if enabled_state == "enabled" else
+                           "disabled at login" if enabled_state == "disabled" else
+                           "login enablement unknown")
+                listener = state.get("local_listener_reachable")
+                listener_text = (" · local listener reachable" if listener is True else
+                                 " · local listener unavailable" if listener is False else "")
+                error_suffix = f" · Last action failed: {action_error}" if action_error else ""
+                diagnostic = state.get("last_error")
+                diagnostic_suffix = f" · {diagnostic}" if diagnostic else ""
+                checked = state.get("checked_at", "unknown")
+                status.set_text(f"{active} · {enabled}{listener_text} · MCP health not checked · checked {checked}{diagnostic_suffix}{error_suffix}")
+                installed = state.get("installed") is True
+                action_buttons["edit-form"].set_sensitive(active_state is False and not installed)
+                action_buttons["install"].set_sensitive(active_state is False and not installed)
+                action_buttons["start"].set_sensitive(installed and active_state is False)
+                action_buttons["stop"].set_sensitive(active_state is True)
+                action_buttons["enable"].set_sensitive(installed and state.get("enabled") is False)
+                action_buttons["disable"].set_sensitive(installed and state.get("enabled") is True)
+                known_inactive = active_state is False and (not installed or enabled_state in ("enabled", "disabled"))
+                action_buttons["remove"].set_sensitive(known_inactive)
+                action_buttons["uninstall"].set_sensitive(installed and known_inactive)
+
+            self._async(manager.snapshot, got_snapshot)
+
+        def periodic_forward_refresh() -> bool:
+            if not dialog.get_visible():
+                return False
+            if selected_name() and not checking and not busy:
+                update_selection()
+            return True
+
+        def finish_action(ok: bool, value: Any) -> None:
+            nonlocal busy, action_error
+            busy = False
+            for button in buttons:
+                button.set_sensitive(True)
+            action_ok = ok and not (isinstance(value, dict) and value.get("ok") is False)
+            if action_ok:
+                action_error = None
+                status.set_text(str(value.get("error") or value.get("stdout") or "Done")
+                                if isinstance(value, dict) else "Done")
+                load_entries()
+            else:
+                action_error = (str(value.get("error") or value.get("stderr") or value)
+                                if isinstance(value, dict) else str(value))
+                update_selection()
+
+        def run_action(action: str) -> None:
+            nonlocal busy
+            name = selected_name()
+            if busy or not name:
+                return
+            busy = True
+            for button in buttons:
+                button.set_sensitive(False)
+            progress = {"install": "Installing", "start": "Starting", "stop": "Stopping",
+                        "enable": "Enabling", "disable": "Disabling", "uninstall": "Uninstalling",
+                        "remove": "Removing"}.get(action, action.title())
+            status.set_text(f"{progress} {name}…")
+
+            def work() -> Any:
+                return getattr(manager, action)(name)
+
+            self._async(work, finish_action)
+
+        def show_form(existing: Any | None = None) -> None:
+            nonlocal busy
+            form = gtk.Dialog(title="Edit SSH forward" if existing else "Add SSH forward",
+                              transient_for=dialog, modal=True)
+            form.add_buttons("Cancel", gtk.ResponseType.CANCEL, "Save", gtk.ResponseType.OK)
+            body = form.get_content_area()
+            grid = gtk.Grid(column_spacing=10, row_spacing=6)
+            body.add(grid)
+            fields = {
+                "name": gtk.Entry(), "ssh_host": gtk.Entry(),
+                "direction": gtk.ComboBoxText(), "local_port": gtk.Entry(),
+                "forwarded_port": gtk.Entry(), "endpoint": gtk.Entry(),
+                "endpoint_path": gtk.Entry(), "ssh_config": gtk.Entry(),
+            }
+            fields["direction"].append("local", "Local forward")
+            fields["direction"].append("reverse", "Reverse forward")
+            values = {
+                "name": existing.name if existing else "",
+                "ssh_host": existing.ssh_host if existing else "",
+                "direction": existing.direction if existing else "local",
+                "local_port": str(existing.local_port or "") if existing else "",
+                "forwarded_port": str(existing.forwarded_port or "") if existing else "",
+                "endpoint": existing.endpoint if existing else "",
+                "endpoint_path": existing.endpoint_path if existing else "/mcp",
+                "ssh_config": existing.ssh_config or "" if existing else "",
+            }
+            labels = (("Name", "name"), ("SSH host or alias", "ssh_host"),
+                      ("Direction", "direction"), ("Local port (local only)", "local_port"),
+                      ("Remote port (reverse only)", "forwarded_port"),
+                      ("Endpoint host:port", "endpoint"), ("Endpoint URL path", "endpoint_path"),
+                      ("OpenSSH config path (optional)", "ssh_config"))
+            for row, (label, key) in enumerate(labels):
+                grid.attach(gtk.Label(label=label), 0, row, 1, 1)
+                grid.attach(fields[key], 1, row, 1, 1)
+                if key == "direction":
+                    fields[key].set_active_id(values[key])
+                else:
+                    fields[key].set_text(values[key])
+            if existing:
+                fields["name"].set_editable(False)
+            form.show_all()
+            response = form.run()
+            if response == gtk.ResponseType.OK:
+                direction = fields["direction"].get_active_id()
+                entry = {
+                    "name": fields["name"].get_text().strip(),
+                    "ssh_host": fields["ssh_host"].get_text().strip(),
+                    "direction": direction,
+                    "endpoint": fields["endpoint"].get_text().strip(),
+                    "endpoint_path": fields["endpoint_path"].get_text().strip(),
+                    "ssh_config": fields["ssh_config"].get_text().strip() or None,
+                    "local_port": None,
+                    "forwarded_port": None,
+                }
+                port_field = "local_port" if direction == "local" else "forwarded_port"
+                port_text = fields[port_field].get_text().strip()
+                try:
+                    entry[port_field] = int(port_text)
+                except Exception as exc:
+                    self._inform("Could not save SSH forward", str(exc))
+                else:
+                    busy = True
+                    for button in buttons:
+                        button.set_sensitive(False)
+                    status.set_text("Saving…")
+                    operation = (lambda: manager.edit(existing.name, entry)) if existing else (
+                        lambda: manager.add(entry))
+                    self._async(operation, finish_action)
+            form.destroy()
+
+        def open_forward_settings(*_args: Any) -> None:
+            config = manager.config
+            target = config if config.is_file() else config.parent
+
+            def work() -> str:
+                subprocess.run(["xdg-open", str(target)], check=True,
+                               capture_output=True, timeout=20)
+                return str(target)
+
+            def done(ok: bool, value: Any) -> None:
+                status.set_text(str(value) if ok else f"Could not open settings: {value}")
+
+            self._async(work, done)
+
+        settings_button.connect("clicked", open_forward_settings)
+
+        buttons = []
+        for index, (label, action) in enumerate((
+                ("Add…", "add-form"), ("Edit…", "edit-form"), ("Remove", "remove"),
+                ("Install unit", "install"), ("Start", "start"), ("Stop", "stop"),
+                ("Enable at login", "enable"), ("Disable at login", "disable"),
+                ("Uninstall unit", "uninstall"))):
+            button = gtk.Button(label=label)
+            buttons.append(button)
+            action_buttons[action] = button
+            if action == "add-form":
+                button.connect("clicked", lambda *_: show_form())
+            elif action == "edit-form":
+                button.connect("clicked", lambda *_: show_form(entries.get(selected_name())))
+            else:
+                button.connect("clicked", lambda _button, operation=action: run_action(operation))
+            actions.attach(button, index % 3, index // 3, 1, 1)
+
+        selector.connect("changed", update_selection)
+        for key, button in action_buttons.items():
+            if key != "add-form":
+                button.set_sensitive(False)
+        dialog.show_all()
+        load_entries()
+        refresh_source = self.glib.timeout_add_seconds(5, periodic_forward_refresh)
+        dialog.run()
+        self.glib.source_remove(refresh_source)
+        dialog.destroy()
+
     def _persist_settings(self) -> bool:
         try:
             save_settings(self.settings_path, self.settings)
@@ -535,17 +919,29 @@ class DesktopTray:
         confirm_kill.set_active(bool(self.settings["confirm_kill_switch"]))
         confirm_cleanup = gtk.CheckButton(label="Confirm session cleanup")
         confirm_cleanup.set_active(bool(self.settings["confirm_cleanup"]))
+        confirm_live = gtk.CheckButton(label="Ask before each tray-started live task")
+        confirm_live.set_active(bool(self.settings["confirm_live_task"]))
+        semantic_live = gtk.CheckButton(label="Enable live AT-SPI semantic candidates")
+        semantic_live.set_active(bool(self.settings["semantic_candidates_live"]))
 
         for row, (label, widget) in enumerate((
                 ("Autonomy for tray-started tasks", autonomy),
                 ("Desktop mode preference", desktop),
                 ("Status refresh seconds", poll),
                 ("", confirm_kill),
-                ("", confirm_cleanup))):
+                ("", confirm_cleanup),
+                ("", confirm_live),
+                ("", semantic_live))):
             if label:
                 grid.attach(gtk.Label(label=label), 0, row, 1, 1)
             grid.attach(widget, 1, row, 1, 1)
-        area.add(gtk.Label(label="Live tasks always require a per-task confirmation dialog."))
+        forwards = gtk.Button(label="Manage SSH forwards…")
+        forwards.connect("clicked", self._on_forwards)
+        area.add(forwards)
+        area.add(gtk.Label(label=("The host cannot detect physical presence. Unchecking this prompt saves "
+                                 "a tray policy that supplies the owner-present override. Live semantic "
+                                 "candidates default off; enabling them may request temporary accessibility. "
+                                 "Other clients must still send their own required live authorization fields.")))
         dialog.show_all()
         response = dialog.run()
         if response == gtk.ResponseType.OK:
@@ -554,7 +950,9 @@ class DesktopTray:
                 desktop_mode=VALID_MODES[desktop.get_active()],
                 poll_seconds=float(poll.get_value()),
                 confirm_kill_switch=bool(confirm_kill.get_active()),
-                confirm_cleanup=bool(confirm_cleanup.get_active()))
+                confirm_cleanup=bool(confirm_cleanup.get_active()),
+                confirm_live_task=bool(confirm_live.get_active()),
+                semantic_candidates_live=bool(semantic_live.get_active()))
             self._persist_settings()
         dialog.destroy()
         self._refresh_labels()
@@ -579,7 +977,7 @@ class DesktopTray:
         dialog.run()
         dialog.destroy()
 
-    def _confirm_live(self, app: str) -> bool:
+    def _confirm_live(self, app: str, semantic_candidates: bool = False) -> bool:
         gtk = self.gtk
         dialog = gtk.Dialog(title="Physical desktop task")
         dialog.add_buttons("Cancel", gtk.ResponseType.CANCEL, f"Start {app} live", gtk.ResponseType.OK)
@@ -587,13 +985,17 @@ class DesktopTray:
         area.set_spacing(8)
         area.add(gtk.Label(label=f"Starting {app} on the physical desktop types into your live session."))
         present = gtk.CheckButton(label="The owner is present and watching this task")
-        a11y = gtk.CheckButton(label="Allow temporary accessibility for this task only")
         area.add(present)
-        area.add(a11y)
-        area.add(gtk.Label(label="Focus is restored after every call; the owned app is closed on cleanup."))
+        a11y = None
+        if semantic_candidates:
+            a11y = gtk.CheckButton(label="Allow temporary accessibility for this task only")
+            area.add(a11y)
+        area.add(gtk.Label(label=("The task window remains in the foreground between calls. Original focus is "
+                                  "restored when the session stops. An attached app remains open.")))
         dialog.show_all()
         response = dialog.run()
-        confirmed = (response == gtk.ResponseType.OK and present.get_active() and a11y.get_active())
+        confirmed = (response == gtk.ResponseType.OK and present.get_active()
+                     and (a11y is None or a11y.get_active()))
         dialog.destroy()
         return confirmed
 

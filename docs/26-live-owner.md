@@ -1,5 +1,10 @@
 # 26 — Live desktop capability and owner-watched check
 
+> **Current follow-up (2026-10-25):** see [doc 40](40-live-workspace-and-profiles.md)
+> and [HANDOFF](HANDOFF.md). The dated implementation/evidence below predates
+> live attachment, foreground-between-calls policy, opt-in semantics and
+> capture-grounded input. Historical statements are not the current contract.
+
 ## Capability findings — 2026-10-02
 
 Read-only checks on `cachy` report KWin **6.7.5** and the checkout's pinned

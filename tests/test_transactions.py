@@ -242,8 +242,13 @@ class TransactionTests(unittest.TestCase):
         self.backend.tree = [button(), button(x=130)]
         duplicate = self.engine.observe("s-test", "kate")
         self.assertEqual(len(duplicate.candidates), 2)
-        self.assertTrue(all(c.unavailable_reason == "target_ambiguous" and not c.actions
+        self.assertTrue(all(c.unavailable_reason is None and c.actions == ("click",)
                             for c in duplicate.candidates))
+
+        self.backend.tree = [button(), button()]
+        identical = self.engine.observe("s-test", "kate")
+        self.assertTrue(all(c.unavailable_reason == "target_ambiguous" and not c.actions
+                            for c in identical.candidates))
 
         self.backend.tree = [button()]
         inactive = self.engine.observe("s-test", "kate")
@@ -260,6 +265,49 @@ class TransactionTests(unittest.TestCase):
             self.engine.observe("s-test", "kate")
         self.engine.reset_session("s-test")
         self.assertEqual(len(self.engine.observe("s-test", "kate").candidates), 1)
+
+    def test_reconcile_requires_ack_and_active_fresh_inspection_without_replay(self):
+        snap = self._snapshot_button()
+        with self.assertRaisesRegex(TransactionError, "verification_failed"):
+            self._act_click(snap, lambda _snap: Verification(False))
+        self.assertEqual(len(self.backend.clicks), 1)
+        with self.assertRaisesRegex(TransactionError, "uncertain_outcome_ack_required"):
+            self.engine.reconcile("s-test", "kate")
+        self.backend.is_active = False
+        with self.assertRaisesRegex(TransactionError, "target_window_not_active"):
+            self.engine.reconcile("s-test", "kate", acknowledge_uncertain=True)
+        self.assertEqual(len(self.backend.clicks), 1)
+        self.backend.is_active = True
+        inspection = self.engine.reconcile("s-test", "kate", acknowledge_uncertain=True)
+        self.assertEqual(inspection["previous_block"], "verification_failed")
+        self.assertEqual(inspection["snapshot"].window_id, "17")
+        self.assertEqual(len(self.backend.clicks), 1)
+        self.assertEqual(len(self.engine.observe("s-test", "kate").candidates), 1)
+
+    def test_custom_profile_app_ids_and_screenshot_only_accessibility_fallback(self):
+        from jevdesktop.app_profiles import AppProfile
+
+        self.backend.app = "writer.desktop"
+        self.backend.tree = [button()]
+        profile = AppProfile("writer", ("writer",), ("writer.desktop",), "writer")
+        engine = TransactionEngine(
+            self.backend, audit=AuditLog(self.audit_path),
+            policy=Policy(allowed_apps=frozenset({"writer"})),
+            profiles={"writer": profile},
+        )
+        self.assertEqual(engine.observe("writer-session", "writer").window_app, "writer.desktop")
+
+        class NoAccessibility(FakeBackend):
+            def accessibility_elements(self, _app):
+                raise RuntimeError("AT-SPI not available")
+
+        no_a11y = NoAccessibility()
+        screenshot_only = TransactionEngine(
+            no_a11y, audit=AuditLog(self.audit_path),
+            policy=Policy(allowed_apps=frozenset({"kate"})), allow_empty_accessibility=True,
+        )
+        snapshot = screenshot_only.observe("screenshot-session", "kate")
+        self.assertEqual(snapshot.candidates, ())
 
     def test_cancel_before_input_and_post_input_cancel(self):
         snap = self._snapshot_button()
@@ -302,6 +350,37 @@ class TransactionTests(unittest.TestCase):
             self.engine.observe("other-session", "kate")
         with self.assertRaisesRegex(TransactionError, "verifier_contract_invalid"):
             self._act_click(snap, lambda _: Verification("false"))
+
+    def test_callable_verifier_returning_none_is_contract_failure(self):
+        snap = self._snapshot_button()
+        with self.assertRaisesRegex(TransactionError, "verifier_contract_invalid"):
+            self._act_click(snap, lambda _after: None)
+        self.assertEqual(len(self.backend.clicks), 1)
+        with self.assertRaisesRegex(TransactionError, "session_requires_reset"):
+            self.engine.observe("s-test", "kate")
+
+    def test_no_verifier_reports_uncertain_effect_and_audits_fresh_observation(self):
+        snap = self._snapshot_button()
+        result = self.engine.act("s-test", "kate", Action("click", snap.candidates[0].ref), verifier=None)
+        self.assertEqual((result.status, result.verification, result.reason),
+                         ("observed", "unavailable", "effect_uncertain"))
+        self.assertIsNotNone(result.after)
+        self.assertEqual(len(self.backend.clicks), 1)
+        record = json.loads(self.audit_path.read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual(record["verification"], "unavailable")
+        self.assertEqual(record["evidence"], {"input_call_returned": True,
+                                               "fresh_post_action_observation": True,
+                                               "postcondition": None})
+
+    def test_named_shortcut_requires_currently_focused_target(self):
+        self.backend.tree = [editor(focused=True)]
+        snap = self.engine.observe("s-test", "kate")
+        target = snap.candidates[0]
+        self.assertIn("keyboard_shortcut", target.actions)
+        result = self.engine.act("s-test", "kate", Action("keyboard_shortcut", target.ref, key="ctrl+s"),
+                                 verifier=None)
+        self.assertEqual(result.status, "observed")
+        self.assertEqual(self.backend.keys, ["ctrl+s"])
 
     def test_audit_redacts_typed_text_evidence_and_errors(self):
         secret = "PERSONAL-POEM-DO-NOT-LOG"

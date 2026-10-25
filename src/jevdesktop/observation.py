@@ -16,6 +16,7 @@ from typing import Any, Mapping
 import io
 import copy
 
+from jevdesktop.app_profiles import AppProfile, ProfileError, profile_for as resolve_profile
 from jevdesktop.vision_reader import Reader, ReaderResult
 
 
@@ -165,7 +166,8 @@ class ObservationAdapter:
     """Capture one window from a virtual KWin session and observe that frame."""
 
     def __init__(self, engine: Any, session_id: str, *, store: CaptureStore | None = None,
-                 reader: Reader | None = None, allowed_apps: set[str] | frozenset[str] | None = None):
+                 reader: Reader | None = None, allowed_apps: set[str] | frozenset[str] | None = None,
+                 profiles: Mapping[str, AppProfile] | None = None):
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("session_id is required")
         self.engine = engine
@@ -173,6 +175,7 @@ class ObservationAdapter:
         self.store = store or CaptureStore()
         self.reader = reader
         self.allowed_apps = frozenset(value.casefold() for value in (allowed_apps or set()))
+        self.profiles = profiles
 
     @staticmethod
     def _read_windows(engine: Any) -> list[dict[str, Any]]:
@@ -188,22 +191,48 @@ class ObservationAdapter:
         return [item for item in response["result"] if isinstance(item, dict)]
 
     @staticmethod
-    def _app_matches(actual: Any, requested: str) -> bool:
+    def _app_matches(actual: Any, profile: AppProfile) -> bool:
         if not isinstance(actual, str):
             return False
         actual_norm = actual.casefold()
-        requested_norm = requested.casefold()
-        aliases = {"org.kde.kate": "kate", "org.mozilla.firefox": "firefox", "org.kde.kcalc": "kcalc"}
-        return actual_norm == requested_norm or aliases.get(actual_norm) == requested_norm
+        expected = {profile.id, profile.atspi_app, *profile.window_app_ids, *profile.aliases}
+        return actual_norm in {item.casefold() for item in expected}
+
+    def _profile_for(self, app: str) -> AppProfile:
+        resolver = getattr(self.engine, "profile_for", None)
+        raw = resolver(app) if callable(resolver) else getattr(self.engine, "profile", None)
+        if isinstance(raw, AppProfile):
+            return raw
+        if isinstance(raw, dict):
+            try:
+                return AppProfile(
+                    id=raw["id"], command=tuple(raw["command"]),
+                    window_app_ids=tuple(raw["window_app_ids"]),
+                    atspi_app=raw["atspi_app"], aliases=tuple(raw.get("aliases", ())),
+                )
+            except (KeyError, TypeError):
+                raise ObservationError("profile_invalid", "application profile is invalid") from None
+        try:
+            return resolve_profile(app, self.profiles)
+        except ProfileError as exc:
+            raise ObservationError(exc.code, "application profile is unavailable") from None
 
     def _resolve_window(self, app: str, title: str | None) -> dict[str, Any]:
         if not isinstance(app, str) or not app.strip():
             raise ObservationError("invalid_app", "app identity is required")
-        if app.casefold() not in self.allowed_apps:
+        profile = self._profile_for(app)
+        if profile.id.casefold() not in self.allowed_apps:
             raise ObservationError("app_not_allowed", "app is not in the configured allowlist")
         windows = self._read_windows(self.engine)
-        matches = [w for w in windows if self._app_matches(w.get("app"), app)
+        selected_window_id = (getattr(self.engine, "selected_window_id", None)
+                              or getattr(self.engine, "live_window_id", None))
+        selected_record = (getattr(self.engine, "selected_window", None)
+                           or getattr(self.engine, "live_window", None))
+        if selected_window_id is None and isinstance(selected_record, dict):
+            selected_window_id = selected_record.get("id")
+        matches = [w for w in windows if self._app_matches(w.get("app"), profile)
                    and isinstance(w.get("caption"), str)
+                   and (selected_window_id is None or w.get("id") == selected_window_id)
                    and (title is None or w["caption"] == title or w["caption"].startswith(title))]
         if len(matches) != 1:
             code = "window_not_found" if not matches else "window_ambiguous"
@@ -299,6 +328,7 @@ class ObservationAdapter:
             scope=scope,
             mapping=_freeze({"origin": {"x": 0, "y": 0}, "source_dimensions": {"width": width, "height": height},
                      "selected_rect": {"x": selected.x, "y": selected.y, "width": selected.width, "height": selected.height},
+                     "window_rect": {"x": frame.x, "y": frame.y, "width": frame.width, "height": frame.height},
                      "coordinate_basis": mapping_text}),
         )
         self.store.put(ref, image_bytes)
@@ -307,6 +337,7 @@ class ObservationAdapter:
     def capabilities(self) -> dict[str, Any]:
         return {"capture_scopes": ["app", "full", "crop"], "crop_requires_explicit_rect": True,
                 "virtual_mapping": "complete_1_to_1_only", "allowed_apps": sorted(self.allowed_apps),
+                "screenshot_only": True, "semantic_candidates": False,
                 "reader": self.reader.capabilities() if self.reader else None}
 
     @staticmethod

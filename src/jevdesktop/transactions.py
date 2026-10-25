@@ -19,23 +19,29 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Mapping, Protocol
 from urllib.parse import urlsplit
 
 from jevdesktop.audit_log import DEFAULT_ROTATION, AuditRotation, append_jsonl
+from jevdesktop.app_profiles import AppProfile, ProfileError, profile_for as resolve_profile
 
 
 _TREE_LINE = re.compile(
     r'^\s*- \[(?P<role>[^]]+)\] "(?P<name>(?:[^"\\]|\\.)*)"'
     r' \((?P<states>[^)]*)\)(?P<tail>.*)$'
 )
-_BOUNDS = re.compile(r'@ screen \((?P<x>\d+), (?P<y>\d+), (?P<w>\d+)x(?P<h>\d+)\)')
+_BOUNDS = re.compile(r'@ screen \((?P<x>-?\d+), (?P<y>-?\d+), (?P<w>\d+)x(?P<h>\d+)\)')
 _ACTIONS = re.compile(r'\[actions: (?P<actions>[^]]*)\]')
 _TEXT = re.compile(r"\btext='((?:[^'\\]|\\.)*)'")
 _ID = re.compile(r'^\s*id:\s*(?P<id>\S+)\s*$', re.MULTILINE)
 _APP = re.compile(r'^- (?P<app>\S+) "(?P<title>(?:[^"\\]|\\.)*)"(?P<active> \[active\])?$', re.MULTILINE)
 _CLIENT_RECT = re.compile(r'^\s*client:\s*\((?P<x>-?\d+), (?P<y>-?\d+), (?P<w>\d+)x(?P<h>\d+)\)\s*$', re.MULTILINE)
 _BROWSER_ADDRESS = re.compile(r"(address|location|search.*(web|address)|web.*search)", re.IGNORECASE)
+_CLICK_ACTIONS = frozenset({"click", "press", "activate", "select", "toggle"})
+SHORTCUT_KEYS = frozenset({
+    "ctrl+a", "ctrl+s", "ctrl+z", "ctrl+shift+z", "ctrl+f", "ctrl+tab",
+    "alt+left", "alt+right", "Escape", "Tab", "shift+Tab", "Return",
+})
 
 
 class TransactionError(RuntimeError):
@@ -97,6 +103,7 @@ class Action:
     text: str | None = field(default=None, repr=False)
     direction: str | None = None
     steps: int = 1
+    key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +121,12 @@ class ActionResult:
     before: Snapshot | None = None
     after: Snapshot | None = None
     evidence: Any = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class RecoveryInspection:
+    blocked_reason: str
+    snapshot: Snapshot
 
 
 @dataclass(frozen=True)
@@ -150,23 +163,24 @@ class KwinMcpBackend:
     def __init__(self, engine: Any):
         self.engine = engine
 
-    def _require_virtual(self) -> None:
+    def _require_supported_session(self) -> None:
         session = self.engine._get_session()
         info = getattr(session, "info", None)
         session_type = getattr(info, "session_type", None)
-        if getattr(session_type, "value", None) != "virtual":
-            raise TransactionError("virtual_session_required")
+        if getattr(session_type, "value", None) not in {"virtual", "live"}:
+            raise TransactionError("desktop_session_required")
 
     def accessibility_tree(self, app: str) -> str:
-        self._require_virtual()
+        self._require_supported_session()
         return self.engine.accessibility_tree(app_name=app, max_depth=20)
 
     def accessibility_elements(self, app: str) -> list[dict[str, Any]]:
         # kwin-mcp 0.10.0 has no public typed tree API. This private seam returns
         # the driver's own ElementInfo dataclass as dictionaries, including
         # active states, mapped bounds, and the capped Text-interface value.
-        self._require_virtual()
-        response = self.engine._run_atspi("find", query="", app_name=app)
+        self._require_supported_session()
+        profile = self.profile_for(app)
+        response = self.engine._run_atspi("find", query="", app_name=profile.atspi_app)
         if not isinstance(response, dict) or response.get("ok") is not True:
             raise TransactionError("atspi_query_failed")
         elements = response.get("result")
@@ -174,34 +188,53 @@ class KwinMcpBackend:
             raise TransactionError("atspi_response_invalid")
         return elements
 
+    def profile_for(self, app: str) -> AppProfile:
+        resolver = getattr(self.engine, "profile_for", None)
+        raw = resolver(app) if callable(resolver) else getattr(self.engine, "profile", None)
+        if isinstance(raw, AppProfile):
+            return raw
+        if isinstance(raw, dict):
+            try:
+                return AppProfile(
+                    id=raw["id"], command=tuple(raw["command"]),
+                    window_app_ids=tuple(raw["window_app_ids"]), atspi_app=raw["atspi_app"],
+                    aliases=tuple(raw.get("aliases", ())),
+                )
+            except (KeyError, TypeError):
+                raise TransactionError("profile_invalid") from None
+        try:
+            return resolve_profile(app)
+        except ProfileError as exc:
+            raise TransactionError(exc.code) from None
+
     def window_geometry(self, app: str) -> str:
-        self._require_virtual()
+        self._require_supported_session()
         return self.engine.window_geometry(app_name=app)
 
     def active_window(self) -> str:
-        self._require_virtual()
+        self._require_supported_session()
         return self.engine.active_window()
 
     def mouse_click(self, x: int, y: int, button: str = "left") -> Any:
-        self._require_virtual()
+        self._require_supported_session()
         return self.engine.mouse_click(x, y, button=button)
 
     def mouse_scroll(self, x: int, y: int, delta: int, *, steps: int = 1) -> Any:
-        self._require_virtual()
+        self._require_supported_session()
         return self.engine.mouse_scroll(x, y, delta, discrete=True, steps=steps)
 
     def keyboard_type(self, text: str) -> Any:
-        self._require_virtual()
+        self._require_supported_session()
         return self.engine.keyboard_type_unicode(text) if not text.isascii() else self.engine.keyboard_type(text)
 
     def keyboard_key(self, key: str) -> Any:
-        self._require_virtual()
-        if key not in {"Return", "ctrl+a"}:
+        self._require_supported_session()
+        if key not in SHORTCUT_KEYS and key != "Return":
             raise TransactionError("unsupported_key")
         return self.engine.keyboard_key(key)
 
     def document_key(self, operation: str) -> Any:
-        self._require_virtual()
+        self._require_supported_session()
         if operation not in {"select_all", "save"}:
             raise TransactionError("unsupported_document_operation")
         method = getattr(self.engine, "document_key", None)
@@ -210,7 +243,7 @@ class KwinMcpBackend:
         return method(operation)
 
     def document_bytes(self) -> bytes:
-        self._require_virtual()
+        self._require_supported_session()
         method = getattr(self.engine, "document_bytes", None)
         if not callable(method):
             raise TransactionError("document_unavailable")
@@ -231,8 +264,19 @@ class AuditLog:
         self.rotation = rotation
 
     def write(self, *, tool: str, app: str, mode: AutonomyMode, event: str, status: str, reason: str) -> None:
-        event = event if event in {"observe", "click", "type_text", "replace_document", "save_document",
-                                   "navigate_url", "scroll", "action"} else "action"
+        image_actions = {
+            "image_click": "click",
+            "image_double_click": "double_click",
+            "image_right_click": "right_click",
+            "image_keyboard_shortcut": "keyboard_shortcut",
+            "image_type_text": "type_text",
+            "image_scroll": "scroll",
+            "image_drag": "drag",
+        }
+        ordinary_actions = {"click", "type_text", "replace_document", "save_document",
+                            "navigate_url", "scroll", "keyboard_shortcut"}
+        event = event if event in {"observe", *ordinary_actions, "action", *image_actions} else "action"
+        image_action = image_actions.get(event)
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "caller_node": self.caller_node,
@@ -243,9 +287,16 @@ class AuditLog:
             "event": event,
             "status": status,
             "jev_answers": None,
-            "action": event if event in {"click", "type_text", "replace_document", "save_document", "navigate_url", "scroll"} else None,
-            "verification": status if event in {"click", "type_text", "replace_document", "save_document", "navigate_url", "scroll"} else None,
+            "action": image_action or (event if event in ordinary_actions else None),
+            "verification": ("unavailable" if status in {"observed", "ok"} else status)
+            if image_action or event in ordinary_actions else None,
+            "verified": False if image_action else None,
+            "effect": "uncertain" if image_action and status in {"ok", "observed"} else None,
             "reason": reason,
+            "evidence": ({"input_call_returned": True, "fresh_post_action_observation": True,
+                          "postcondition": None} if status == "observed" else
+                         {"input_call_returned": True, "fresh_post_action_observation": True,
+                          "postcondition": None} if image_action and status == "ok" else None),
         }
         encoded = (json.dumps(record, separators=(",", ":"), ensure_ascii=True) + "\n").encode("utf-8")
         append_jsonl(self.path, encoded, rotation=self.rotation)
@@ -273,7 +324,8 @@ def _parse_window_identity(geometry: str, active: str) -> tuple[str, str, str, b
     # AT-SPI app names commonly differ from the KWin desktop-file app id. Require
     # the accessibility tree's app text and KWin identity to share a basename.
     window_app = app_name.lower()
-    active_ok = ids[0] == active_ids[0] and active_rows[0].group("active") is not None
+    active_ok = (ids[0] == active_ids[0] and active_rows[0].group("active") is not None
+                 and active_rows[0].group("app").casefold() == app_name.casefold())
     client = _CLIENT_RECT.search(geometry)
     if client is None:
         raise TransactionError("window_identity_ambiguous")
@@ -302,6 +354,9 @@ def _parse_candidates(tree: str, generation: str, app: str) -> tuple[Candidate, 
         role_lower = role.lower()
         if role_lower in {"button", "link"}:
             supported = ("click",)
+        elif role_lower in {"menu item", "check menu item", "radio menu item", "check box",
+                            "radio button", "toggle button", "page tab", "tree item", "list item"}:
+            supported = ("click",) if _has_click_action(actions) else ()
         elif role_lower in {"text", "text entry", "entry", "combo box"} and "editable" in states:
             is_kate_editor = app == "kate" and role_lower in {"text", "text entry", "entry"}
             is_browser_address = app == "firefox" and bool(_BROWSER_ADDRESS.search(label))
@@ -311,22 +366,25 @@ def _parse_candidates(tree: str, generation: str, app: str) -> tuple[Candidate, 
             supported = ("scroll",)
         else:
             continue
+        if "focused" in states:
+            supported = (*supported, "keyboard_shortcut")
         value_match = _TEXT.search(match.group("tail"))
         value = _decode(value_match.group(1)) if value_match else None
         parsed.append((role_lower, label, states, supported, Bounds(x, y, width, height), value))
 
     # Duplicate accessible identities do not get addressable references.
-    identities: dict[tuple[str, str], int] = {}
-    for role, label, states, *_ in parsed:
+    identities: dict[tuple[Any, ...], int] = {}
+    for role, label, states, supported, bounds, value in parsed:
         if not _usable_states(states):
             continue
-        key = (role, label)
+        key = (role, label, states, supported, bounds, value)
         identities[key] = identities.get(key, 0) + 1
     result = []
-    for role, label, states, supported, bounds, value in parsed:
-        ambiguous = _usable_states(states) and identities.get((role, label), 0) != 1
+    for index, (role, label, states, supported, bounds, value) in enumerate(parsed):
+        key = (role, label, states, supported, bounds, value)
+        ambiguous = _usable_states(states) and identities.get(key, 0) != 1
         result.append(Candidate(
-            ref=f"cand_{generation}_{uuid.uuid4().hex}", role=role, label=label,
+            ref=f"c_{generation[:12]}_{index}", role=role, label=label,
             states=states, actions=() if ambiguous else supported, bounds=bounds, value=value,
             unavailable_reason=("target_ambiguous" if ambiguous else
                                 "target_disabled_or_hidden" if not _usable_states(states) else None),
@@ -351,6 +409,9 @@ def _typed_candidates(elements: list[dict[str, Any]], generation: str, app: str)
             continue
         if role in {"button", "link"}:
             supported = ("click",)
+        elif role in {"menu item", "check menu item", "radio menu item", "check box",
+                      "radio button", "toggle button", "page tab", "tree item", "list item"}:
+            supported = ("click",) if _has_click_action(actions) else ()
         elif role in {"text", "text entry", "entry", "combo box"} and "editable" in states:
             is_kate_editor = app == "kate"
             is_browser_address = app == "firefox" and bool(_BROWSER_ADDRESS.search(label))
@@ -360,6 +421,8 @@ def _typed_candidates(elements: list[dict[str, Any]], generation: str, app: str)
             supported = ("scroll",)
         else:
             continue
+        if "focused" in states:
+            supported = (*supported, "keyboard_shortcut")
         value = element.get("text")
         if value is not None and not isinstance(value, str):
             value = None
@@ -368,27 +431,33 @@ def _typed_candidates(elements: list[dict[str, Any]], generation: str, app: str)
         maximum = float(maximum) if isinstance(maximum, (int, float)) and math.isfinite(maximum) else None
         parsed.append((role, label, states, supported, bounds, value, number, maximum))
 
-    identities: dict[tuple[str, str], int] = {}
-    for role, label, states, *_ in parsed:
+    identities: dict[tuple[Any, ...], int] = {}
+    for role, label, states, supported, bounds, value, number, maximum in parsed:
         if not _usable_states(states):
             continue
-        key = (role, label)
+        key = (role, label, states, supported, bounds, value, number, maximum)
         identities[key] = identities.get(key, 0) + 1
     return tuple(
         Candidate(
-            ref=f"cand_{generation}_{uuid.uuid4().hex}", role=role, label=label,
-            states=states, actions=() if _usable_states(states) and identities.get((role, label), 0) != 1 else supported,
+            ref=f"c_{generation[:12]}_{index}", role=role, label=label,
+            states=states, actions=() if (_usable_states(states) and identities.get(
+                (role, label, states, supported, bounds, value, number, maximum), 0) != 1) else supported,
             bounds=bounds, value=value, value_number=number, value_max=maximum,
-            unavailable_reason=("target_ambiguous" if _usable_states(states) and identities.get((role, label), 0) != 1
+            unavailable_reason=("target_ambiguous" if _usable_states(states) and identities.get(
+                                (role, label, states, supported, bounds, value, number, maximum), 0) != 1
                                 else "target_disabled_or_hidden" if not _usable_states(states) else None),
         )
-        for role, label, states, supported, bounds, value, number, maximum in parsed
+        for index, (role, label, states, supported, bounds, value, number, maximum) in enumerate(parsed)
     )
 
 
 def _fingerprint(candidate: Candidate) -> tuple[Any, ...]:
     return (candidate.role, candidate.label, candidate.states, candidate.actions, candidate.bounds,
             candidate.value, candidate.value_number, candidate.value_max, candidate.unavailable_reason)
+
+
+def _has_click_action(actions: tuple[str, ...]) -> bool:
+    return any(action.casefold() in _CLICK_ACTIONS for action in actions)
 
 
 _SESSION_LOCKS: dict[str, threading.Lock] = {}
@@ -408,14 +477,19 @@ class TransactionEngine:
         audit: AuditLog,
         policy: Policy | None = None,
         authorizer: Callable[[str, str, Action], bool] | None = None,
+        profiles: Mapping[str, AppProfile] | None = None,
+        allow_empty_accessibility: bool = False,
     ):
         self.backend = backend
         self.audit = audit
         self.policy = policy or Policy()
         self.authorizer = authorizer or (lambda _session, _app, _action: True)
+        self.profiles = profiles
+        self.allow_empty_accessibility = bool(allow_empty_accessibility)
         self._last: dict[tuple[str, str], Snapshot] = {}
         self._counts: dict[str, tuple[float, int, int]] = {}
         self._blocked: dict[str, str] = {}
+        self._recovery_inspections: dict[tuple[str, str], str] = {}
         self._session_id: str | None = None
         self._binding_lock = threading.Lock()
         self.last_verification_evidence: Any = None
@@ -439,6 +513,9 @@ class TransactionEngine:
             self._audit("", AutonomyMode.GUARDED, "reset", "ok", "session_reset")
             self._counts.pop(session_id, None)
             self._blocked.pop(session_id, None)
+            self._recovery_inspections = {
+                key: value for key, value in self._recovery_inspections.items() if key[0] != session_id
+            }
             self._last.clear()
         finally:
             lock.release()
@@ -468,19 +545,27 @@ class TransactionEngine:
 
     def _snapshot(self, session_id: str, app: str) -> Snapshot:
         self._check_budget(session_id)
+        profile = self._profile_for(app)
         geometry = self.backend.window_geometry(app)
         active = self.backend.active_window()
         window_id, window_app, window_title, is_active, window_bounds = _parse_window_identity(geometry, active)
-        expected_apps = {
-            "kate": {"kate", "org.kde.kate"},
-            "firefox": {"firefox", "org.mozilla.firefox"},
-            "kcalc": {"kcalc", "org.kde.kcalc"},
-        }
-        if window_app not in expected_apps.get(app, set()):
+        engine = getattr(self.backend, "engine", None)
+        selected_window_id = (getattr(self.backend, "selected_window_id", None)
+                              or getattr(engine, "selected_window_id", None)
+                              or getattr(engine, "live_window_id", None))
+        if selected_window_id is not None and window_id != selected_window_id:
+            raise TransactionError("window_identity_changed")
+        expected_apps = {profile.id, profile.atspi_app, *profile.window_app_ids, *profile.aliases}
+        if window_app.casefold() not in {value.casefold() for value in expected_apps}:
             raise TransactionError("window_app_mismatch")
         typed = getattr(self.backend, "accessibility_elements", None)
-        elements = typed(app) if callable(typed) else None
-        tree = None if elements is not None else self.backend.accessibility_tree(app)
+        try:
+            elements = typed(app) if callable(typed) else None
+            tree = None if elements is not None else self.backend.accessibility_tree(app)
+        except Exception:
+            if not self.allow_empty_accessibility:
+                raise
+            elements, tree = None, ""
         generation = uuid.uuid4().hex
         candidates = (
             _typed_candidates(elements, generation, app)
@@ -500,6 +585,38 @@ class TransactionEngine:
         )
         self._bump(session_id)
         return snapshot
+
+    def _profile_for(self, app: str) -> AppProfile:
+        resolver = getattr(self.backend, "profile_for", None)
+        if callable(resolver):
+            profile = resolver(app)
+            if isinstance(profile, AppProfile):
+                return profile
+            if isinstance(profile, dict):
+                try:
+                    return AppProfile(
+                        id=profile["id"], command=tuple(profile["command"]),
+                        window_app_ids=tuple(profile["window_app_ids"]),
+                        atspi_app=profile["atspi_app"], aliases=tuple(profile.get("aliases", ())),
+                    )
+                except (KeyError, TypeError):
+                    raise TransactionError("profile_invalid") from None
+            raise TransactionError("profile_invalid")
+        engine = getattr(self.backend, "engine", None)
+        raw = getattr(engine, "profile", None)
+        if isinstance(raw, dict):
+            try:
+                return AppProfile(
+                    id=raw["id"], command=tuple(raw["command"]),
+                    window_app_ids=tuple(raw["window_app_ids"]), atspi_app=raw["atspi_app"],
+                    aliases=tuple(raw.get("aliases", ())),
+                )
+            except (KeyError, TypeError):
+                raise TransactionError("profile_invalid") from None
+        try:
+            return resolve_profile(app, self.profiles)
+        except ProfileError as exc:
+            raise TransactionError(exc.code) from None
 
     def observe(self, session_id: str, app: str, *, mode: AutonomyMode | str = AutonomyMode.GUARDED) -> Snapshot:
         mode = AutonomyMode(mode)
@@ -528,13 +645,78 @@ class TransactionEngine:
         finally:
             lock.release()
 
+    def inspect_recovery(self, session_id: str, app: str,
+                         *, mode: AutonomyMode | str = AutonomyMode.GUARDED) -> RecoveryInspection:
+        """Take fresh state after uncertain input without clearing its latch."""
+        mode = AutonomyMode(mode)
+        self._bind_session(session_id)
+        lock = _session_lock(session_id)
+        if not lock.acquire(blocking=False):
+            self._audit(app, mode, "reconcile", "denied", "session_busy")
+            raise TransactionError("session_busy")
+        try:
+            if app not in self.policy.allowed_apps:
+                raise TransactionError("app_not_allowed")
+            blocked_reason = self._blocked.get(session_id)
+            if blocked_reason is None:
+                raise TransactionError("no_recovery_pending")
+            snapshot = self._snapshot(session_id, app)
+            self._last[(session_id, app)] = snapshot
+            self._recovery_inspections[(session_id, app)] = snapshot.generation
+            self._audit(app, mode, "reconcile", "ok", "recovery_inspected")
+            return RecoveryInspection(blocked_reason, snapshot)
+        except TransactionError as exc:
+            self._audit(app, mode, "reconcile", "failed", _safe_reason(str(exc)))
+            raise
+        except Exception:
+            self._audit(app, mode, "reconcile", "failed", "backend_error")
+            raise TransactionError("observation_failed") from None
+        finally:
+            lock.release()
+
+    def reconcile(self, session_id: str, app: str, *, acknowledge_uncertain: bool = False,
+                  mode: AutonomyMode | str = AutonomyMode.GUARDED) -> dict[str, Any]:
+        """Refresh state after uncertainty and clear the latch only on explicit acknowledgment.
+
+        No action is replayed. The freshly observed window must still be active.
+        """
+        mode = AutonomyMode(mode)
+        self._bind_session(session_id)
+        lock = _session_lock(session_id)
+        if not lock.acquire(blocking=False):
+            self._audit(app, mode, "reconcile", "denied", "session_busy")
+            raise TransactionError("session_busy")
+        try:
+            if app not in self.policy.allowed_apps:
+                raise TransactionError("app_not_allowed")
+            if session_id not in self._blocked:
+                raise TransactionError("no_recovery_pending")
+            if acknowledge_uncertain is not True:
+                raise TransactionError("uncertain_outcome_ack_required")
+            blocked_reason = self._blocked[session_id]
+            snapshot = self._snapshot(session_id, app)
+            if not snapshot.active:
+                self._audit(app, mode, "reconcile", "failed", "target_window_not_active")
+                raise TransactionError("target_window_not_active")
+            key = (session_id, app)
+            self._last[key] = snapshot
+            self._blocked.pop(session_id, None)
+            self._recovery_inspections.pop(key, None)
+            self._audit(app, mode, "reconcile", "ok", "session_reconciled")
+            return {"snapshot": snapshot, "previous_block": blocked_reason}
+        except TransactionError as exc:
+            self._audit(app, mode, "reconcile", "failed", _safe_reason(str(exc)))
+            raise
+        finally:
+            lock.release()
+
     def act(
         self,
         session_id: str,
         app: str,
         action: Action,
         *,
-        verifier: Callable[[Snapshot], Verification],
+        verifier: Callable[[Snapshot], Verification] | None,
         precondition: Callable[[Snapshot], bool] | None = None,
         mode: AutonomyMode | str = AutonomyMode.GUARDED,
         approve: Callable[[Action, Candidate], bool] | None = None,
@@ -553,7 +735,7 @@ class TransactionEngine:
                 raise TransactionError("app_not_allowed")
             if session_id in self._blocked:
                 raise TransactionError("session_requires_reset")
-            if action.kind not in {"click", "type_text", "replace_document", "save_document", "navigate_url", "scroll"}:
+            if action.kind not in {"click", "type_text", "replace_document", "save_document", "navigate_url", "scroll", "keyboard_shortcut"}:
                 raise TransactionError("unsupported_action")
             if action.kind in {"replace_document", "save_document"} and app != "kate":
                 raise TransactionError("unsupported_action")
@@ -580,6 +762,11 @@ class TransactionEngine:
                     raise TransactionError("scroll_argument_invalid")
             elif action.text is not None:
                 raise TransactionError("text_argument_invalid")
+            if action.kind == "keyboard_shortcut":
+                if not isinstance(action.key, str) or action.key not in SHORTCUT_KEYS:
+                    raise TransactionError("unsupported_key")
+            elif action.key is not None:
+                raise TransactionError("unsupported_key")
             if _cancelled(cancel):
                 raise TransactionError("cancelled")
             if mode is AutonomyMode.SUPERVISED or (
@@ -626,6 +813,15 @@ class TransactionEngine:
                     current.bounds.y + current.bounds.height // 2,
                     button="left",
                 )
+            elif action.kind == "keyboard_shortcut":
+                if "focused" not in current.states:
+                    raise TransactionError("editable_target_not_focused")
+                self._audit(app, mode, action.kind, "pending", "input_pending")
+                input_attempted = True
+                self._bump(session_id, action=True)
+                self._last.pop((session_id, app), None)
+                self._blocked[session_id] = "verification_pending"
+                self.backend.keyboard_key(action.key)
             elif action.kind == "type_text":
                 if "focused" not in current.states:
                     raise TransactionError("editable_target_not_focused")
@@ -653,7 +849,8 @@ class TransactionEngine:
             elif action.kind == "scroll":
                 scrollbars = [item for item in fresh.candidates
                               if item.role in {"scroll bar", "scrollbar"} and item.value_number is not None]
-                if len(scrollbars) != 1 and not _scroll_witnesses(fresh, current):
+                if (verifier is not None and len(scrollbars) != 1
+                        and not _scroll_witnesses(fresh, current)):
                     raise TransactionError("scroll_position_unavailable")
                 scroll_backend = getattr(self.backend, "mouse_scroll", None)
                 if not callable(scroll_backend):
@@ -717,8 +914,10 @@ class TransactionEngine:
                 raise TransactionError("cancelled_after_action")
 
             after = self._snapshot(session_id, app)
-            verification = verifier(after)
-            if not isinstance(verification, Verification) or type(verification.passed) is not bool:
+            verification = verifier(after) if verifier is not None else None
+            if verifier is not None and (
+                not isinstance(verification, Verification) or type(verification.passed) is not bool
+            ):
                 raise TransactionError("verifier_contract_invalid")
             if _cancelled(cancel):
                 self._blocked[session_id] = "cancelled_after_action"
@@ -727,6 +926,18 @@ class TransactionEngine:
             if time.monotonic() - started_at > self.policy.max_duration_seconds:
                 raise TransactionError("task_time_budget_exceeded")
             self._last[(session_id, app)] = after
+            if verifier is None:
+                result = ActionResult(
+                    status="observed",
+                    verification="unavailable",
+                    reason="effect_uncertain",
+                    before=before,
+                    after=after,
+                    evidence={"fresh_post_action_observation": True},
+                )
+                self._audit(app, mode, action.kind, result.status, result.reason)
+                self._blocked.pop(session_id, None)
+                return result
             if not verification.passed:
                 self._blocked[session_id] = "verification_failed"
                 self.last_verification_evidence = verification.evidence
@@ -830,11 +1041,11 @@ def _scroll_viewport(candidates: tuple[Candidate, ...], target: Candidate) -> Ca
 
 
 def _unique_matching(prior: Snapshot, candidate: Candidate, fresh: Snapshot) -> Candidate | None:
-    if prior.generation not in candidate.ref:
+    if not candidate.ref.startswith(f"c_{prior.generation[:12]}_"):
         return None
-    matches = [item for item in fresh.candidates if (item.role, item.label) == (candidate.role, candidate.label)
-               and _usable(item)]
-    if len(matches) != 1 or _fingerprint(matches[0]) != _fingerprint(candidate):
+    fingerprint = _fingerprint(candidate)
+    matches = [item for item in fresh.candidates if _fingerprint(item) == fingerprint and _usable(item)]
+    if len(matches) != 1:
         return None
     return matches[0]
 
@@ -855,9 +1066,12 @@ _AUDIT_REASONS = frozenset({
     "window_identity_changed", "window_app_mismatch", "window_identity_ambiguous",
     "target_window_not_active", "editable_target_not_focused", "input_pending", "cancelled_after_action",
     "verification_failed", "verifier_contract_invalid", "backend_or_verifier_error", "action_failed",
-    "verified", "action_precondition_failed", "navigation_url_not_allowed",
+    "input_delivered_effect_uncertain", "input_or_postcapture_failed",
+    "verified", "effect_uncertain", "action_precondition_failed", "navigation_url_not_allowed",
     "scroll_argument_invalid", "scroll_position_unavailable", "scroll_unsupported",
     "target_ambiguous", "unsupported_key",
+    "no_recovery_pending", "uncertain_outcome_ack_required", "recovery_inspection_required",
+    "recovery_inspected", "session_reconciled", "profile_invalid", "profile_not_found",
 })
 
 

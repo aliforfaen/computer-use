@@ -1,9 +1,28 @@
 # 25 — Next phases
 
-Reviewed 2026-10-14. The milestones below date from 2026-10-03; see
-[the handoff](HANDOFF.md) for the active priorities and current commands.
+Updated 2026-10-25. This page retains earlier milestones and evidence; the
+current work queue below supersedes the old selector/reader-first phase order.
+See [the handoff](HANDOFF.md) for current repository status and
+[doc 40](40-live-workspace-and-profiles.md) for the pending watched acceptance.
 
-## Current direction — 2026-10-11
+## Current priorities
+
+1. Owner-watched acceptance of configured live apps: exact-window attachment,
+   launch/attach cleanup, foreground-until-stop behavior, and dialog versus
+   unrelated-popup handling.
+2. Validate screenshot-only live work, fresh image input, honest uncertain
+   outcomes, and explicit reconcile without replay.
+3. Verify custom profile identities, separate app allowlisting, live semantic
+   opt-in/restoration, and unsupported capture-layout refusal.
+4. Improve useful app coverage and observations from measured host evidence.
+5. Keep relays and monitoring accurate; local process/listener state is not
+   proof of MCP endpoint health.
+
+Jev selector work, Qwen-OCR integration, paid comparisons, and general task
+planning remain deferred. Historical milestone notes below are preserved for
+their evidence and should not be read as current acceptance claims.
+
+## Historical direction — 2026-10-11 (superseded)
 
 The owner deferred Jev selectors, paid comparisons, modal experiments, protocol
 redesign and daemon wiring. Keep existing code and evidence as historical
@@ -29,7 +48,7 @@ steps are deferred and live evidence predates the AT-SPI 2.62 regression.
 5. Jev selector seam implemented offline-first and left unwired, with an
    experiment plan. [doc 30](30-jev-selector-experiment.md).
 
-## Small local follow-ups
+## Historical small local follow-ups (superseded)
 
 1. Owner: enable the user unit at login (optionally with `--tray`) and click
    through the tray menu and Settings dialog once, watched. Neither was done by
@@ -42,7 +61,7 @@ steps are deferred and live evidence predates the AT-SPI 2.62 regression.
    whether Stage 2 is worth it.
 5. Later, only if a task needs it: nested/horizontal scroll regions.
 
-## Local live support — Kate host check passed
+## Historical local live support — Kate host check passed 2026-10-03
 
 The local owner and MCP facade support explicit live sessions, one task-owned
 allowlisted app per session, PID/window ownership checks, per-action focus
@@ -54,7 +73,7 @@ physical-input gate and no idle threshold claim. Four targeted owner tests and
 eleven earlier focused service/live tests passed; none launched a live app or
 sent input. See [capability findings and the watched acceptance plan](26-live-owner.md).
 
-## Owner-watched phase — Kate completed 2026-10-03
+## Historical owner-watched phase — Kate completed 2026-10-03
 
 Visible Kate draft/save/revise/save and corrected app screenshot capture passed.
 Independent checks confirmed exact focus, accessibility settings and app cleanup.
@@ -62,7 +81,7 @@ See [doc 26](26-live-owner.md). Firefox and physical cancellation/crash checks
 remain optional follow-ups; keep them small and owner-watched. Use one app per
 session and ensure the selected app has no existing window before starting.
 
-## Afterward
+## Historical afterward queue (superseded)
 
 Tailnet transport needs a real remote peer and explicit approval to change
 Serve routes. Reuse the official MCP transport, bind loopback and preserve

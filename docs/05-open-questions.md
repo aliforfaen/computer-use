@@ -1,4 +1,29 @@
-# 05 — Open questions
+# 05 — Open questions and current work queue
+
+Updated 2026-10-25. The project has moved from Jev/provider research to
+reliable, useful desktop operations. The open items below are acceptance and
+reliability questions for the current workspace/profile contract; the dated
+P0 checklist and Jev measurements later in this document are historical
+evidence, not active work orders.
+
+## Current work queue
+
+- Complete an owner-watched acceptance pass for generic configured live apps:
+  exact-window attach, launch/attach cleanup, focus held until stop, related
+  dialogs and unrelated popups. See [doc 40](40-live-workspace-and-profiles.md).
+- Verify custom profile identity mapping and explicit allowlist separation on
+  the target host. Profile presence must never itself authorize access.
+- Exercise screenshot-only live observation and fresh image-grounded input;
+  preserve uncertain outcomes, reconcile by fresh observation, and confirm
+  that recovery never replays input.
+- Verify optional live AT-SPI enablement and restoration, and capture mapping
+  refusal for unsupported scaled or multi-monitor layouts.
+- Keep relay status honest: process/listener checks do not establish remote MCP
+  endpoint health. Improve monitoring only when a protocol-level health check
+  can be made with bounded, attributable evidence.
+- After acceptance, prioritize the most useful cross-app observations and
+  accessibility limitations. Jev selector comparison and Qwen-OCR remain
+  deferred; OCR-only descriptions are not actionable targets by assumption.
 
 Status: ADR-001…010 are locked (ADR-008 confirmed in ADR-009). P0 measurement is
 underway; the owner preferences below remain open.
@@ -10,7 +35,7 @@ redesign and daemon wiring. Keep existing code and evidence as historical
 experiments; Jev stays disabled by default. The active goal is useful, grounded
 observations for the calling agent across native applications.
 
-## Active questions
+## Superseded active questions — 2026-10-11
 
 - What useful screen context is missing from the current AT-SPI inventory?
 - Which fields belong in a bounded agent observation packet, with freshness,
@@ -191,7 +216,7 @@ Unblocks P1. Probes only, nothing committed to `main`.
    at the [hosted gateway](https://jevtypesafeai.com/jev/api) and $0.042/M
    at [TypeSafe direct](https://docs.typesafe.ai/models), as of 2026-09-29.
 
-## Still open — owner preferences
+## Historical owner preferences — superseded by current explicit profile/allowlist policy
 
 1. **App scope for v1.** Candidates: Firefox, Kate, Dolphin, System Settings, KCalc. Konsole
    excluded, or allowed with a typed-command confirmation gate?

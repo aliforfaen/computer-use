@@ -88,7 +88,7 @@ def _a11y_address(engine: Any) -> str:
 
 
 def _a11y_flags_at(address: str) -> dict[str, bool]:
-    """Read status on the live session bus, without touching desktop settings."""
+    """Read required and currently exposed optional status properties."""
     try:
         import dbus
         bus = dbus.bus.BusConnection(address)
@@ -96,7 +96,9 @@ def _a11y_flags_at(address: str) -> dict[str, bool]:
             obj = bus.get_object("org.a11y.Bus", "/org/a11y/bus")
             properties = dbus.Interface(obj, "org.freedesktop.DBus.Properties")
             values = properties.GetAll("org.a11y.Status")
-            return {key: bool(values.get(key, False)) for key in ("IsEnabled", "ScreenReaderEnabled")}
+            if "IsEnabled" not in values:
+                raise ProbeError("AT-SPI status does not expose required IsEnabled")
+            return {key: bool(values[key]) for key in ("IsEnabled", "ScreenReaderEnabled") if key in values}
         finally:
             bus.close()
     except Exception as exc:
@@ -104,7 +106,11 @@ def _a11y_flags_at(address: str) -> dict[str, bool]:
 
 
 def _set_a11y_flags_at(address: str, flags: dict[str, bool]) -> dict[str, bool]:
-    """Set and read back only the two task-scoped org.a11y.Status properties."""
+    """Set captured status properties only when the current property set matches."""
+    allowed = {"IsEnabled", "ScreenReaderEnabled"}
+    if (not isinstance(flags, dict) or "IsEnabled" not in flags or set(flags) - allowed
+            or any(type(value) is not bool for value in flags.values())):
+        raise ProbeError("invalid captured AT-SPI status properties")
     try:
         import dbus
 
@@ -112,10 +118,17 @@ def _set_a11y_flags_at(address: str, flags: dict[str, bool]) -> dict[str, bool]:
         try:
             obj = bus.get_object("org.a11y.Bus", "/org/a11y/bus")
             properties = dbus.Interface(obj, "org.freedesktop.DBus.Properties")
-            for key in ("IsEnabled", "ScreenReaderEnabled"):
-                properties.Set("org.a11y.Status", key, dbus.Boolean(bool(flags[key])))
+            current = properties.GetAll("org.a11y.Status")
+            current_flags = {key: bool(current[key]) for key in ("IsEnabled", "ScreenReaderEnabled") if key in current}
+            if "IsEnabled" not in current_flags or set(current_flags) != set(flags):
+                raise ProbeError("AT-SPI status property availability changed")
+            for key, value in flags.items():
+                properties.Set("org.a11y.Status", key, dbus.Boolean(value))
             actual = properties.GetAll("org.a11y.Status")
-            return {key: bool(actual.get(key, False)) for key in ("IsEnabled", "ScreenReaderEnabled")}
+            actual_flags = {key: bool(actual[key]) for key in ("IsEnabled", "ScreenReaderEnabled") if key in actual}
+            if set(actual_flags) != set(flags):
+                raise ProbeError("AT-SPI status property availability changed during update")
+            return actual_flags
         finally:
             bus.close()
     except Exception as exc:
@@ -338,7 +351,7 @@ def run_probe(*, output_root: Path = Path("run/live-desktop-probe"), engine_fact
             a11y_address = _a11y_address(engine)
             a11y_touched = True  # Restore even if enabling or readback partially fails.
             enabled = _phase(report, "enable_temporary_atspi", lambda: _set_a11y_flags_at(
-                a11y_address, {"IsEnabled": True, "ScreenReaderEnabled": True}), deadline=deadline)
+                a11y_address, {key: True for key in flags}), deadline=deadline)
             report["atspi_flags_after_enable"] = enabled
             if not all(enabled.values()):
                 raise ProbeError("temporary AT-SPI status flags did not enable")

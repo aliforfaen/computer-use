@@ -1,5 +1,10 @@
 # 28 — Tray indicator, user service and config
 
+> **Current follow-up (2026-10-25):** see [doc 40](40-live-workspace-and-profiles.md)
+> and [HANDOFF](HANDOFF.md). The dated implementation/evidence below predates
+> live attachment, foreground-between-calls policy, opt-in semantics and
+> capture-grounded input. Historical statements are not the current contract.
+
 **2026-10-03.** Owner-facing surfaces for the existing single-owner local
 service. No new owner capability, transport or policy is added: the tray is
 another client of the same private Unix socket.
