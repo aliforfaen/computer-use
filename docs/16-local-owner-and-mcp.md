@@ -33,6 +33,39 @@ below. The full acceptance checklist is in
   validated by a watched host acceptance run. Do not treat historical Kate
   evidence below as proof of the newer attach/profile/dialog contract.
 
+## Pi harness — checked 2026-10-26
+
+Pi 1.4.0 on Cachy uses its built-in MCP support. The global entry lives in
+`~/.pi/agent/mcp.json`; this repo's ignored `.pi/mcp.json` overrides that same
+server name locally. Both use `jev-desktop`, `exposure: "direct"`, and
+`uv --directory /home/messhias/lamasync/projects/computer-use run jev-desktop-mcp`.
+Direct exposure gives Pi native image content rather than relying on codemode
+to forward it. The unrelated global codemode preference is preserved.
+
+Both entries explicitly set `JEV_DESKTOP_SOCKET` to the owner's socket
+(`/run/user/1000/jev-desktop/owner.sock` on Cachy). This is important for clients
+that launch MCP subprocesses with a limited environment: omitting
+`XDG_RUNTIME_DIR` otherwise changes the default socket to the `/tmp` fallback.
+If the owner uses a different socket, update this explicit value too.
+
+The reusable skill is [docs/skills/jev-desktop/SKILL.md](skills/jev-desktop/SKILL.md),
+linked from `~/.pi/agent/skills/jev-desktop`. It describes this service; the shared
+`computer-use` skill still describes Orca's separate driver. Start a fresh Pi
+session to load the changed configuration; `skill:jev-desktop` is discoverable
+as a skill command. No existing Pi conversation was restarted.
+
+Configuration can be managed with `pi mcp add jev-desktop --exposure direct
+--cwd <checkout> --env JEV_DESKTOP_SOCKET=<owner-socket> -- uv --directory
+<checkout> run jev-desktop-mcp`; add `--local` for the project override.
+Use `pi mcp list --json` from the repo and another directory to check each scope.
+Private MCP JSON files remain outside Git; preserve unrelated server entries.
+
+Validation: both scopes discovered all 15 tools without errors; an offline Pi
+RPC startup discovered `skill:jev-desktop`; MCP initialization and real
+`desktop_status`/`desktop_capabilities` calls using the configured transport
+succeeded. The owner was current and idle. No provider/model call, desktop
+session, window discovery, screenshot, input or relay activation was performed.
+
 ## Historical implementation details (dated 2026-10-01 onward)
 
 **2026-10-01 · M3 local surface implementation; updated 2026-10-02 for live opt-in.**

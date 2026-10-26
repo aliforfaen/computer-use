@@ -1,6 +1,6 @@
 # Handoff — current state
 
-Updated **2026-10-25**. Repository: `aliforfaen/computer-use`, branch `main`.
+Updated **2026-10-26**. Repository: `aliforfaen/computer-use`, branch `main`.
 Start with AGENTS.md, then [current live/profile contract](40-live-workspace-and-profiles.md),
 [CLI/MCP](16-local-owner-and-mcp.md), and [verification runbook](29-verification-runbook.md).
 Earlier handoff detail is preserved in [the archive](archive/handoff-before-2026-10-25.md).
@@ -66,6 +66,16 @@ mapping supports complete 1:1 logical sources only; no physical-input detection;
 foreign-process/identity dialogs may require separate explicit attachment;
 no automatic task success inference or action retries. Desktop HTTP/tailnet
 transport and general planning are still deferred. No new OCR action path.
+
+## Pi is configured for the watched test
+
+Checked 2026-10-26: Pi has a dedicated `jev-desktop` skill and direct MCP tools,
+with global and project-local configuration. The owner socket is explicit so
+limited child environments cannot select the wrong fallback. All 15 tools
+discover successfully; read-only status/capability calls succeed through MCP.
+The current owner is idle and was not restarted. Start a fresh Pi session to
+load the setup. See [Pi harness notes](16-local-owner-and-mcp.md#pi-harness--checked-2026-10-26).
+This is harness readiness, not live desktop acceptance.
 
 ## Next work
 
