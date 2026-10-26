@@ -159,6 +159,15 @@ class ImageInputTests(unittest.TestCase):
         worker.keyboard_type.assert_not_called()
         self.assertTrue(session.visual_input_uncertain)
 
+    def test_cancel_during_virtual_active_query_prevents_delivery(self):
+        session, worker = self.session()
+        session.access_scope = "full_virtual_desktop"
+        worker.rpc = Mock(side_effect=lambda *a, **k: session.cancel.set())
+        with self.assertRaisesRegex(ValueError, "cancelled"):
+            perform_image_input(session, {"capture_id": "before", "action": "click", "x": 2, "y": 2})
+        worker.mouse_click.assert_not_called()
+        self.assertEqual(session.actions, 0)
+
     def test_drag_and_scroll_use_bounded_mapped_coordinates(self):
         session, worker = self.session()
         perform_image_input(session, {

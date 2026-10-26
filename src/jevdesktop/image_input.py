@@ -75,6 +75,8 @@ def _resolve_capture(session: Any, params: Mapping[str, Any], now: datetime) -> 
     ref = stored.ref
     if ref.capture_id != capture_id or ref.session_id != session.session_id:
         raise ValueError("image_capture_session_mismatch")
+    if ref.window_id == "__desktop__":
+        raise ValueError("image_window_selection_required")
     age = (now - _as_utc(ref.captured_at)).total_seconds()
     if age < 0 or age > MAX_CAPTURE_AGE_SECONDS:
         raise ValueError("image_capture_stale")
@@ -208,6 +210,13 @@ def perform_image_input(session: Any, params: dict[str, Any], *, now: datetime |
     }[action]
     if any(not callable(getattr(worker, method, None)) for method in required_methods):
         raise ValueError("image_input_driver_unsupported")
+    if getattr(session, "access_scope", "selected_application") == "full_virtual_desktop":
+        check_active = getattr(worker, "rpc", None)
+        if not callable(check_active):
+            raise ValueError("virtual_window_state_unavailable")
+        check_active("check_selected_window_active")
+    if session.cancel.is_set():
+        raise ValueError("cancelled")
     audit = getattr(getattr(session, "tx", None), "_audit", None)
     if not callable(audit):
         raise ValueError("image_input_audit_unavailable")

@@ -321,7 +321,8 @@ class DesktopTray:
         for child in self.start_menu.get_children():
             self.start_menu.remove(child)
         apps = (self.capabilities or {}).get("allowed_apps") or []
-        if not apps:
+        scopes = set((self.capabilities or {}).get("allowed_access_scopes") or [])
+        if not apps and not (scopes - {"selected_application"}):
             placeholder = self.gtk.MenuItem(label="Owner not running")
             placeholder.set_sensitive(False)
             self.start_menu.append(placeholder)
@@ -330,11 +331,17 @@ class DesktopTray:
                 item = self.gtk.MenuItem(label=app)
                 item.connect("activate", self._on_start, app)
                 self.start_menu.append(item)
+        for scope, label in (("full_virtual_desktop", "Full isolated virtual desktop"),
+                             ("full_live_desktop", "Full live desktop…")):
+            if scope in scopes:
+                item = self.gtk.MenuItem(label=label)
+                item.connect("activate", self._on_start_full_scope, scope)
+                self.start_menu.append(item)
         self.start_menu.show_all()
 
     # ---------------------------------------------------------------- refresh
     def _session_summary(self, session: dict[str, Any]) -> str:
-        summary = (f"{session.get('app')} · {session.get('desktop_mode')} · {session.get('state')}"
+        summary = (f"{session.get('access_scope', session.get('app'))} · {session.get('desktop_mode')} · {session.get('state')}"
                    f" · {int(session.get('age_seconds') or 0)}s")
         actions, cap = session.get("actions"), session.get("action_cap")
         if isinstance(actions, int) and isinstance(cap, int):
@@ -357,7 +364,8 @@ class DesktopTray:
             self.item_session.set_label(f"Session: none{notice_suffix}")
             self.item_cleanup.set_sensitive(self.owner_state == "running")
             self.start_root.set_sensitive(self.owner_state == "running" and bool(
-                (self.capabilities or {}).get("allowed_apps")))
+                (self.capabilities or {}).get("allowed_apps") or
+                set((self.capabilities or {}).get("allowed_access_scopes") or []) - {"selected_application"}))
             self.item_attach.set_sensitive(self.owner_state == "running" and bool(
                 (self.capabilities or {}).get("allowed_apps")))
         active, enabled = self.service_state
@@ -452,6 +460,21 @@ class DesktopTray:
             if semantics:
                 params["temporary_a11y"] = True
 
+        self._submit_start(params)
+
+    def _on_start_full_scope(self, item: Any, scope: str) -> None:
+        if scope not in set((self.capabilities or {}).get("allowed_access_scopes") or []):
+            return
+        params: dict[str, Any] = {"access_scope": scope, "mode": self.settings["autonomy_mode"]}
+        if scope == "full_live_desktop":
+            semantics = bool(self.settings["semantic_candidates_live"])
+            if self.settings["confirm_live_task"] and not self._confirm_live("the full desktop", semantics):
+                return
+            params["owner_present_override"] = True
+            params["semantic_candidates"] = semantics
+            if semantics:
+                params["temporary_a11y"] = True
+        self.notice = None
         self._submit_start(params)
 
     def _submit_start(self, params: dict[str, Any]) -> None:

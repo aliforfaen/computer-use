@@ -6,12 +6,13 @@ KDE Plasma, Wayland. Communicate concisely; prefer small runnable slices.
 ## Start here
 
 Read [docs/HANDOFF.md](docs/HANDOFF.md), then
+[access scopes](docs/41-access-scopes.md),
 [the current live/profile contract](docs/40-live-workspace-and-profiles.md) and
 [CLI/MCP reference](docs/16-local-owner-and-mcp.md). Numbered experiment reports
 are historical evidence, not the active backlog. Earlier guidance is archived
 under `docs/archive/`.
 
-## Current direction — 2026-10-25
+## Current direction — 2026-10-26
 
 Broad desktop assistance for the calling agent. Configured app profiles replace
 the three-app launch restriction. Live sessions can launch or attach to an exact
@@ -28,9 +29,16 @@ detector is available. No host service or relay activation is implied by coding.
 
 - Reuse before writing: name the reused project in designs. KWin/kwin-mcp is
   the desktop driver; do not build a GNOME or Plasma extension for this.
-- App profiles specify launch argv, KWin identities and AT-SPI name. A profile
-  never grants permission: an explicit deny-by-default app allowlist applies in
-  every autonomy mode, including `yolo`. Preserve the authorizer seam.
+- Access scope is separate from autonomy and ownership. The owner enables
+  scopes explicitly; selected_application remains the default and requires the
+  deny-by-default app allowlist. Full live/virtual scopes permit app transitions
+  within their chosen desktop without per-app allowlist/profile requirements.
+  A yolo mode setting never escalates scope. Preserve the authorizer seam.
+- App profiles specify launch argv and identity, not full-desktop permission.
+  Full virtual operations must remain on the isolated session bus. Full live
+  window selection does not make preexisting apps task-owned.
+- Explicit window switching in a full scope must invalidate all prior semantic
+  refs and image captures, including pending image-input eligibility.
 - Autonomy is code policy: supervised approves every action; guarded approves
   destructive semantic actions and image inputs; yolo suppresses prompts.
   Budgets, audit, focus and ownership checks apply in every mode.
@@ -77,7 +85,7 @@ detector is available. No host service or relay activation is implied by coding.
   timestamp; no sampling. Keep executable actions separate from observations.
 - Never write secrets or typed/clipboard contents to state, provider requests,
   tracked files or logs. Editable values are omitted from candidate output;
-  unallowlisted workspace captions are redacted.
+  workspace captions outside the permitted scope are redacted.
 - Screenshots are returned only on explicit image/both requests. Metadata/hash
   is the default; no screenshot/video stream to remote callers by default.
 - Private reader key: `~/.config/jev-desktop/daemon.env` (0600). Private Jev key:

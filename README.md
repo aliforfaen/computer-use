@@ -9,8 +9,13 @@ owner service uses [kwin-mcp](https://github.com/isac322/kwin-mcp); CLI and MCP
 clients share its policy, allowlist, audit and session state. Jev remains an
 optional selector experiment and is not wired into the runtime.
 
-## Current contract — 2026-10-25
+## Current contract — 2026-10-26
 
+- **Access scopes:** selected application (default, app allowlist required),
+  full isolated virtual desktop, or full live desktop. The owner enables scopes
+  in `allowed_access_scopes`; the session requests one explicitly. Full scopes
+  permit explicit window transitions without per-app allowlist/profile edits.
+  Scope, autonomy and cleanup ownership are separate. [Scope contract](docs/41-access-scopes.md).
 - **Observation and input:** fresh app captures and semantic candidates are
   available. Strong code-owned verifiers remain available for supported actions.
   `verification=observed` and image-grounded input return fresh state while
@@ -28,8 +33,8 @@ optional selector experiment and is not wired into the runtime.
 - **Profiles and authorization:** built-in profiles cover Kate, Firefox and
   KCalc. Custom profiles are read from
   `${XDG_CONFIG_HOME:-~/.config}/jev-desktop/app_profiles.json`; a profile does
-  not authorize its app. Add the canonical app separately to the explicit
-  allowlist. [Profile and live contract](docs/40-live-workspace-and-profiles.md).
+  not authorize its app. Add the canonical app to the app allowlist for selected-application scope.
+  Full-desktop window selection does not require a profile or app entry. [Profile and live contract](docs/40-live-workspace-and-profiles.md).
 - **Workspace and relays:** `workspace`, `profiles` and `relays` report window,
   profile and SSH-forward state. Relay process/listener state does not guarantee
   remote MCP endpoint health. Capture mapping currently rejects unsupported

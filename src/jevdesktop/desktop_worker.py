@@ -75,6 +75,7 @@ class Worker:
         self.app: str | None = None
         self.document_path: Path | None = None
         self.desktop_mode = "virtual"
+        self.access_scope = "selected_application"
         self.profile: dict[str, Any] | None = None
         self.semantic_candidates = True
         self.original_window: dict | None = None
@@ -87,6 +88,9 @@ class Worker:
         self.live_attached = False
         self.original_a11y_flags: dict[str, bool] | None = None
         self.a11y_address: str | None = None
+        self.access_scope = "selected_application"
+        self.selected_window_id: str | None = None
+        self.selected_window: dict[str, Any] | None = None
 
     @staticmethod
     def _start_ticks(pid: int | None):
@@ -160,6 +164,7 @@ class Worker:
         record = {"schema": 1, "worker_pid": os.getpid(), "session_pid": pid,
                   "session_start_ticks": self._start_ticks(pid), "app_processes": apps,
                   "desktop_mode": self.desktop_mode,
+                  "access_scope": self.access_scope,
                   "original_window": ({"id": self.original_window.get("id"), "app": self.original_window.get("app")}
                                       if self.original_window else None),
                   "action_original_window": ({"id": self.action_original_window.get("id"),
@@ -246,11 +251,21 @@ class Worker:
         return {"id": app, "command": list(command), "window_app_ids": list(app_ids),
                 "atspi_app": atspi_app, "aliases": list(aliases)}
 
+    @staticmethod
+    def _profile_for_window_identity(identity: str) -> dict[str, Any]:
+        from jevdesktop.app_profiles import AppProfile, profile_for_window_identity
+
+        profile = profile_for_window_identity(identity) or AppProfile(
+            identity, (), (identity,), identity, ())
+        return {"id": profile.id, "command": list(profile.command),
+                "window_app_ids": list(profile.window_app_ids), "atspi_app": profile.atspi_app,
+                "aliases": list(profile.aliases)}
+
     def start(self, app: str, journal_path: str | None = None, desktop_mode: str = "virtual",
               temporary_a11y: bool = False, *, profile: dict[str, Any] | None = None,
               window_id: str | None = None, attach: bool = False,
-              semantic_candidates: bool = True) -> dict:
-        if (not isinstance(app, str) or not app or self.engine is not None
+              semantic_candidates: bool = True, access_scope: str = "selected_application") -> dict:
+        if (not isinstance(app, str) or (not app and access_scope == "selected_application") or self.engine is not None
                 or type(temporary_a11y) is not bool or type(attach) is not bool
                 or type(semantic_candidates) is not bool):
             raise ValueError("invalid_worker_start")
@@ -258,13 +273,16 @@ class Worker:
             raise ValueError("invalid_worker_start")
         if desktop_mode == "virtual" and (attach or window_id is not None):
             raise ValueError("invalid_worker_start")
-        if desktop_mode == "live" and (attach is not (window_id is not None)):
+        if access_scope not in {"selected_application", "full_virtual_desktop", "full_live_desktop"}:
+            raise ValueError("invalid_worker_start")
+        if desktop_mode == "live" and access_scope == "selected_application" and (attach is not (window_id is not None)):
             raise ValueError("invalid_worker_start")
         if window_id is not None and (not isinstance(window_id, str) or not window_id):
             raise ValueError("invalid_worker_start")
         if not isinstance(journal_path, str) or not journal_path:
             raise ValueError("invalid_worker_start")
-        self.profile = self._validate_profile(app, profile)
+        self.access_scope = access_scope
+        self.profile = self._validate_profile(app, profile) if access_scope == "selected_application" else None
         self.journal_path = Path(journal_path)
         self.app = app
         self.desktop_mode = desktop_mode
@@ -272,7 +290,23 @@ class Worker:
         from kwin_mcp.core import AutomationEngine
 
         if desktop_mode == "live":
-            return self._start_live(temporary_a11y=temporary_a11y, window_id=window_id, attach=attach)
+            return self._start_live(temporary_a11y=temporary_a11y, window_id=window_id, attach=attach,
+                                    full_scope=access_scope == "full_live_desktop")
+
+        if access_scope == "full_virtual_desktop":
+            self.engine = AutomationEngine()
+            try:
+                start = self.engine.session_start(app_command="", screen_width=1280, screen_height=800,
+                                                  isolate_home=True, keep_home=False, keep_screenshots=False)
+                if not isinstance(start, str) or "Input backend: KWin EIS" not in start:
+                    raise ValueError("virtual_session_unavailable")
+                self._write_journal()
+                return {"started": True, "desktop_mode": "virtual", "access_scope": access_scope,
+                        "semantic_candidates": False, "selected_window_id": None, "cleanup_paths": []}
+            except Exception:
+                try: self.stop()
+                except Exception: pass
+                raise
 
         env = ({"QT_ACCESSIBILITY": "1", "GTK_MODULES": "gail:atk-bridge"}
                if self.semantic_candidates else {})
@@ -327,7 +361,7 @@ class Worker:
             raise
 
     def _start_live(self, *, temporary_a11y: bool = False, window_id: str | None = None,
-                    attach: bool = False) -> dict[str, Any]:
+                    attach: bool = False, full_scope: bool = False) -> dict[str, Any]:
         """Connect to KWin and bind this task to an exact launched or attached window."""
         from kwin_mcp.core import AutomationEngine
         from jevdesktop.live_desktop_probe import _a11y_address, _a11y_flags, _active_row, _set_a11y_flags_at
@@ -343,7 +377,7 @@ class Worker:
 
             initial_rows = collect_windows()
             active = next((row for row in initial_rows if row.get("active")), None)
-            if active is None:
+            if active is None and not full_scope:
                 raise ValueError("live_original_focus_unavailable")
             self.original_window = active
 
@@ -359,6 +393,25 @@ class Worker:
                     if not all(enabled.values()):
                         raise ValueError("live_atspi_unavailable")
 
+            if full_scope:
+                selected = next((row for row in initial_rows if row.get("id") == window_id), None) if window_id else active
+                if window_id is not None and selected is None:
+                    raise ValueError("live_selected_window_unavailable")
+                self.live_attached = True
+                self.live_root_window_id = selected.get("id") if selected else None
+                self.live_root_pid = selected.get("pid") if selected else None
+                self.live_selected_window = selected
+                self.live_window_id = self.live_root_window_id
+                if selected is not None:
+                    self.profile = self._profile_for_window_identity(str(selected.get("app", "")))
+                self._write_journal()
+                if selected is not None and not self._focus_live_app(allow_switch=True).get("focused"):
+                    raise ValueError("live_target_focus_failed")
+                return {"started": True, "desktop_mode": "live", "access_scope": self.access_scope,
+                        "semantic_candidates": self.semantic_candidates, "input_idle_detection": "unavailable",
+                        "attached": True, "task_owned_window_id": None, "root_window_id": self.live_root_window_id,
+                        "selected_window_id": self.live_window_id, "selected_window": selected,
+                        "atspi_flags": _a11y_flags(self.engine) if self.semantic_candidates else None}
             profile = self.profile
             if profile is None:
                 raise ValueError("invalid_worker_profile")
@@ -465,6 +518,10 @@ class Worker:
 
         if self.engine is not None and self.desktop_mode == "live":
             return workspace_snapshot()
+        if self.engine is not None and self.desktop_mode == "virtual":
+            from jevdesktop.native_windows import workspace_snapshot_with_env
+            return {**workspace_snapshot_with_env(self.engine._session_env()),
+                    "desktop_mode": "virtual", "isolated": True}
         from kwin_mcp.core import AutomationEngine
 
         engine = AutomationEngine()
@@ -642,8 +699,10 @@ class Worker:
 
     def restore_live_focus(self, *, baseline: bool = False) -> bool:
         """Restore the focus captured when the live task started, normally at stop."""
-        if self.desktop_mode != "live" or self.engine is None or not self.original_window:
+        if self.desktop_mode != "live" or self.engine is None:
             return False
+        if self.original_window is None:
+            return self.access_scope == "full_live_desktop"
         from jevdesktop.native_windows import activate_window_id
 
         target_id = self.original_window.get("id")
@@ -744,7 +803,77 @@ class Worker:
                               params.get("temporary_a11y", False),
                               profile=params.get("profile"), window_id=params.get("window_id"),
                               attach=params.get("attach", False),
-                              semantic_candidates=params.get("semantic_candidates", True))
+                              semantic_candidates=params.get("semantic_candidates", True),
+                              access_scope=params.get("access_scope", "selected_application"))
+        if method == "select_window":
+            if self.access_scope not in {"full_live_desktop", "full_virtual_desktop"}:
+                raise ValueError("access_scope_mismatch")
+            target_id = params.get("window_id")
+            if not isinstance(target_id, str) or not target_id:
+                raise ValueError("invalid_params")
+            if self.access_scope == "full_virtual_desktop":
+                from jevdesktop.native_windows import workspace_snapshot_with_env
+                rows = workspace_snapshot_with_env(self.engine._session_env())["windows"]
+            else:
+                rows = self._native_windows()
+            selected = next((row for row in rows if row.get("id") == target_id), None)
+            if selected is None:
+                raise ValueError("live_selected_window_unavailable")
+            if self.access_scope == "full_virtual_desktop":
+                from jevdesktop.native_windows import activate_window_id_with_env
+                focused = activate_window_id_with_env(target_id, self.engine._session_env())
+            else:
+                from jevdesktop.native_windows import activate_window_id
+                focused = activate_window_id(target_id)
+            if not focused:
+                raise ValueError("live_target_focus_failed")
+            self.live_root_window_id = target_id
+            self.live_root_pid = selected.get("pid")
+            self.live_window_id = target_id
+            self.live_selected_window = selected
+            self.selected_window_id = target_id
+            self.selected_window = selected
+            identity = str(selected.get("app", ""))
+            if identity:
+                self.profile = self._profile_for_window_identity(identity)
+            return {"selected_window_id": target_id, "selected_window": selected, "access_scope": self.access_scope}
+        if method == "check_selected_window_active":
+            if self.access_scope != "full_virtual_desktop" or self.desktop_mode != "virtual":
+                raise ValueError("access_scope_mismatch")
+            if not isinstance(self.selected_window_id, str) or not self.selected_window_id:
+                raise ValueError("window_selection_required")
+            from jevdesktop.native_windows import workspace_snapshot_with_env
+            snapshot = workspace_snapshot_with_env(self.engine._session_env())
+            rows = snapshot["windows"]
+            selected = next((row for row in rows if row.get("id") == self.selected_window_id), None)
+            active = next((row for row in rows if row.get("active")), None)
+            if selected is None:
+                raise ValueError("live_selected_window_unavailable")
+            if active is None or active.get("id") != self.selected_window_id:
+                raise ValueError("virtual_selected_window_changed")
+            return {"selected_window_id": self.selected_window_id, "active_window_id": active["id"]}
+        if method == "launch_app":
+            if self.desktop_mode != "virtual" or self.access_scope != "full_virtual_desktop":
+                raise ValueError("access_scope_mismatch")
+            app = params.get("profile_id")
+            if not isinstance(app, str) or not app:
+                raise ValueError("invalid_params")
+            from jevdesktop.app_profiles import profile_for
+            profile = profile_for(app)
+            process = self.engine._get_session().launch_app(list(profile.command))
+            self.selected_window_id = None
+            self.selected_window = None
+            self.live_root_window_id = None
+            self.live_root_pid = None
+            self.live_window_id = None
+            self.live_selected_window = None
+            self.profile = {"id": profile.id, "command": list(profile.command),
+                            "window_app_ids": list(profile.window_app_ids), "atspi_app": profile.atspi_app,
+                            "aliases": list(profile.aliases)}
+            self.app = profile.id
+            self.live_process = process  # recorded as an owned app process in the cleanup journal
+            self._write_journal()
+            return {"launched": True, "profile_id": profile.id, "pid": process.pid}
         if method == "workspace_discover":
             return self._workspace_discover()
         if method == "focus_live_app":
@@ -770,6 +899,11 @@ class Worker:
                         "selected_window_id": self.live_window_id,
                         "selected_window_present": selected_row is not None,
                         **({"selected_window": selected_row} if selected_row is not None else {})}
+            if self.access_scope == "full_virtual_desktop":
+                from jevdesktop.native_windows import workspace_snapshot_with_env
+                snapshot = workspace_snapshot_with_env(self.engine._session_env())
+                return {"ok": True, "result": snapshot["windows"],
+                        "selected_window_id": self.selected_window_id}
             return self.engine._run_kwin_query({})
         if method == "atspi_find":
             app = params.get("app")
@@ -818,10 +952,23 @@ class Worker:
                     raise ValueError("live_target_window_unavailable")
                 self.live_selected_window = target
                 return self._format_window_row(target)
+            if self.access_scope == "full_virtual_desktop" and self.selected_window_id is not None:
+                from jevdesktop.native_windows import workspace_snapshot_with_env
+                rows = workspace_snapshot_with_env(self.engine._session_env())["windows"]
+                target = next((row for row in rows if row.get("id") == self.selected_window_id), None)
+                if target is None:
+                    raise ValueError("live_target_window_unavailable")
+                self.selected_window = target
+                return self._format_window_row(target)
             return self.engine.window_geometry(app_name=params["app"])
         if method == "active_window":
             if self.desktop_mode == "live":
                 active = next((row for row in self._native_windows() if row.get("active")), None)
+                return self._format_window_row(active) if active else "No active window."
+            if self.access_scope == "full_virtual_desktop":
+                from jevdesktop.native_windows import workspace_snapshot_with_env
+                snapshot = workspace_snapshot_with_env(self.engine._session_env())
+                active = next((row for row in snapshot["windows"] if row.get("active")), None)
                 return self._format_window_row(active) if active else "No active window."
             return self.engine.active_window()
         if method == "screenshot":

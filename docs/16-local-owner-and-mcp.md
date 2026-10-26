@@ -1,15 +1,19 @@
 # 16 — Local owner, CLI and MCP surface
 
-## Current contract — 2026-10-25
+## Current contract — 2026-10-26
 
 This current section supersedes any conflicting live-session, app-registry,
 focus-restoration, action, or MCP-tool details in the historical dated text
 below. The full acceptance checklist is in
 [doc 40](40-live-workspace-and-profiles.md).
 
+- Access scope is explicit: selected_application (default), full_virtual_desktop
+  or full_live_desktop. The owner enables scopes in `allowed_access_scopes`.
+  App allowlists apply to selected-application scope; full scopes permit
+  transitions within their desktop without per-app entries.
+  See [the scope contract](41-access-scopes.md).
 - Profiles describe launch argv and window/AT-SPI identities; they do not
-  authorize access. The explicit `--allow-app`/`allowed_apps` allowlist remains
-  required. Built-in profiles are Kate, Firefox and KCalc. Custom profiles use
+  authorize access. `--allow-app`/`allowed_apps` is required for selected-app work. Built-in profiles are Kate, Firefox and KCalc. Custom profiles use
   `${XDG_CONFIG_HOME:-~/.config}/jev-desktop/app_profiles.json`.
 - The runtime offers `workspace`, `profiles`, and `relays` commands/tools.
   Live sessions can launch a configured app or attach to an exact window ID.
@@ -60,7 +64,7 @@ Configuration can be managed with `pi mcp add jev-desktop --exposure direct
 Use `pi mcp list --json` from the repo and another directory to check each scope.
 Private MCP JSON files remain outside Git; preserve unrelated server entries.
 
-Validation: both scopes discovered all 15 tools without errors; an offline Pi
+Validation: both scopes discovered all 17 tools without errors; an offline Pi
 RPC startup discovered `skill:jev-desktop`; MCP initialization and real
 `desktop_status`/`desktop_capabilities` calls using the configured transport
 succeeded. The owner was current and idle. No provider/model call, desktop

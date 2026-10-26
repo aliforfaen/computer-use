@@ -257,7 +257,11 @@ class AuditLog:
     """Append-only JSONL audit writer with a deliberately closed field schema."""
 
     def __init__(self, path: str | os.PathLike[str], *, caller_node: str = "local", transport: str = "local",
-                 rotation: AuditRotation = DEFAULT_ROTATION):
+                 rotation: AuditRotation = DEFAULT_ROTATION,
+                 access_scope: str = "selected_application"):
+        if access_scope not in {"selected_application", "full_live_desktop", "full_virtual_desktop"}:
+            raise ValueError("invalid_access_scope")
+        self.access_scope = access_scope
         self.path = Path(path)
         self.caller_node = _safe_context(caller_node)
         self.transport = _safe_context(transport)
@@ -284,6 +288,7 @@ class AuditLog:
             "tool": tool,
             "app": _safe_context(app),
             "autonomy_mode": mode.value,
+            "access_scope": self.access_scope,
             "event": event,
             "status": status,
             "jev_answers": None,

@@ -37,7 +37,8 @@ from jevdesktop.transactions import (Action, AuditLog, AutonomyMode, Candidate, 
 
 
 METHODS = frozenset({"capabilities", "status", "session_start", "session_stop", "observe",
-                     "wait", "candidates", "act", "cancel", "stop_all", "workspace", "relays", "profiles", "reconcile", "input"})
+                     "wait", "candidates", "act", "cancel", "stop_all", "workspace", "relays", "profiles", "reconcile", "input", "select_window", "launch_app"})
+ACCESS_SCOPES = frozenset({"selected_application", "full_virtual_desktop", "full_live_desktop"})
 
 
 def _safe_error(value: str) -> dict[str, str]:
@@ -137,11 +138,11 @@ class DesktopWorkerClient:
 
     def start(self, app: str, journal_path: str | None = None, desktop_mode: str = "virtual",
               temporary_a11y: bool = False, *, profile=None, window_id=None,
-              attach=False, semantic_candidates=True):
+              attach=False, semantic_candidates=True, access_scope="selected_application"):
         self.profile = profile
         result = self.rpc("start", app=app, journal_path=journal_path, desktop_mode=desktop_mode,
                           temporary_a11y=temporary_a11y, profile=profile, window_id=window_id,
-                          attach=attach, semantic_candidates=semantic_candidates)
+                          attach=attach, semantic_candidates=semantic_candidates, access_scope=access_scope)
         self.cleanup_paths = result.get("cleanup_paths", []) if isinstance(result, dict) else []
         if isinstance(result, dict):
             self.selected_window_id = result.get("selected_window_id") or result.get("task_owned_window_id") or window_id
@@ -311,7 +312,7 @@ class DesktopWorkerClient:
             if self.cleanup_recorded_paths() is False and self.cleanup_paths: return False
             if live_mode:
                 original = record.get("action_original_window") or record.get("original_window")
-                focus_ok = False
+                focus_ok = original is None
                 from kwin_mcp.core import AutomationEngine
                 from jevdesktop.live_desktop_probe import _restore_exact, _window_rows
                 engine = AutomationEngine()
@@ -409,7 +410,7 @@ class _Session:
                  *, idle_timeout=180.0, max_session_lifetime=1800.0, max_actions=64,
                  max_observations=256, monotonic=time.monotonic, desktop_mode="virtual",
                  audit_rotation: AuditRotation = DEFAULT_ROTATION, profile=None,
-                 attached=False, semantic_candidates=True):
+                 attached=False, semantic_candidates=True, access_scope="selected_application"):
         self.app = app
         self.profile = profile
         self.attached = attached
@@ -419,6 +420,7 @@ class _Session:
         self.pending_input_captures = set()
         self.visual_input_uncertain = False
         self.desktop_mode = desktop_mode
+        self.access_scope = access_scope
         self.mode = mode
         self.worker = worker
         self.session_id = session_id
@@ -446,7 +448,7 @@ class _Session:
                               if reader is not None and max_reader_calls > 0 else None)
         self.max_reader_calls = self.reader_budget.max_calls if self.reader_budget else 0
         self.adapter = ObservationAdapter(worker, session_id, reader=self.reader_budget, allowed_apps={app})
-        self.tx = TransactionEngine(KwinMcpBackend(worker), audit=AuditLog(audit_path, rotation=self.audit_rotation),
+        self.tx = TransactionEngine(KwinMcpBackend(worker), audit=AuditLog(audit_path, rotation=self.audit_rotation, access_scope=access_scope),
                                     policy=Policy(allowed_apps=frozenset({app}), max_actions=max_actions,
                                                   max_observations=max_observations,
                                                   max_duration_seconds=max_session_lifetime,
@@ -480,6 +482,13 @@ class _Session:
         data = (json.dumps(payload, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
         append_jsonl(self.audit_path, data, rotation=self.audit_rotation)
 
+    def invalidate_references(self) -> None:
+        """Drop target-bound state while preserving budgets and uncertainty latches."""
+        self.adapter.store.clear()
+        self.valid_input_captures.clear()
+        self.pending_input_captures.clear()
+        self.tx._last.clear()
+
 
 class DesktopService:
     """Own one active session and serialize all stateful operations."""
@@ -489,7 +498,8 @@ class DesktopService:
                  idle_timeout: float = 180.0, max_session_lifetime: float = 1800.0,
                  max_actions: int = 64, max_observations: int = 256,
                  monotonic=time.monotonic, watchdog_interval: float = 1.0,
-                 audit_rotation: AuditRotation = DEFAULT_ROTATION):
+                 audit_rotation: AuditRotation = DEFAULT_ROTATION,
+                 allowed_access_scopes=("selected_application",)):
         self.audit_path = Path(audit_path or paths.run_dir() / "desktop-service" / "actions.jsonl")
         self.audit_rotation = audit_rotation
         self.worker_factory = worker_factory or (lambda: DesktopWorkerClient(timeout=request_timeout))
@@ -506,6 +516,10 @@ class DesktopService:
         if not all(isinstance(name, str) and name.casefold() in self.profiles for name in allowed_apps):
             raise ValueError("allowed_apps must name configured app profiles")
         self.allowed_apps = frozenset(profile_for(name, self.profiles).id for name in allowed_apps)
+        if (not isinstance(allowed_access_scopes, (list, tuple, set, frozenset))
+                or not allowed_access_scopes or any(value not in ACCESS_SCOPES for value in allowed_access_scopes)):
+            raise ValueError("allowed_access_scopes must contain known scopes")
+        self.allowed_access_scopes = frozenset(allowed_access_scopes)
         self.relay_manager = SSHForwardManager()
         self.stop_timeout = stop_timeout
         for name, value in (("idle_timeout", idle_timeout), ("max_session_lifetime", max_session_lifetime),
@@ -568,13 +582,18 @@ class DesktopService:
         return True
 
     def _audit(self, method, ctx, app="", mode="guarded", status="ok", reason="completed", verification=None,
-               duration_ms=None, request_id=None, desktop_mode="virtual"):
+               duration_ms=None, request_id=None, desktop_mode="virtual", access_scope=None):
         record = {"timestamp": datetime.now(timezone.utc).isoformat(),
                   "caller_node": _context(ctx, "caller_node"), "transport": _context(ctx, "transport"),
-                  "tool": method, "app": app if app in self.allowed_apps else "", "autonomy_mode": mode,
+                  "tool": method, "app": (app if app in self.allowed_apps or
+                      (getattr(self._session, "access_scope", "selected_application") in
+                       {"full_virtual_desktop", "full_live_desktop"} and isinstance(app, str)
+                       and re.fullmatch(r"[A-Za-z0-9_.+ -]{1,128}", app)) else ""),
+                  "autonomy_mode": mode,
                   "desktop_mode": desktop_mode,
+                  "access_scope": access_scope or getattr(self._session, "access_scope", "selected_application"),
                   "event": method, "status": status, "jev_answers": None,
-                  "action": method if method in {"act", "input"} else None,
+                  "action": method if method in {"act", "input", "launch_app"} else None,
                   "verification": verification, "reason": reason,
                   "request_id": request_id,
                   "duration_ms": round(max(0.0, duration_ms), 3) if duration_ms is not None else None}
@@ -593,6 +612,7 @@ class DesktopService:
         idle = max(0.0, now - s.last_activity_clock)
         return {"session_id": s.session_id, "app": s.app, "mode": s.mode.value,
                 "desktop_mode": s.desktop_mode,
+                "access_scope": s.access_scope,
                 "ownership": "attached" if s.attached else "launched",
                 "semantic_candidates": s.semantic_candidates,
                 "uncertain_input": bool(s.visual_input_uncertain or s.tx._blocked.get(s.session_id)),
@@ -628,6 +648,29 @@ class DesktopService:
             return result
         return value
 
+    def _bind_scoped_window(self, session: _Session, row: dict[str, Any]) -> str:
+        """Bind a freshly selected broad-scope window to its known or ephemeral identity profile."""
+        from jevdesktop.app_profiles import AppProfile, profile_for_window_identity
+
+        identity = row.get("app")
+        if not isinstance(identity, str) or not identity or len(identity) > 128:
+            raise ValueError("live_window_identity_unavailable")
+        match = profile_for_window_identity(identity, self.profiles)
+        profile = match or AppProfile(identity, (), (identity,), identity, ())
+        profile_data = {"id": profile.id, "command": list(profile.command),
+                        "window_app_ids": list(profile.window_app_ids), "atspi_app": profile.atspi_app,
+                        "aliases": list(profile.aliases)}
+        session.app = profile.id
+        session.profile = profile_data
+        session.tx.policy = __import__("dataclasses").replace(
+            session.tx.policy, allowed_apps=frozenset({profile.id}))
+        session.worker.profile = profile_data
+        session.worker.selected_window_id = row["id"]
+        session.worker.selected_window = row
+        session.adapter.allowed_apps = frozenset({profile.id.casefold()})
+        session.adapter.profiles = self.profiles if match else {profile.id.casefold(): profile}
+        return profile.id
+
     def _require_session(self, params):
         with self._lock: s = self._session
         if s is None: raise ValueError("session_not_found")
@@ -650,15 +693,20 @@ class DesktopService:
         if isinstance(app, str) and app.casefold() in self.profiles:
             app = profile_for(app, self.profiles).id
         s = None
+        launch_attempted = False
         try:
             if method not in METHODS: raise ValueError("method_not_found")
             if method == "capabilities":
                 result = {"allowed_apps": sorted(self.allowed_apps), "virtual_only": False, "one_active_session": True,
+                          "allowed_access_scopes": sorted(self.allowed_access_scopes),
+                          "access_scope_policy": {"selected_application": "explicit_app_allowlist",
+                              "full_virtual_desktop": "isolated_task_desktop; configured_argv_profile_launch_only",
+                              "full_live_desktop": "owner_present; exact_current_window_selection; preserve_all_preexisting_apps"},
                           "desktop_modes": {"virtual": "available", "live": "foreground; launch_or_attach; explicit_owner_override"},
-                          "semantic_candidates": "opt_in_for_live; virtual_default_enabled",
+                          "semantic_candidates": "selected_virtual_default_enabled; live_opt_in; full_virtual_screenshot_only",
                           "input": {"grounding": "single_use_capture", "effect": "uncertain"},
                           "focus_policy": "task_foreground; restore_original_on_stop",
-                          "workspace": "live_window_inventory; captions_only_for_allowed_profiles",
+                          "workspace": "explicit_inventory; captions_for_allowed_profiles_or_any_window_inside_full_scope",
                           "physical_input_detection": "unavailable",
                           "grounding": {"bounds": "screen_logical", "paired_capture": "include_candidates",
                                         "capture_relation": "sequential_not_atomic"},
@@ -679,9 +727,16 @@ class DesktopService:
                           "audit": {"path": str(self.audit_path), "rotation": self.audit_rotation.summary(),
                                     "retention": "size-based backups pruned by age"}}
             elif method == "profiles":
-                result = {"profiles": [{"id": name,
+                with self._lock:
+                    current = self._session
+                    profile_scope = current.access_scope if current is not None else "selected_application"
+                broad_scope = profile_scope in {"full_live_desktop", "full_virtual_desktop"}
+                result = {"access_scope": profile_scope, "profiles": [{"id": name,
                           "window_app_ids": list(profile_for(name, self.profiles).window_app_ids),
-                          "allowed": name in self.allowed_apps} for name in sorted({item.id for item in self.profiles.values()})]}
+                          "allowed": broad_scope or name in self.allowed_apps,
+                          "app_allowlisted": name in self.allowed_apps,
+                          "launch_allowed": profile_scope == "full_virtual_desktop"}
+                          for name in sorted({item.id for item in self.profiles.values()})]}
             elif method == "relays":
                 if params: raise ValueError("invalid_params")
                 result = self.relay_manager.snapshot()
@@ -689,7 +744,7 @@ class DesktopService:
                 if params: raise ValueError("invalid_params")
                 with self._lock:
                     current = self._session
-                    if current is not None and current.desktop_mode == "live":
+                    if current is not None:
                         if not current.busy.acquire(blocking=False): raise ValueError("session_busy")
                         try:
                             result = current.worker.rpc("workspace_discover")
@@ -705,12 +760,15 @@ class DesktopService:
                 aliases = {alias.casefold() for name in self.allowed_apps
                            for alias in profile_for(name, self.profiles).window_app_ids}
                 if isinstance(result, dict):
+                    whole_scope = current is not None and current.access_scope in {
+                        "full_live_desktop", "full_virtual_desktop"}
                     for row in result.get("windows", []):
                         identity = str(row.get("app", "")).casefold()
-                        row["allowed"] = identity in aliases
-                        row["profile_id"] = next((name for name in sorted(self.allowed_apps)
+                        row["allowed"] = whole_scope or identity in aliases
+                        row["profile_id"] = next((name for name in sorted(
+                            {profile.id for profile in self.profiles.values()} if whole_scope else self.allowed_apps)
                             if identity in {value.casefold() for value in profile_for(name, self.profiles).window_app_ids}), None)
-                        if not row["allowed"]:
+                        if not row["allowed"] and not whole_scope:
                             row.pop("caption", None)
                             row.pop("title", None)
                     result["session"] = self._status(current)
@@ -721,25 +779,42 @@ class DesktopService:
                     "last_stop_reason": self._last_stop_reason, "last_stop_at": self._last_stop_at,
                     "watchdog_running": self._watchdog.is_alive()}}
             elif method == "session_start":
-                if app not in self.allowed_apps: raise ValueError("app_not_allowed")
-                desktop_mode = params.get("desktop_mode", "virtual")
-                if desktop_mode not in {"virtual", "live"}: raise ValueError("invalid_params")
+                access_scope = params.get("access_scope", "selected_application")
+                if access_scope not in ACCESS_SCOPES: raise ValueError("invalid_params")
+                if access_scope not in self.allowed_access_scopes: raise ValueError("access_scope_not_allowed")
+                desktop_mode = {"selected_application": params.get("desktop_mode", "virtual"),
+                                "full_virtual_desktop": "virtual", "full_live_desktop": "live"}[access_scope]
+                if params.get("desktop_mode") is not None and params.get("desktop_mode") != desktop_mode:
+                    raise ValueError("access_scope_mode_mismatch")
+                if access_scope == "selected_application" and app not in self.allowed_apps: raise ValueError("app_not_allowed")
+                if access_scope != "selected_application" and app not in ("", None): raise ValueError("invalid_params")
                 if desktop_mode == "live" and params.get("owner_present_override") is not True:
                     raise ValueError("owner_present_override_required")
-                semantics = params.get("semantic_candidates", desktop_mode != "live")
+                semantics = params.get("semantic_candidates", desktop_mode != "live" and access_scope == "selected_application")
                 attach = params.get("attach", False)
                 window_id = params.get("window_id")
                 if type(semantics) is not bool or type(attach) is not bool:
                     raise ValueError("invalid_params")
                 if attach and (desktop_mode != "live" or not isinstance(window_id, str) or not window_id):
                     raise ValueError("invalid_params")
-                if window_id is not None and not attach:
+                if access_scope == "full_live_desktop" and attach:
+                    raise ValueError("invalid_params")
+                if access_scope == "full_live_desktop" and semantics and params.get("temporary_a11y") is not True:
+                    raise ValueError("live_temporary_a11y_required")
+                if window_id is not None and not attach and access_scope != "full_live_desktop":
                     raise ValueError("invalid_params")
                 if desktop_mode == "live" and semantics and params.get("temporary_a11y") is not True:
                     raise ValueError("live_temporary_a11y_required")
-                profile = profile_for(app, self.profiles)
-                profile_data = {"id": profile.id, "command": list(profile.command),
-                                "window_app_ids": list(profile.window_app_ids), "atspi_app": profile.atspi_app}
+                if access_scope == "full_virtual_desktop" and semantics:
+                    raise ValueError("semantic_candidates_unavailable")
+                if access_scope == "selected_application":
+                    profile = profile_for(app, self.profiles)
+                    profile_data = {"id": profile.id, "command": list(profile.command),
+                                    "window_app_ids": list(profile.window_app_ids), "atspi_app": profile.atspi_app}
+                    task_app = profile.id
+                else:
+                    profile_data = None
+                    task_app = "desktop"
                 mode = AutonomyMode(params.get("mode", "guarded"))
                 with self._lock:
                     if self._session is not None: raise ValueError("session_exists")
@@ -747,26 +822,29 @@ class DesktopService:
                     sid = uuid.uuid4().hex
                     journal_path = self.audit_path.parent / "sessions" / f"{sid}.json"
                     if isinstance(worker, DesktopWorkerClient): worker.journal_path = journal_path
-                    s = _Session(app, mode, worker, sid, reader=self.reader, audit_path=self.audit_path,
+                    s = _Session(task_app, mode, worker, sid, reader=self.reader, audit_path=self.audit_path,
                                  max_reader_calls=self.max_reader_calls, idle_timeout=self.idle_timeout,
                                  max_session_lifetime=self.max_session_lifetime, max_actions=self.max_actions,
                                  max_observations=self.max_observations, monotonic=self._monotonic,
                                  desktop_mode=desktop_mode, audit_rotation=self.audit_rotation,
-                                 profile=profile_data, attached=attach, semantic_candidates=semantics)
+                                 profile=profile_data, attached=(attach or access_scope == "full_live_desktop"),
+                                 semantic_candidates=semantics, access_scope=access_scope)
                     s.state = "starting"
                     self._last_stop_reason = None
                     self._last_stop_at = None
                     try:
-                        started = (worker.start(app, str(journal_path), desktop_mode,
+                        started = (worker.start(task_app, str(journal_path), desktop_mode,
                                                 temporary_a11y=params.get("temporary_a11y") is True,
                                                 profile=profile_data, window_id=window_id, attach=attach,
-                                                semantic_candidates=semantics)
+                                                semantic_candidates=semantics, access_scope=access_scope)
                                    if isinstance(worker, DesktopWorkerClient)
-                                   else worker.start(app))
+                        else worker.start(task_app))
                         if isinstance(started, dict):
                             path = started.get("document_path")
                             if isinstance(path, str): s.document_path = path
                             if isinstance(started.get("selected_window"), dict):
+                                if access_scope == "full_live_desktop":
+                                    app = self._bind_scoped_window(s, started["selected_window"])
                                 s.focus_context = self._public_workspace({"selected_window": started["selected_window"],
                                     "selected_window_id": started.get("selected_window_id"),
                                     "root_window_id": started.get("root_window_id")})
@@ -861,15 +939,23 @@ class DesktopService:
                 s = self._require_session(params)
                 if app and app != s.app: raise ValueError("app_session_mismatch")
                 app = s.app
-                if method not in {"observe", "wait", "candidates", "act", "reconcile", "input"}: raise ValueError("method_not_found")
                 if self._expiry_reason(s) is not None:
                     self._expire_if_needed()
                     raise ValueError("session_expiring")
                 if not s.busy.acquire(blocking=False): raise ValueError("session_busy")
+                if method not in {"observe", "wait", "candidates", "act", "reconcile", "input", "launch_app", "select_window"}:
+                    raise ValueError("method_not_found")
                 focus_live_for_call = s.desktop_mode == "live" and method in {
                     "observe", "wait", "candidates", "act", "reconcile", "input"
-                }
+                } and not (method == "observe" and params.get("scope", "app") == "desktop") \
+                  and (s.access_scope != "full_live_desktop"
+                       or getattr(s.worker, "selected_window_id", None) is not None)
                 try:
+                    if method == "select_window":
+                        if s.access_scope not in {"full_live_desktop", "full_virtual_desktop"}:
+                            raise ValueError("access_scope_mismatch")
+                        if not isinstance(params.get("window_id"), str) or not params["window_id"]:
+                            raise ValueError("invalid_params")
                     if focus_live_for_call:
                         # Live AT-SPI fingerprints include state such as
                         # focused, and compositor captures include the active
@@ -889,11 +975,55 @@ class DesktopService:
                     s.tx.audit.transport = _context(context, "transport")
                     if self._monotonic() - s.started_clock > s.max_session_lifetime:
                         raise ValueError("task_time_budget_exceeded")
-                    if method == "observe":
+                    if method == "launch_app":
+                        if s.access_scope != "full_virtual_desktop":
+                            raise ValueError("access_scope_mismatch")
+                        profile_id = params.get("profile_id")
+                        if not isinstance(profile_id, str) or profile_id.casefold() not in self.profiles:
+                            raise ValueError("profile_not_found")
+                        if s.actions >= s.max_actions:
+                            raise ValueError("task_action_budget_exceeded")
+                        profile = profile_for(profile_id, self.profiles)
+                        s.invalidate_references()
+                        s.worker.selected_window_id = None
+                        s.worker.selected_window = None
+                        s.focus_context = None
+                        s.actions += 1
+                        launch_attempted = True
+                        result = s.worker.rpc("launch_app", profile_id=profile.id)
+                        s.app = profile.id
+                        app = s.app
+                        s.profile = {"id": profile.id, "command": list(profile.command),
+                                     "window_app_ids": list(profile.window_app_ids), "atspi_app": profile.atspi_app}
+                        s.adapter.allowed_apps = frozenset({profile.id.casefold()})
+                        s.adapter.profiles = self.profiles
+                        s.tx.policy = __import__("dataclasses").replace(
+                            s.tx.policy, allowed_apps=frozenset({profile.id}))
+                        result["access_scope"] = s.access_scope
+                    elif method == "select_window":
+                        # Activation may succeed even when the reply is lost.
+                        s.invalidate_references()
+                        selected = s.worker.rpc("select_window", window_id=params["window_id"])
+                        row = selected.get("selected_window") if isinstance(selected, dict) else None
+                        if not isinstance(row, dict) or row.get("id") != params["window_id"]:
+                            raise ValueError("live_selected_window_unavailable")
+                        # Full-live captures are scoped to the currently selected exact window.
+                        # A switch invalidates every semantic/capture reference before returning.
+                        s.invalidate_references()
+                        app = self._bind_scoped_window(s, row)
+                        s.focus_context = self._public_workspace({"selected_window": row,
+                            "selected_window_id": row.get("id"), "access_scope": s.access_scope})
+                        result = {"selected_window_id": row.get("id"), "selected_window": s.focus_context["selected_window"],
+                                  "access_scope": s.access_scope, "references_invalidated": True}
+                    elif method == "observe":
                         if s.observations >= s.max_observations: raise ValueError("task_observation_budget_exceeded")
                         if s.cancel.is_set(): raise ValueError("cancelled")
                         include_candidates = params.get("include_candidates", False)
+                        if params.get("scope", "app") == "desktop" and s.access_scope not in {"full_live_desktop", "full_virtual_desktop"}:
+                            raise ValueError("access_scope_mismatch")
                         if type(include_candidates) is not bool:
+                            raise ValueError("invalid_params")
+                        if params.get("scope", "app") == "desktop" and include_candidates:
                             raise ValueError("invalid_params")
                         if include_candidates and not s.semantic_candidates:
                             raise ValueError("semantic_candidates_disabled")
@@ -1007,7 +1137,7 @@ class DesktopService:
                         if s.mode is AutonomyMode.GUARDED and risk and not approval: raise ValueError("approval_required")
                         self._audit(method, context, app, s.mode.value, "pending",
                                     "approved_action" if approval else "action_pending", verification,
-                                    request_id=request_id, desktop_mode=s.desktop_mode)
+                                    request_id=request_id, desktop_mode=s.desktop_mode, access_scope=s.access_scope)
                         before_snapshot = s.tx._last.get((s.session_id, app))
                         verifier = self._verifier(s, verification, params.get("expected"), candidate,
                                                   before_snapshot, direction=direction)
@@ -1051,7 +1181,8 @@ class DesktopService:
             self._audit(method, context, app, s.mode.value if s else "guarded", "ok", completed_reason,
                         verification,
                         duration_ms=(self._monotonic() - dispatch_started) * 1000, request_id=request_id,
-                        desktop_mode=s.desktop_mode if s else params.get("desktop_mode", "virtual"))
+                        desktop_mode=s.desktop_mode if s else params.get("desktop_mode", "virtual"),
+                        access_scope=s.access_scope if s else params.get("access_scope", "selected_application"))
             return {"ok": True, **result}
         except Exception as exc:
             raw = (exc.code if isinstance(exc, ObservationError) else
@@ -1068,7 +1199,11 @@ class DesktopService:
             self._audit(method if isinstance(method, str) else "unknown", context, app,
                         s.mode.value if s else "guarded", "failed", err["code"], verification=failure_evidence,
                         duration_ms=(self._monotonic() - dispatch_started) * 1000, request_id=request_id,
-                        desktop_mode=s.desktop_mode if s else params.get("desktop_mode", "virtual"))
+                        desktop_mode=s.desktop_mode if s else params.get("desktop_mode", "virtual"),
+                        access_scope=s.access_scope if s else params.get("access_scope", "selected_application"))
+            if launch_attempted:
+                err["launch_may_have_succeeded"] = True
+                err["automatic_retry_allowed"] = False
             if s is not None and (s.visual_input_uncertain or s.tx._blocked.get(s.session_id)):
                 err["input_may_have_been_delivered"] = True
                 err["automatic_retry_allowed"] = False

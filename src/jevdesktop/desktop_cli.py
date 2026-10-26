@@ -85,6 +85,9 @@ def _build_parser() -> argparse.ArgumentParser:
     daemon.add_argument("--run-dir", type=Path, default=None)
     daemon.add_argument("--audit", type=Path, default=None)
     daemon.add_argument("--allow-app", action="append", default=[], help="explicit allowlist app identity (repeatable); config/env may supply it instead")
+    daemon.add_argument("--allow-access-scope", action="append", default=[],
+                        choices=("selected_application", "full_virtual_desktop", "full_live_desktop"),
+                        help="enable one owner-authorized access scope; repeatable; config may supply this")
     daemon.add_argument("--config", type=Path, default=None, help="private JSON config; CLI flags win")
     daemon.add_argument("--reader-provider", choices=("deepseek", "mimo", "generic"), default=None)
     daemon.add_argument("--reader-base-url", default=None)
@@ -106,6 +109,9 @@ def _build_parser() -> argparse.ArgumentParser:
     service_commands = service.add_subparsers(dest="service_command", required=True)
     install = service_commands.add_parser("install", help="write the unit and a starter config, then daemon-reload")
     install.add_argument("--allow-app", action="append", default=[], help="seed the starter config allowlist (repeatable)")
+    install.add_argument("--allow-access-scope", action="append", default=[],
+                         choices=("selected_application", "full_virtual_desktop", "full_live_desktop"),
+                         help="seed owner-authorized scopes in a new starter config (repeatable)")
     install.add_argument("--config", type=Path, default=None, help="config path to seed and reference")
     install.add_argument("--unit-dir", type=Path, default=None, help="override the systemd user unit directory")
     install.add_argument("--tray", action="store_true", help="also install the tray indicator unit")
@@ -123,8 +129,10 @@ def _build_parser() -> argparse.ArgumentParser:
     for name, help_text in (("capabilities", "show owner capabilities"), ("status", "show owner/session status"), ("workspace", "discover live windows without taking focus"), ("profiles", "list configured app profiles"), ("relays", "report named MCP relay state")):
         sub = commands.add_parser(name, help=help_text)
         _add_socket(sub)
-    start = commands.add_parser("session-start", aliases=["start"], help="start an allowlisted virtual or explicitly authorized live task")
-    start.add_argument("app")
+    start = commands.add_parser("session-start", aliases=["start"], help="start a task in the configured access scope")
+    start.add_argument("app", nargs="?")
+    start.add_argument("--access-scope", choices=("selected_application", "full_virtual_desktop", "full_live_desktop"), default="selected_application")
+    start.add_argument("--window-id", help="select this exact current window at full_live_desktop start")
     start.add_argument("--mode", choices=("supervised", "guarded", "yolo"), default="guarded")
     start.add_argument("--live", action="store_true", help="use the owner's live desktop for this task")
     start.add_argument("--owner-present-override", action="store_true",
@@ -140,8 +148,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_socket(stop)
     session = commands.add_parser("session", help="start or stop the current virtual session")
     session_commands = session.add_subparsers(dest="session_command", required=True)
-    nested_start = session_commands.add_parser("start", help="start an allowlisted virtual session")
-    nested_start.add_argument("app")
+    nested_start = session_commands.add_parser("start", help="start a task in the configured access scope")
+    nested_start.add_argument("app", nargs="?")
+    nested_start.add_argument("--access-scope", choices=("selected_application", "full_virtual_desktop", "full_live_desktop"), default="selected_application")
+    nested_start.add_argument("--window-id", help="select this exact current window at full_live_desktop start")
     nested_start.add_argument("--mode", choices=("supervised", "guarded", "yolo"), default="guarded")
     nested_start.add_argument("--live", action="store_true", help="use the owner's live desktop for this task")
     nested_start.add_argument("--owner-present-override", action="store_true",
@@ -155,19 +165,25 @@ def _build_parser() -> argparse.ArgumentParser:
     nested_stop.add_argument("--session-id")
     _add_socket(nested_stop)
     candidates = commands.add_parser("candidates", help="enumerate fresh semantic candidates")
-    candidates.add_argument("app")
+    candidates.add_argument("app", nargs="?")
+    select_window = commands.add_parser("select-window", help="focus an exact window in an active full desktop session")
+    select_window.add_argument("window_id")
+    _add_socket(select_window)
+    launch_app = commands.add_parser("launch-app", help="launch one configured argv profile inside a full_virtual_desktop session")
+    launch_app.add_argument("profile_id")
+    _add_socket(launch_app)
     _add_socket(candidates)
     observe = commands.add_parser("observe", help="capture and observe an allowlisted app")
-    observe.add_argument("app")
+    observe.add_argument("app", nargs="?")
     observe.add_argument("--output", choices=("metadata", "image", "data", "both"), default="metadata")
-    observe.add_argument("--scope", choices=("app", "full", "crop"), default="app")
+    observe.add_argument("--scope", choices=("app", "full", "crop", "desktop"), default="app")
     observe.add_argument("--crop", help="JSON crop object: {\"x\":int,\"y\":int,\"width\":int,\"height\":int}")
     observe.add_argument("--include-candidates", action="store_true", help="pair a fresh capture with semantic refs and image geometry; costs two extra state reads")
     observe.add_argument("--capture-id", help="reuse an unexpired capture ID")
     observe.add_argument("--questions-json", help="reader questions as a JSON list of field/type/description objects")
     _add_socket(observe)
     wait = commands.add_parser("wait", help="EXPERIMENTAL heartbeat wait for a bounded screenshot condition; prefer polling observe/candidates")
-    wait.add_argument("app")
+    wait.add_argument("app", nargs="?")
     wait.add_argument("--expected", required=True, help="caller-authored visible condition; maximum 500 characters")
     wait.add_argument("--timeout", type=float, default=30.0, help="wait deadline in seconds (maximum 120)")
     _add_socket(wait)
@@ -184,7 +200,7 @@ def _build_parser() -> argparse.ArgumentParser:
     act.add_argument("--steps", type=int)
     _add_socket(act)
     reconcile = commands.add_parser("reconcile", help="inspect uncertain input and acknowledge continuation without replay")
-    reconcile.add_argument("app")
+    reconcile.add_argument("app", nargs="?")
     reconcile.add_argument("--acknowledge-uncertain", action="store_true", required=True)
     _add_socket(reconcile)
     image_input = commands.add_parser("input", help="one input grounded in a fresh capture; outcome remains uncertain")
@@ -235,6 +251,8 @@ def main(argv: list[str] | None = None) -> int:
             daemon_args += ["--audit", str(args.audit)]
         for app in args.allow_app:
             daemon_args += ["--allow-app", app]
+        for scope in args.allow_access_scope:
+            daemon_args += ["--allow-access-scope", scope]
         for flag, value in (("--reader-provider", args.reader_provider),
                             ("--reader-base-url", args.reader_base_url),
                             ("--reader-model", args.reader_model),
@@ -263,13 +281,24 @@ def main(argv: list[str] | None = None) -> int:
         method_params = {}
     elif method in {"session-start", "start"} or (method == "session" and args.session_command == "start"):
         method, method_params = "session_start", {"app": args.app, "mode": args.mode,
-            "desktop_mode": "live" if args.live else "virtual",
+            "access_scope": args.access_scope,
             "owner_present_override": args.owner_present_override,
             "temporary_a11y": args.temporary_a11y}
+        if args.access_scope == "selected_application":
+            if not args.app: raise ValueError("app_required")
+            method_params["desktop_mode"] = "live" if args.live else "virtual"
+        elif args.app:
+            raise ValueError("app_not_valid_for_full_scope")
+        if args.window_id:
+            method_params["window_id"] = args.window_id
         if args.semantic_candidates is not None:
             method_params["semantic_candidates"] = args.semantic_candidates
         if args.attach_window:
             method_params.update(attach=True, window_id=args.attach_window)
+    elif method == "select-window":
+        method, method_params = "select_window", {"window_id": args.window_id}
+    elif method == "launch-app":
+        method, method_params = "launch_app", {"profile_id": args.profile_id}
     elif method in {"session-stop", "session"}:
         if method == "session" and args.session_command != "stop":
             raise ValueError("unknown session command")

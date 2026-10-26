@@ -502,3 +502,19 @@ automatic replay. Explicit reconciliation and worker-loss cleanup support
 reconnection. Relay monitoring is read-only and distinguishes process, local
 listener and untested MCP health. Offline checks do not validate the new host
 behavior; watched acceptance remains separate. See doc 40.
+
+
+### ADR-034 — Explicit desktop access scopes
+
+**2026-10-26 · owner-authorized implementation.** Reuse KWin/kwin-mcp for
+window identity and isolated virtual sessions. Keep `selected_application` as the
+default, with its configured profile and app allowlist. Explicitly enabled
+`full_live_desktop` and `full_virtual_desktop` scopes authorize windows within
+the selected desktop without per-app allowlist changes. This supersedes the
+per-app-only reach restriction in ADR-033, independently of autonomy. Profiles
+remain configured launch metadata; full virtual launch accepts profile IDs,
+not arbitrary commands. Virtual discovery and activation use the isolated bus.
+Exact window selection invalidates all earlier target references while retaining
+budgets and uncertainty. Desktop overviews cannot ground input. Live preexisting
+apps remain user-owned; virtual environments remain task-owned. Full virtual
+semantics are deferred. Offline tests do not establish live acceptance. See doc 41.

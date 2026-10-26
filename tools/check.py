@@ -24,6 +24,7 @@ CORE_MODULES = (
     "tests.test_benchmark_atspi",
     "tests.test_app_profiles",
     "tests.test_live_session_api",
+    "tests.test_access_scopes",
     "tests.test_image_input",
     "tests.test_ssh_forwards",
 )

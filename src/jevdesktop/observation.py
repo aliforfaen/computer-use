@@ -274,15 +274,16 @@ class ObservationAdapter:
 
     def capture(self, app: str, *, title: str | None = None, scope: str = "app",
                 crop: Rect | dict[str, int] | tuple[int, int, int, int] | None = None) -> CaptureRef:
-        if scope not in {"app", "full", "crop"}:
-            raise ObservationError("unsupported_scope", "scope must be app, full, or crop")
+        if scope not in {"app", "full", "crop", "desktop"}:
+            raise ObservationError("unsupported_scope", "scope must be app, full, crop, or desktop")
         if (scope == "crop") != (crop is not None):
             raise ObservationError("explicit_crop_required", "crop scope requires an explicit rectangle; other scopes do not accept one")
         try:
             from PIL import Image
         except ImportError as exc:  # pragma: no cover - depends on caller install
             raise ObservationError("pillow_unavailable", "Pillow is required for mapped capture") from exc
-        window = self._resolve_window(app, title)
+        desktop_capture = scope == "desktop"
+        window = None if desktop_capture else self._resolve_window(app, title)
         path, mapping_text = self._screenshot()
         mapping_match = re.search(r"Coordinate space: logical; origin \((-?\d+), (-?\d+)\); size (\d+)x(\d+); .*?coverage (\w+)", mapping_text)
         try:
@@ -297,12 +298,17 @@ class ObservationAdapter:
         width, height = image.size
         if (ox, oy) != (0, 0) or (mapped_w, mapped_h) != (width, height) or mapping_match.group(5) != "full":
             raise ObservationError("unsupported_mapping", "only complete virtual 1:1 screenshot mapping is supported")
-        current = self._resolve_window(app, title)
-        if (current.get("id"), current.get("app"), current.get("caption"), current.get("frame")) != (
-                window.get("id"), window.get("app"), window.get("caption"), window.get("frame")):
-            raise ObservationError("window_changed_during_capture", "application window identity or geometry changed during capture")
-        frame = self._rect(window["frame"], width, height)
-        if scope == "full":
+        if desktop_capture:
+            window = {"id": "__desktop__", "app": "__desktop__", "caption": "",
+                      "frame": {"x": 0, "y": 0, "width": width, "height": height}}
+            frame = self._rect(window["frame"], width, height)
+        else:
+            current = self._resolve_window(app, title)
+            if (current.get("id"), current.get("app"), current.get("caption"), current.get("frame")) != (
+                    window.get("id"), window.get("app"), window.get("caption"), window.get("frame")):
+                raise ObservationError("window_changed_during_capture", "application window identity or geometry changed during capture")
+            frame = self._rect(window["frame"], width, height)
+        if scope in {"full", "desktop"}:
             selected = Rect(0, 0, width, height)
         elif scope == "app":
             selected = frame
@@ -335,7 +341,7 @@ class ObservationAdapter:
         return ref
 
     def capabilities(self) -> dict[str, Any]:
-        return {"capture_scopes": ["app", "full", "crop"], "crop_requires_explicit_rect": True,
+        return {"capture_scopes": ["app", "full", "crop", "desktop"], "crop_requires_explicit_rect": True,
                 "virtual_mapping": "complete_1_to_1_only", "allowed_apps": sorted(self.allowed_apps),
                 "screenshot_only": True, "semantic_candidates": False,
                 "reader": self.reader.capabilities() if self.reader else None}

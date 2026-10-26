@@ -163,6 +163,40 @@ class ServiceUnitTests(unittest.TestCase):
             self.assertEqual(json.loads(buffer.getvalue())["error"], "allowlist_required")
             self.assertFalse((root / "config.json").exists())
 
+    def test_full_scope_only_config_can_start_without_app_allowlist(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args = _args(allowed_apps=[], allowed_access_scopes=["full_live_desktop"],
+                         audit=root / "audit.jsonl", reader_provider=None,
+                         idle_timeout=180, max_session_lifetime=1800, max_actions=64, max_observations=256)
+            service = _make_service(args)
+            try:
+                self.assertEqual(service.allowed_apps, frozenset())
+                self.assertEqual(service.allowed_access_scopes, frozenset({"full_live_desktop"}))
+            finally:
+                service.close()
+            with self.assertRaisesRegex(RuntimeError, "explicit allowlist"):
+                _make_service(_args(allowed_apps=[], allowed_access_scopes=["selected_application"],
+                                    audit=root / "audit-2.jsonl", reader_provider=None,
+                                    idle_timeout=180, max_session_lifetime=1800, max_actions=64, max_observations=256))
+            mixed = _make_service(_args(allowed_apps=[], allowed_access_scopes=["selected_application",
+                "full_live_desktop"], audit=root / "audit-3.jsonl", reader_provider=None,
+                idle_timeout=180, max_session_lifetime=1800, max_actions=64, max_observations=256))
+            mixed.close()
+
+    def test_service_install_can_seed_full_scope_without_apps(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            buffer = io.StringIO()
+            with patch.dict(os.environ, {"XDG_DATA_HOME": str(root / "data")}), \
+                    patch("jevdesktop.desktop_service_unit._systemctl", return_value=None), \
+                    contextlib.redirect_stdout(buffer):
+                self.assertEqual(_install(_args(config=root / "config.json", allow_app=[],
+                    allow_access_scope=["full_virtual_desktop"]), root / "units"), 0)
+            config = json.loads((root / "config.json").read_text())
+            self.assertEqual(config["allowed_apps"], [])
+            self.assertEqual(config["allowed_access_scopes"], ["full_virtual_desktop"])
+
     def test_status_reports_drift_and_uninstall_requires_stop_flag(self):
         with tempfile.TemporaryDirectory() as temp, \
                 patch.dict(os.environ, {"XDG_DATA_HOME": str(Path(temp) / "data")}):

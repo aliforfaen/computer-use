@@ -1,14 +1,17 @@
 # Live workspace and application profiles
 
-Updated 2026-10-25. This documents the current source contract for configured
+Updated 2026-10-26. [Access scopes](41-access-scopes.md) supersede this document's
+older universal app-allowlist assumptions. The details below describe configured
 applications and live desktop sessions. The recent live path has not yet had a
 watched host acceptance run; the checklist below is still pending.
 
 ## Application profiles and permission
 
 Profiles describe how to identify and launch an application. They do not grant
-permission to use it. The explicit app allowlist remains the authorization
-boundary in every mode, including `yolo`.
+permission to use it. Selected-application scope requires the explicit app
+allowlist in every autonomy mode, including `yolo`. An owner-enabled full live
+or full virtual scope permits app transitions within that desktop without
+per-app allowlist entries; autonomy and ownership remain separate.
 
 Custom profiles are read from
 `${XDG_CONFIG_HOME:-~/.config}/jev-desktop/app_profiles.json`. The file has a
@@ -31,7 +34,8 @@ Custom profiles are read from
 window identities accepted for this profile; `atspi_app` selects the semantic
 application; and optional `aliases` map caller names to the profile. The
 runtime loads built-ins plus validated custom entries. A custom profile must
-also be added explicitly to the service allowlist before it can be used. Check
+also be added to the service app allowlist when using selected-application
+scope. Full-desktop window selection needs no configured app profile. Check
 the actual window and AT-SPI identities on the target desktop when configuring
 a profile; the example values are not host-verified. See
 [the profile implementation](../src/jevdesktop/app_profiles.py).
@@ -40,8 +44,8 @@ a profile; the example values are not host-verified. See
 
 Live sessions require the explicit owner-present override because physical
 input activity detection is unavailable. They may launch a configured app or
-attach to one exact existing window ID. Attach checks the selected window's app
-identity against the profile. It does not choose a window by title or switch to
+attach to one exact existing window ID. Selected-application attachment checks the window's app identity against its
+profile. Full live scope instead selects any fresh exact window ID. It does not choose a window by title or switch to
 another matching app window.
 
 The task app stays in the foreground while a live session is active. Session

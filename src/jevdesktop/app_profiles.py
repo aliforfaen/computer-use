@@ -134,3 +134,17 @@ def profile_for(app: str, profiles: Mapping[str, AppProfile] | None = None) -> A
     if profile is None:
         raise ProfileError("profile_not_found")
     return profile
+
+
+def profile_for_window_identity(app_id: str, profiles: Mapping[str, AppProfile] | None = None) -> AppProfile | None:
+    """Return a configured profile for one KWin app identity, without authorizing it."""
+    if not isinstance(app_id, str) or not app_id.strip():
+        return None
+    values = profiles if profiles is not None else load_profiles()
+    folded = app_id.casefold()
+    unique = {profile.id: profile for profile in values.values()}
+    matches = [profile for profile in unique.values()
+               if folded in {profile.id.casefold(), profile.atspi_app.casefold(),
+                             *(value.casefold() for value in profile.window_app_ids),
+                             *(value.casefold() for value in profile.aliases)}]
+    return matches[0] if len(matches) == 1 else None

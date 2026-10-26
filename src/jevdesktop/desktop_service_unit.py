@@ -160,9 +160,19 @@ def _load_config_apps(config_path: Path) -> list[str]:
     return [app for app in apps if isinstance(app, str)] if isinstance(apps, list) else []
 
 
-def _write_starter_config(config_path: Path, apps: list[str]) -> None:
+def _load_config_scopes(config_path: Path) -> list[str]:
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return ["selected_application"]
+    scopes = data.get("allowed_access_scopes") if isinstance(data, dict) else None
+    return ([value for value in scopes if value in {"selected_application", "full_virtual_desktop", "full_live_desktop"}]
+            if isinstance(scopes, list) else ["selected_application"])
+
+
+def _write_starter_config(config_path: Path, apps: list[str], scopes: list[str]) -> None:
     config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    payload = json.dumps({"allowed_apps": apps}, indent=2) + "\n"
+    payload = json.dumps({"allowed_apps": apps, "allowed_access_scopes": scopes}, indent=2) + "\n"
     fd = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         os.write(fd, payload.encode("utf-8"))
@@ -195,21 +205,29 @@ def service_command(args: Any) -> int:
 def _install(args: Any, unit_dir: Path) -> int:
     config_path = Path(args.config) if getattr(args, "config", None) else default_config_path()
     apps = list(getattr(args, "allow_app", []) or []) or _env_allowed_apps() or _load_config_apps(config_path)
+    scopes = list(getattr(args, "allow_access_scope", []) or []) or _load_config_scopes(config_path)
+    if not scopes:
+        scopes = ["selected_application"]
     config_created = False
     if not config_path.exists():
-        if not apps:
+        if not apps and not (set(scopes) - {"selected_application"}):
             _emit({"ok": False, "command": "install",
                    "error": "allowlist_required",
                    "message": "--allow-app, " + ALLOW_APPS_ENV + " or an existing config file is required"})
             return 2
         try:
-            _write_starter_config(config_path, apps)
+            _write_starter_config(config_path, apps, scopes)
         except OSError as exc:
             _emit({"ok": False, "command": "install", "error": "config_write_failed", "message": str(exc)})
             return 2
         config_created = True
     elif apps and apps != _load_config_apps(config_path):
         # Never rewrite a config the owner already edited.
+        _emit({"ok": False, "command": "install", "error": "config_exists_unchanged",
+               "message": f"{config_path} already exists; edit it or remove it, then re-run install"})
+        return 2
+    elif (config_path.exists() and getattr(args, "allow_access_scope", [])
+          and scopes != _load_config_scopes(config_path)):
         _emit({"ok": False, "command": "install", "error": "config_exists_unchanged",
                "message": f"{config_path} already exists; edit it or remove it, then re-run install"})
         return 2
@@ -234,6 +252,7 @@ def _install(args: Any, unit_dir: Path) -> int:
            "unit_states": written,
            "config": str(config_path), "config_created": config_created,
            "allow_apps": apps,
+           "allowed_access_scopes": scopes,
            "desktop_entry": desktop_assets,
            "daemon_reload": "ok" if reload_proc is not None and reload_proc.returncode == 0
                                              else "failed" if reload_proc is not None else "unavailable",

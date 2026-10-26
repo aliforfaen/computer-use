@@ -174,6 +174,61 @@ def activate_window_id(window_id: str, timeout: float = 5.0) -> bool:
     return isinstance(result, dict) and result.get("activated") is True
 
 
+def activate_window_id_with_env(window_id: str, env: dict[str, str], timeout: float = 5.0) -> bool:
+    """Activate an exact ID in a caller-owned KWin bus environment.
+
+    Used by isolated kwin-mcp sessions so window selection cannot fall through
+    to the owner's physical desktop. The helper process inherits the supplied
+    isolated bus without mutating the daemon's environment.
+    """
+    import os
+    import subprocess
+    import sys
+
+    if (not isinstance(window_id, str) or not window_id or not isinstance(env, dict)
+            or not isinstance(env.get("DBUS_SESSION_BUS_ADDRESS"), str)
+            or not env.get("DBUS_SESSION_BUS_ADDRESS")):
+        return False
+    runner = "from jevdesktop.native_windows import activate_window_id; import sys; raise SystemExit(0 if activate_window_id(sys.argv[1]) else 1)"
+    child_env = os.environ.copy()
+    child_env.update({key: value for key, value in env.items() if isinstance(key, str) and isinstance(value, str)})
+    try:
+        result = subprocess.run([sys.executable, "-c", runner, window_id], env=child_env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def workspace_snapshot_with_env(env: dict[str, str], timeout: float = 5.0) -> dict[str, Any]:
+    """Read all windows in an isolated kwin-mcp bus without touching host env."""
+    import os
+    import subprocess
+    import sys
+
+    if (not isinstance(env, dict) or not isinstance(env.get("DBUS_SESSION_BUS_ADDRESS"), str)
+            or not env.get("DBUS_SESSION_BUS_ADDRESS")):
+        raise RuntimeError("isolated_dbus_environment_required")
+    child_env = os.environ.copy()
+    child_env.update({key: value for key, value in env.items() if isinstance(key, str) and isinstance(value, str)})
+    runner = "from jevdesktop.native_windows import workspace_snapshot; import json,sys; print(json.dumps(workspace_snapshot(float(sys.argv[1]))))"
+    try:
+        result = subprocess.run([sys.executable, "-c", runner, str(timeout)], env=child_env,
+                                capture_output=True, text=True, timeout=timeout + 1, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("isolated_workspace_query_failed") from exc
+    if result.returncode != 0:
+        raise RuntimeError("isolated_workspace_query_failed")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("isolated_workspace_query_failed") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("windows"), list):
+        raise RuntimeError("isolated_workspace_query_failed")
+    return payload
+
+
 def workspace_snapshot(timeout: float = 5.0) -> dict[str, Any]:
     """Return current window, desktop, activity and output context."""
     windows, current_desktop_id, current_activity = _collect_snapshot(timeout)

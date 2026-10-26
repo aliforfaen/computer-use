@@ -1,7 +1,7 @@
 # Handoff — current state
 
 Updated **2026-10-26**. Repository: `aliforfaen/computer-use`, branch `main`.
-Start with AGENTS.md, then [current live/profile contract](40-live-workspace-and-profiles.md),
+Start with AGENTS.md, [access scopes](41-access-scopes.md), then [current live/profile contract](40-live-workspace-and-profiles.md),
 [CLI/MCP](16-local-owner-and-mcp.md), and [verification runbook](29-verification-runbook.md).
 Earlier handoff detail is preserved in [the archive](archive/handoff-before-2026-10-25.md).
 
@@ -13,12 +13,18 @@ kwin-mcp, the existing capture/transaction layers, OpenSSH and systemd.
 
 ## Implemented — pending watched live acceptance
 
+- **Access scopes:** selected application, full virtual desktop, or full live
+  desktop, enabled by owner config and requested explicitly. Full scopes allow
+  exact window switching without per-app allowlist/profile requirements.
+  Switching invalidates every prior semantic/image reference.
 - **Profiles:** built-in Kate/Firefox/KCalc plus validated custom argv and
-  identity profiles in private `app_profiles.json`. Profiles do not grant
-  permission; the separate app allowlist applies in all autonomy modes.
+  identity profiles in private `app_profiles.json`. Profiles provide launch
+  metadata. App allowlists restrict selected-application scope, not full-desktop
+  transitions. Scope does not change cleanup ownership or autonomy.
 - **Workspace:** `desktop_workspace` discovers current windows, active ID,
   geometry and available output metadata without taking focus. Captions are
-  limited to allowlisted apps. `desktop_profiles` reports profile availability.
+  limited to allowlisted apps in selected-application scope; full live scope
+  explicitly includes workspace-wide context. `desktop_profiles` reports profile availability.
 - **Live ownership:** launch a task app or attach one exact existing window.
   Foreground the task app/dialog for work; do not restore focus between calls.
   Restore baseline focus at stop. Attached apps are preserved; only apps
@@ -52,7 +58,7 @@ kwin-mcp, the existing capture/transaction layers, OpenSSH and systemd.
 
 ## Validation and limits
 
-Checks on 2026-10-25: `tools.check` passed **152 tests in 12 modules**;
+Checks on 2026-10-26: `tools.check` passed **175 tests in 13 modules**;
 44 targeted native-window/live-owner/harness tests passed; wheel build passed.
 These are offline/mocked checks, not a host acceptance result. A connecting
 agent's live test is deliberately deferred to the owner-watched checklist in doc 40.
@@ -71,9 +77,10 @@ transport and general planning are still deferred. No new OCR action path.
 
 Checked 2026-10-26: Pi has a dedicated `jev-desktop` skill and direct MCP tools,
 with global and project-local configuration. The owner socket is explicit so
-limited child environments cannot select the wrong fallback. All 15 tools
+limited child environments cannot select the wrong fallback. All 17 tools
 discover successfully; read-only status/capability calls succeed through MCP.
-The current owner is idle and was not restarted. Start a fresh Pi session to
+The idle owner was restarted to load the scope implementation and enable all three
+access scopes in its private config. No desktop session or relay was started. Start a fresh Pi session to
 load the setup. See [Pi harness notes](16-local-owner-and-mcp.md#pi-harness--checked-2026-10-26).
 This is harness readiness, not live desktop acceptance.
 

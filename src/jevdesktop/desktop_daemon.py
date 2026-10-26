@@ -25,7 +25,7 @@ ALLOW_APPS_ENV = "JEV_DESKTOP_ALLOW_APPS"
 # Configuration carries no secrets. A reader key is read from the environment
 # or the configured dotenv file; the config only names the environment variable.
 _CONFIG_KEYS = frozenset({
-    "allowed_apps", "run_dir", "audit", "socket", "dotenv",
+    "allowed_apps", "allowed_access_scopes", "run_dir", "audit", "socket", "dotenv",
     "idle_timeout", "max_session_lifetime", "max_actions", "max_observations", "reader",
     "audit_max_bytes", "audit_backups", "audit_max_age_days",
 })
@@ -106,6 +106,11 @@ def load_config(path: Path) -> dict[str, Any]:
         value = data.get(key)
         if value is not None and not isinstance(value, str):
             raise RuntimeError(f"config {key} must be a string path")
+    scopes = data.get("allowed_access_scopes")
+    if scopes is not None and (not isinstance(scopes, list) or not scopes
+                               or any(value not in {"selected_application", "full_virtual_desktop", "full_live_desktop"}
+                                      for value in scopes)):
+        raise RuntimeError("config allowed_access_scopes must be a non-empty list of known scopes")
     return data
 
 
@@ -124,6 +129,8 @@ def _resolve_config_path(explicit: Path | None) -> Path:
 def _apply_config(args: argparse.Namespace, config: dict[str, Any]) -> None:
     """Merge config under CLI values; CLI flags and env keep precedence."""
     args.allowed_apps = list(args.allow_app) or _env_allowed_apps() or list(config.get("allowed_apps") or [])
+    args.allowed_access_scopes = (list(getattr(args, "allow_access_scope", []))
+                                  or list(config.get("allowed_access_scopes") or ["selected_application"]))
     if args.run_dir is None and config.get("run_dir"):
         args.run_dir = Path(config["run_dir"])
     if args.audit is None and config.get("audit"):
@@ -289,7 +296,8 @@ def _make_service(args: argparse.Namespace) -> Any:
     if allowed is None:
         allowed = getattr(args, "allow_app", [])
     allowed_apps = frozenset(app.casefold() for app in allowed)
-    if not allowed_apps:
+    allowed_access_scopes = getattr(args, "allowed_access_scopes", ["selected_application"])
+    if not allowed_apps and not (set(allowed_access_scopes) - {"selected_application"}):
         raise RuntimeError("an explicit allowlist is required: use --allow-app, JEV_DESKTOP_ALLOW_APPS or allowed_apps in the config file")
     audit_path = args.audit or str(default_audit_path())
     reader = None
@@ -330,7 +338,8 @@ def _make_service(args: argparse.Namespace) -> Any:
                           max_session_lifetime=args.max_session_lifetime,
                           max_actions=args.max_actions,
                           max_observations=args.max_observations,
-                          audit_rotation=rotation)
+                          audit_rotation=rotation,
+                          allowed_access_scopes=allowed_access_scopes)
 
 
 def _load_dotenv_key(path: Path | None, key_name: str) -> None:

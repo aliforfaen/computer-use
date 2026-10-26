@@ -32,41 +32,47 @@ def _string(description: str | None = None, enum: list[str] | None = None) -> di
 
 
 def _tools() -> list[types.Tool]:
-    app = _string("Exact application identity from the configured allowlist.")
+    app = _string("Required to start selected_application scope; otherwise an optional current-target assertion. Omit when starting full scopes. An app name never switches windows.")
     session = _string("Owner-issued session ID.")
     mode = _string(enum=["supervised", "guarded", "yolo"])
-    desktop_mode = _string("Virtual is the default. Live operates one newly launched owned app.",
+    desktop_mode = _string("For selected_application scope only.",
                            enum=["virtual", "live"])
+    access_scope = _string("Authorization boundary: selected app, isolated virtual desktop, or whole live desktop.",
+                           enum=["selected_application", "full_virtual_desktop", "full_live_desktop"])
     tools = [
         ("desktop_capabilities", "Report supported local desktop operations and limits.", _obj(), True, False),
-        ("desktop_workspace", "Discover live windows and the active workspace without taking focus. Captions are limited to allowlisted apps. Use exact window IDs to attach.", _obj(), True, False),
-        ("desktop_profiles", "List configured application profiles and allowlist availability.", _obj(), True, False),
+        ("desktop_workspace", "Discover windows in the current live workspace or isolated virtual session. Full live scope may reveal the whole workspace.", _obj(), True, False),
+        ("desktop_profiles", "List configured launch profiles and current-scope access. app_allowlisted describes selected-application policy only; full scope does not require app entries.", _obj(), True, False),
         ("desktop_relays", "Read named MCP SSH relay state, timestamps and errors. Process/TCP status does not prove MCP readiness.", _obj(), True, False),
         ("desktop_status", "Report owner and active session status.", _obj(), True, False),
-        ("desktop_session_start", "Start an allowlisted profile or attach an existing live window. Live tasks keep their app foreground; stop preserves attached apps and restores original focus.",
-         _obj({"app": app, "mode": mode, "desktop_mode": desktop_mode,
+        ("desktop_session_start", "Start an owner-authorized scope. Full live scope may select any exact current window and preserves all existing apps at stop.",
+         _obj({"app": app, "mode": mode, "desktop_mode": desktop_mode, "access_scope": access_scope,
                "owner_present_override": {"type": "boolean", "description": "Required for live mode because physical-input detection is unavailable."},
-               "attach": {"type": "boolean", "description": "Attach to an existing exact live window. Its app is never closed during cleanup."},
-               "window_id": _string("Exact live window ID from desktop_workspace; required with attach=true."),
-               "semantic_candidates": {"type": "boolean", "description": "Opt into AT-SPI. Default false for live, true for virtual. Live opt-in also requires temporary_a11y."},
-               "temporary_a11y": {"type": "boolean", "description": "Required only when enabling live semantic candidates; captured AT-SPI flags are restored during cleanup."}}, ["app"]), False, False),
+               "attach": {"type": "boolean", "description": "Selected-application scope only: attach an existing exact live window. Omit this flag for full scopes, which preserve preexisting live apps."},
+               "window_id": _string("Exact current window ID. For full_live_desktop this selects the initial task window."),
+               "semantic_candidates": {"type": "boolean", "description": "Default true only for selected_application virtual sessions; default false for live and full scopes. full_virtual_desktop currently supports screenshots only. Live AT-SPI opt-in also requires temporary_a11y."},
+               "temporary_a11y": {"type": "boolean", "description": "Required only when enabling live semantic candidates; captured AT-SPI flags are restored during cleanup."}}, []), False, False),
+        ("desktop_select_window", "In a full_live_desktop or full_virtual_desktop session, select and focus one currently enumerated exact window. This invalidates all older captures and semantic references.",
+         _obj({"window_id": _string("Exact current window ID from desktop_workspace.")}, ["window_id"]), False, False),
+        ("desktop_launch_app", "In a full_virtual_desktop session, launch a configured application profile by argv. No command string is accepted.",
+         _obj({"profile_id": _string("Configured application profile ID.")}, ["profile_id"]), False, False),
         ("desktop_session_stop", "Stop the specified session, or the sole active session.", _obj({"session_id": session}), False, True),
-        ("desktop_candidates", "Read fresh semantic refs, control names and screen-logical bounds. Editable values are omitted.", _obj({"app": app}, ["app"]), True, False),
-        ("desktop_observe", "Observe one allowlisted app. Images are returned only for explicit image or both output.", _obj({
+        ("desktop_candidates", "Read fresh semantic refs, control names and screen-logical bounds when semantics are enabled. Full scopes currently use screenshots only. Editable values are omitted.", _obj({"app": app}), True, False),
+        ("desktop_observe", "Observe the selected app, or request scope=desktop for a mapped full-screen image inside a full desktop scope. Images are returned only for explicit image or both output.", _obj({
             "app": app,
             "output": _string(enum=["metadata", "image", "data", "both"]),
-            "scope": _string(enum=["app", "full", "crop"]),
+            "scope": _string(enum=["app", "full", "crop", "desktop"]),
             "crop": _obj({"x": {"type": "integer"}, "y": {"type": "integer"}, "width": {"type": "integer", "minimum": 1}, "height": {"type": "integer", "minimum": 1}}, ["x", "y", "width", "height"]),
             "include_candidates": {"type": "boolean", "description": "Pair a NEW capture with fresh semantic refs and mapped image bounds. Sequential, not atomic. Costs two extra state reads; cannot reuse capture_id."},
             "capture_id": _string("Reuse an unexpired capture ID from the same session."),
             "questions": {"type": "array", "items": _obj({"field": {"type": "string", "maxLength": 80}, "type": _string(enum=["string", "number", "integer", "boolean", "array", "object"]), "description": {"type": "string", "maxLength": 500}, "nullable": {"type": "boolean"}}, ["field", "type", "description"]), "maxItems": 8},
-        }, ["app"]), True, False),
+        }, []), True, False),
         ("desktop_wait", "EXPERIMENTAL heartbeat: wait for a bounded screenshot condition using the configured reader. Prefer polling desktop_observe/desktop_candidates. Returns a fresh final app image; this never performs an action.", _obj({
             "app": app,
             "expected": {"type": "string", "minLength": 1, "maxLength": 500,
                 "description": "Caller-authored visual condition. The reader can only return wait, wake, error or unexpected; it cannot act."},
             "timeout_seconds": {"type": "number", "minimum": 0.1, "maximum": 120},
-        }, ["app", "expected"]), True, False),
+        }, ["expected"]), True, False),
         ("desktop_act", "Perform a fresh grounded action. Use verification=observed to deliver input and collect fresh state without claiming the effect; strong verifiers prove specific postconditions.", _obj({
             "app": app,
             "action": _string(enum=["click", "type_text", "replace_document", "save_document", "navigate_url", "scroll", "keyboard_shortcut"]),
@@ -78,7 +84,7 @@ def _tools() -> list[types.Tool]:
             "text": {"type": "string", "maxLength": 4096, "description": "Text for a verified accessible editor. replace_document is Kate-only and edits only the current focused editor in its owner-generated task document. Text is never included in audit or reader context."},
             "direction": _string(enum=["up", "down"]),
             "steps": {"type": "integer", "minimum": 1, "maximum": 8},
-        }, ["app", "action", "target_ref", "verification"]), False, True),
+        }, ["action", "target_ref", "verification"]), False, True),
         ("desktop_input", "Send one input grounded in a fresh capture from this session. Image coordinates are relative to the returned crop. Input delivery is not proof of effect. Guarded/supervised input requires explicit approved=true. Re-observe after uncertainty; never auto-retry.", _obj({
             "app": app, "capture_id": _string("Current capture whose image was explicitly returned by desktop_observe. Older captures cannot rearm after input; post-input metadata must first be observed as image."),
             "action": _string(enum=["click", "double_click", "right_click", "keyboard_shortcut", "type_text", "scroll", "drag"]),
@@ -88,9 +94,9 @@ def _tools() -> list[types.Tool]:
             "direction": _string(enum=["up", "down", "left", "right"]),
             "steps": {"type": "integer", "minimum": 1, "maximum": 8},
             "approved": {"type": "boolean"},
-        }, ["app", "capture_id", "action"]), False, True),
+        }, ["capture_id", "action"]), False, True),
         ("desktop_reconcile", "Acknowledge uncertain prior input, inspect current state and resume without replaying any input. This never proves the earlier task effect.",
-         _obj({"app": app, "acknowledge_uncertain": {"type": "boolean"}}, ["app", "acknowledge_uncertain"]), False, False),
+         _obj({"app": app, "acknowledge_uncertain": {"type": "boolean"}}, ["acknowledge_uncertain"]), False, False),
         ("desktop_cancel", "Cancel current work for a session, or the current owner task.", _obj({"session_id": session}), False, False),
         ("desktop_stop_all", "Stop all active sessions and work.", _obj(), False, True),
     ]
@@ -111,6 +117,8 @@ METHODS = {
     "desktop_reconcile": "reconcile",
     "desktop_status": "status",
     "desktop_session_start": "session_start",
+    "desktop_select_window": "select_window",
+    "desktop_launch_app": "launch_app",
     "desktop_session_stop": "session_stop",
     "desktop_candidates": "candidates",
     "desktop_observe": "observe",
@@ -197,7 +205,7 @@ def _build_server(socket_path: Path | None = None) -> Server:
                                     structuredContent=output, isError=False)
 
     return Server("jev-desktop", version="0.1.0",
-                  instructions="Discover desktop_workspace and desktop_profiles when connecting. Use desktop_relays to inspect available app MCP routes. Live sessions may attach an existing window and keep the task app foreground; semantic candidates are opt-in. For screenshot-grounded work use desktop_observe then desktop_input; coordinates are relative to that fresh image and never come from Jev. An observed input result has uncertain effect. This server is a local client of one desktop owner. App access is explicitly allowlisted. Live mode requires an explicit owner-present override because physical-input detection is unavailable; temporary AT-SPI opt-in is required only for semantic candidates. It preserves attached apps, closes only task-launched apps, and restores the original window on stop. Read fresh candidates before acting; act accepts strong code-owned verifiers or observed (fresh post-state, effect uncertain). Grounding bounds use screen logical coordinates; paired image bounds are returned with include_candidates=true. An observation image is returned only when output=image or output=both is explicitly requested. desktop_wait is a bounded visual readiness observation; inspect its returned final image before deciding whether to act.",
+                  instructions="Discover desktop_capabilities and desktop_workspace when connecting. Select access_scope explicitly: selected_application uses the configured app allowlist; full_virtual_desktop stays inside its isolated task desktop; full_live_desktop can select exact current workspace windows and preserves preexisting apps. Full live requires owner_present_override because physical-input detection is unavailable. Temporary AT-SPI opt-in is required only for semantic candidates. Use desktop_launch_app only for configured argv profiles in full_virtual_desktop; it accepts no command string. Use desktop_select_window with a fresh exact window ID before window-grounded work; switching invalidates old captures and semantic refs. For workspace-only full desktop viewing, desktop_observe(scope=desktop, output=image) returns a mapped screen capture and cannot authorize input. For screenshot-grounded input select a real window, call desktop_observe then desktop_input; coordinates are relative to that fresh image and never come from Jev. Input results have uncertain effect. Read fresh candidates before semantic actions; action calls use strong verifiers or observed (fresh post-state, effect uncertain). An observation image is returned only when output=image or output=both is explicitly requested. desktop_wait is a bounded visual readiness observation; inspect its returned final image before deciding whether to act.",
                   on_list_tools=list_tools, on_call_tool=call_tool)
 
 
